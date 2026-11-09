@@ -71,9 +71,9 @@ func (p *Processor) Process(ctx context.Context, path string) (*Result, error) {
 	if info.IsDir() {
 		return nil, fmt.Errorf("ingest: %s is a directory", path)
 	}
-	if info.Size() > p.cfg.MaxFileBytes {
+	if info.Size() > p.cfg.MaxFileBytes() {
 		return nil, fmt.Errorf("ingest: %s is %d bytes, over the %d byte limit",
-			filepath.Base(path), info.Size(), p.cfg.MaxFileBytes)
+			filepath.Base(path), info.Size(), p.cfg.MaxFileBytes())
 	}
 
 	head, err := readHead(path, 512)

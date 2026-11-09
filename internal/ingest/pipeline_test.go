@@ -427,10 +427,19 @@ func TestProcessUnsupportedAndAudio(t *testing.T) {
 
 func TestProcessRejections(t *testing.T) {
 	cfg := testConfig()
-	cfg.MaxFileBytes = 4
+	cfg.MaxFileMB = 1
 	p, _ := New(cfg, DirSink{Root: t.TempDir()})
 
-	if _, err := p.Process(context.Background(), writeTemp(t, "big.txt", "too many bytes")); err == nil {
+	big := filepath.Join(t.TempDir(), "big.txt")
+	f, err := os.Create(big)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Truncate(cfg.MaxFileBytes() + 1); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	if _, err := p.Process(context.Background(), big); err == nil {
 		t.Error("expected size error")
 	}
 	if _, err := p.Process(context.Background(), t.TempDir()); err == nil {

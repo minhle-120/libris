@@ -1,10 +1,13 @@
 GO      ?= go
 PKGS    := ./...
 
-.PHONY: fmt vet test cover check web web-check
+.PHONY: fmt vet test cover check generate web web-check
 
 fmt:
 	$(GO) fmt $(PKGS)
+
+generate:
+	$(GO) generate ./internal/config
 
 vet:
 	$(GO) vet $(PKGS)
