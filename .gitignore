@@ -1,0 +1,20 @@
+# Go
+/libris
+/libris.exe
+/libris-mcp
+*.test
+cover.out
+
+# local data (never commit)
+/data/
+*.db
+*.db-wal
+*.db-shm
+
+# node (web/dist IS committed — it is embedded into the binary)
+node_modules/
+
+# editors / OS
+.DS_Store
+.idea/
+.vscode/
