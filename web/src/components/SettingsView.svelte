@@ -140,6 +140,10 @@
             <option value="fallback">Page image only when text is missing</option>
           </select>
         </SettingRow>
+        <SettingRow label="PDF raster DPI" description="Resolution when a page is rendered for image embedding. 150 keeps a page legible at ~300–500 KB.">
+          <input class="input num" type="number" min="50" max="600" bind:value={settings.pdfDPI} />
+          <span class="unit">dpi</span>
+        </SettingRow>
         <SettingRow label="Audio window" description="Clipping size for audio segments; must align with transcript boundaries.">
           <input class="input num" type="number" min="5" bind:value={settings.audioWindowSeconds} />
           <span class="unit">seconds</span>

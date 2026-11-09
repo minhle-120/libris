@@ -40,6 +40,7 @@ export type Settings = {
   chunkOverlap: number;
   // ingest
   pdfPageImages: 'always' | 'fallback';
+  pdfDPI: number;
   audioWindowSeconds: number;
   maxFileMB: number;
 };
@@ -65,6 +66,7 @@ export function defaultSettings(): Settings {
     chunkSize: 100,
     chunkOverlap: 50,
     pdfPageImages: 'always',
+    pdfDPI: 150,
     audioWindowSeconds: 30,
     maxFileMB: 512
   };
