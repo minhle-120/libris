@@ -1,7 +1,7 @@
 GO      ?= go
 PKGS    := ./...
 
-.PHONY: fmt vet test cover check generate web web-check
+.PHONY: fmt vet test cover check generate build run web web-check clean
 
 fmt:
 	$(GO) fmt $(PKGS)
@@ -20,6 +20,12 @@ cover:
 	$(GO) tool cover -func=cover.out | tail -1
 
 check: fmt vet test
+
+build: web
+	$(GO) build -trimpath -o libris ./cmd/libris
+
+run:
+	$(GO) run ./cmd/libris
 
 web:
 	cd web && npm run build

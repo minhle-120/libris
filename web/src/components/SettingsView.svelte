@@ -1,14 +1,58 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { defaultSettings, settingGroups, type Settings } from '../lib/config.gen';
+  import { getSettings, putSettings } from '../lib/api';
   import SettingRow from '../lib/SettingRow.svelte';
   import Toggle from '../lib/Toggle.svelte';
   import Button from '../lib/Button.svelte';
   import Icon from '../lib/Icon.svelte';
 
-  // Placeholder values until GET /api/settings exists; labels, help, ranges and
-  // enums all come from the generated schema, never from this file.
+  // Values come from the backend; labels, help, ranges and enums come from the
+  // generated schema. Nothing in this file defines a setting.
   let settings = $state<Settings>(defaultSettings());
+  let saved = $state('');
+  let loading = $state(true);
+  let saving = $state(false);
+  let error = $state('');
+  let notice = $state('');
+
+  const snapshot = $derived(JSON.stringify(settings));
+  const dirty = $derived(!loading && snapshot !== saved);
+
   let current = $state(settingGroups[0]?.id ?? '');
+
+  onMount(load);
+
+  async function load() {
+    loading = true;
+    error = '';
+    try {
+      apply(await getSettings());
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    } finally {
+      loading = false;
+    }
+  }
+
+  function apply(next: Settings) {
+    settings = next;
+    saved = JSON.stringify(next);
+  }
+
+  async function save() {
+    saving = true;
+    error = '';
+    notice = '';
+    try {
+      apply(await putSettings(settings));
+      notice = 'Saved';
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    } finally {
+      saving = false;
+    }
+  }
 
   // Settings is a union-typed record, so reads go through these accessors and
   // writes through set(). Keeps the template type-safe without casts inline.
@@ -30,7 +74,7 @@
   <div class="head">
     <h1>Settings</h1>
     <p class="muted">
-      Defined in <code>internal/config</code> and generated into this page. Nothing is saved until the API exists.
+      Defined in <code>internal/config</code>, served by <code>GET /api/settings</code>, saved with <code>PUT</code>.
     </p>
   </div>
 
@@ -106,12 +150,37 @@
         </section>
       {/each}
 
+      {#if error}
+        <div class="banner error" role="alert">
+          <Icon name="pulse" size={14} />
+          {error}
+        </div>
+      {/if}
+
       <div class="foot">
         <span class="muted small">
           <Icon name="inbox" size={14} />
-          Values load from the backend once it exists.
+          {#if loading}
+            Loading…
+          {:else if notice}
+            {notice}
+          {:else if dirty}
+            Unsaved changes
+          {:else}
+            Saved settings loaded from the backend
+          {/if}
         </span>
-        <Button variant="primary" size="sm" disabled title="Backend not wired yet">Save changes</Button>
+        <div class="foot-actions">
+          <Button size="sm" disabled={!dirty || saving || loading} onclick={load}>Discard</Button>
+          <Button
+            variant="primary"
+            size="sm"
+            disabled={!dirty || saving}
+            onclick={save}
+          >
+            {saving ? 'Saving…' : 'Save changes'}
+          </Button>
+        </div>
       </div>
     </div>
   </div>
@@ -207,6 +276,21 @@
     font-size: 12px;
     color: var(--fg-muted);
     white-space: nowrap;
+  }
+  .banner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    font-size: 13px;
+    border: 1px solid var(--danger);
+    border-radius: var(--radius);
+    color: var(--danger);
+    background: var(--canvas);
+  }
+  .foot-actions {
+    display: flex;
+    gap: 8px;
   }
   .foot {
     display: flex;

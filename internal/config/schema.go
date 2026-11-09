@@ -39,7 +39,12 @@ type schemaGroup struct {
 
 // Generate writes the TypeScript schema accepted by web/src/lib/config.gen.ts.
 func Generate(w io.Writer) error {
-	cfg := Default()
+	return generateSchema(w, Default())
+}
+
+// generateSchema takes the config value so tests can feed deliberately
+// mistagged structs and exercise the validation of the generator itself.
+func generateSchema(w io.Writer, cfg any) error {
 	val := reflect.ValueOf(cfg)
 	typ := val.Type()
 

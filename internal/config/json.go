@@ -1,0 +1,74 @@
+package config
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"reflect"
+)
+
+// Config marshals to the same keys the frontend uses, so the API and the
+// generated schema can never disagree about names.
+
+func (c Config) MarshalJSON() ([]byte, error) {
+	val := reflect.ValueOf(c)
+	typ := val.Type()
+
+	var buf bytes.Buffer
+	buf.WriteByte('{')
+	for i := 0; i < typ.NumField(); i++ {
+		if i > 0 {
+			buf.WriteByte(',')
+		}
+		name, err := json.Marshal(typ.Field(i).Tag.Get("key"))
+		if err != nil {
+			return nil, err
+		}
+		raw, err := json.Marshal(val.Field(i).Interface())
+		if err != nil {
+			return nil, err
+		}
+		buf.Write(name)
+		buf.WriteByte(':')
+		buf.Write(raw)
+	}
+	buf.WriteByte('}')
+	return buf.Bytes(), nil
+}
+
+// UnmarshalJSON decodes over defaults: absent keys keep their default value.
+func (c *Config) UnmarshalJSON(b []byte) error {
+	*c = Default()
+	return c.ApplyJSON(b)
+}
+
+// ApplyJSON overlays the provided keys onto c and validates the result. Unknown
+// keys are rejected rather than ignored, so a frontend typo fails loudly.
+func (c *Config) ApplyJSON(b []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+
+	val := reflect.ValueOf(c).Elem()
+	typ := val.Type()
+
+	byKey := make(map[string]int, typ.NumField())
+	for i := 0; i < typ.NumField(); i++ {
+		byKey[typ.Field(i).Tag.Get("key")] = i
+	}
+
+	for key, payload := range raw {
+		i, ok := byKey[key]
+		if !ok {
+			return fmt.Errorf("config: unknown setting %q", key)
+		}
+		field := val.Field(i)
+		target := reflect.New(field.Type())
+		if err := json.Unmarshal(payload, target.Interface()); err != nil {
+			return fmt.Errorf("config: %s: %w", key, err)
+		}
+		field.Set(target.Elem())
+	}
+	return c.Validate()
+}
