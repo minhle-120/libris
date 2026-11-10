@@ -222,7 +222,7 @@ export const settingGroups: SettingGroup[] = [
 			{
 				"key": "pdfDPI",
 				"label": "PDF raster DPI",
-				"help": "Resolution for page images. 150 keeps a page legible at roughly 300-500 KB.",
+				"help": "Resolution for page images. Only affects how legible a cited page looks: the embedding cost per image is fixed.",
 				"kind": "number",
 				"unit": "dpi",
 				"min": 50,
@@ -278,7 +278,7 @@ export function defaultSettings(): Settings {
 		chunkWords: 100,
 		chunkOverlap: 50,
 		pdfPageImages: "always",
-		pdfDPI: 150,
+		pdfDPI: 110,
 		audioWindowSeconds: 30,
 		maxFileMB: 512,
 		keepOriginals: true,

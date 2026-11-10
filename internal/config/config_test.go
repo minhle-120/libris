@@ -10,7 +10,7 @@ func TestDefaultValidates(t *testing.T) {
 	if err := c.Validate(); err != nil {
 		t.Fatalf("defaults do not validate: %v", err)
 	}
-	if c.PDFDPI != 150 || c.ChunkWords != 100 || c.ChunkOverlap != 50 {
+	if c.PDFDPI != 110 || c.ChunkWords != 100 || c.ChunkOverlap != 50 {
 		t.Fatalf("defaults changed: %+v", c)
 	}
 	if got := c.MaxFileBytes(); got != 512<<20 {

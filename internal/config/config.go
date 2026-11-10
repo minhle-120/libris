@@ -80,7 +80,7 @@ type Config struct {
 
 	// ── ingest ───────────────────────────────────────────────────
 	PDFMode            PDFMode `key:"pdfPageImages" group:"ingest" label:"PDF embeddings" help:"A PDF becomes two documents: page text and page rasters." kind:"enum" enum:"pdfModes"`
-	PDFDPI             int     `key:"pdfDPI" group:"ingest" label:"PDF raster DPI" help:"Resolution for page images. 150 keeps a page legible at roughly 300-500 KB." min:"50" max:"600" unit:"dpi"`
+	PDFDPI             int     `key:"pdfDPI" group:"ingest" label:"PDF raster DPI" help:"Resolution for page images. Only affects how legible a cited page looks: the embedding cost per image is fixed." min:"50" max:"600" unit:"dpi"`
 	AudioWindowSeconds int     `key:"audioWindowSeconds" group:"ingest" label:"Audio window" help:"Clip length for audio segments; align with transcript boundaries." min:"5" max:"600" unit:"s"`
 	MaxFileMB          int     `key:"maxFileMB" group:"ingest" label:"Max file size" help:"Larger files are refused at the door, not mid-job." min:"1" max:"102400" unit:"MB"`
 	KeepOriginals      bool    `key:"keepOriginals" group:"ingest" label:"Keep originals" help:"Required for page and timestamp citations." readonly:"true"`
@@ -120,7 +120,7 @@ func Default() Config {
 		ChunkOverlap:    50,
 
 		PDFMode:            PDFModeAlways,
-		PDFDPI:             150,
+		PDFDPI:             110,
 		AudioWindowSeconds: 30,
 		MaxFileMB:          512,
 		KeepOriginals:      true,
