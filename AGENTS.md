@@ -5,8 +5,6 @@ either a decision that has been made or a fact that has been verified. Things
 that are still open are listed at the end under **Open decisions** — do not
 silently decide them.
 
-Last updated at commit `4781b19`.
-
 ---
 
 ## 1. What Libris is
@@ -179,17 +177,46 @@ Verified against the llama.cpp server README and `common/chat.cpp`,
   chat completions. `/v1/responses` and `/v1/messages` close without a sentinel,
   so the client treats clean EOF as success too.
 - Reasoning is returned in `reasoning_content`.
-- Multimodal parts: `image_url.url`, `input_audio.data|url`,
-  `input_video.data|url`. Local files need a `file://` prefix **and** the server
-  started with `--media-path`.
-- Embeddings: one vector per input object; input may be a string or
-  `{content:[parts]}` (llama.cpp's non-OpenAI shape, mirrored by `EmbedInput`).
-  **The server normalises vectors** (Euclidean norm) — do not re-normalise.
+- Multimodal content parts (`/v1/chat/completions` and `/v1/embeddings` share the
+  tokenizer path `tokenize_oai_content_array`): `text`, `image_url.url`,
+  `input_audio.data|url`, `input_video.data|url` (alias `video_url`). A media part
+  is swapped for an internal `media_marker` text part and the bytes are handed to
+  the mtmd pipeline. Without `--mmproj` each media type raises
+  `"<type> input is not supported - hint: … you may need to provide the mmproj"`.
+- Media URLs accept exactly four forms (`handle_media` in `server-common.cpp`):
+  `http(s)://` (fetched by the server, 10 MB / 10 s cap), `file://`,
+  `data:<image|audio|video>/…;base64,…`, or **raw base64** (fallback decode).
+  `file://` requires `--media-path`, and the path is *concatenated after it*, then
+  checked by `fs_validate_filename(path, /*allow_subdirs*/ true)`: rejects `..`
+  anywhere, `.` as the whole path, `: * ? " < > | \`, control chars, non-canonical
+  UTF-8, leading/trailing spaces and a trailing dot, and components over 255 bytes.
+  So `file://` is a jailed read — it cannot escape `--media-path`. Asset names we
+  generate (hex + `-` + extension) satisfy it.
+- Embeddings: one vector per input object. `input` may be a string, an array of
+  strings, or an array of `{content:[parts]}` objects — the last keeps the
+  OpenAI `data[]` response shape. A top-level `content` key on the request is also
+  accepted but **downgrades the response** to llama.cpp's bare
+  `[{embedding, index}]` form, so always nest under `input`.
+- `--embd-normalize` defaults to **2 (Euclidean)**, so the server returns unit
+  vectors — do not re-normalise. A per-request `embd_normalize` override exists;
+  we never send it (§2 rule 1).
 - Rerank: `documents` selects the Jina response format
   `{results:[{index, relevance_score}]}`, already sorted descending. The `texts`
-  key selects TEI's bare array, which we never send.
+  key selects TEI's bare array, which we never send. Each query/document item may
+  also be `{"text": str|[str], "image": url|data-uri|base64|[urls]}` — reranking
+  page rasters is supported, but video and `fps`/`max_frames` are rejected, and it
+  needs `--mmproj` plus a rerank chat template.
 - `503` means all inference slots are busy (llama.cpp refuses instead of
   queueing) → `llm.IsBusy(err)`, with `Retry-After` parsed.
+- **Oversized embedding input is rejected, never truncated** — HTTP 400
+  `exceed_context_size_error`, or HTTP 500 asking for a larger physical batch.
+  Truncation was removed from the server on purpose ("context truncation is the
+  job of the client"). An embedding model must fit each input in **one ubatch**,
+  so the usable ceiling is `min(-c, -ub) − 2` tokens (BOS + EOS are added by the
+  server). `-c` costs no VRAM; `-ub` does. EmbeddingGemma 2's window is 8192
+  tokens with a 1024-token internal sliding window, and recommended launches use
+  `-c 8192 -ub 1024` → ~1022 tokens per input. Cost in that budget: text 1
+  token/subword, an image ≈ 280, audio ≈ 25 per second.
 - `EmbeddingGemma 2` (`ggml-org/embeddinggemma-2-GGUF`) ships an `mmproj`, and is
   genuinely multimodal: text, images, audio, video in one vector space.
 
