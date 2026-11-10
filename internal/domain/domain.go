@@ -2,7 +2,15 @@
 // types, no dependencies, and no behaviour worth mocking.
 package domain
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
+
+// ErrNotFound is returned when an id does not resolve. Every layer wraps it, so
+// errors.Is works from the transport down through the store without any layer
+// importing another layer's error values.
+var ErrNotFound = errors.New("not found")
 
 // Kind is the modality of an embeddable segment.
 type Kind string
@@ -26,14 +34,17 @@ const (
 
 // Source is the uploaded file. The original is always kept on disk so a
 // citation can be opened later.
+// Field names are snake_case on the wire throughout domain, so the frontend
+// reads one convention.
 type Source struct {
-	ID     string // sha256 of the contents: identity and dedupe key
-	Name   string // original filename
-	Kind   SourceKind
-	SHA256 string
-	Bytes  int64
+	ID     string     `json:"id"` // sha256 of the contents: identity and dedupe key
+	Name   string     `json:"name"`
+	Kind   SourceKind `json:"kind"`
+	SHA256 string     `json:"sha256"`
+	Bytes  int64      `json:"bytes"`
 
 	// OriginalPath is where the kept copy lives, never the upload site's path.
+	// It is absolute on the machine that owns the data directory.
 	OriginalPath string `json:"original_path"`
 
 	Status   SourceStatus `json:"status"`
@@ -66,12 +77,14 @@ const (
 // chunk ends on. A chunk never spans more than two pages, because a page holds
 // far more words than a chunk.
 type Provenance struct {
-	Page      int     `json:"page,omitempty"` // 1-based; 0 when not paginated
-	PageEnd   int     `json:"page_end,omitempty"`
-	CharStart int     `json:"char_start,omitempty"`
-	CharEnd   int     `json:"char_end,omitempty"`
-	T0        float64 `json:"t0,omitempty"` // seconds, for audio
-	T1        float64 `json:"t1,omitempty"`
+	Page      int `json:"page,omitempty"` // 1-based; 0 when not paginated
+	PageEnd   int `json:"page_end,omitempty"`
+	CharStart int `json:"char_start,omitempty"`
+	CharEnd   int `json:"char_end,omitempty"`
+	// T0 keeps no omitempty: the first audio slice starts at zero seconds, and
+	// that is a real value the client must not read as "absent".
+	T0 float64 `json:"t0"` // seconds, for audio
+	T1 float64 `json:"t1,omitempty"`
 }
 
 // Asset is a file written by the sink: an extracted page image, a copied

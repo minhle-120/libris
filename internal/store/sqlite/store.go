@@ -6,13 +6,14 @@ import (
 	"context"
 	"database/sql"
 	"embed"
-	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
+
+	"libris/internal/domain"
 
 	_ "github.com/ncruces/go-sqlite3/driver" // registers the "sqlite3" driver
 )
@@ -24,9 +25,9 @@ var embedded embed.FS
 // paths, which the real files cannot produce.
 var migrations fs.FS = embedded
 
-// ErrNotFound is returned when an id does not exist. Callers compare with
-// errors.Is rather than inspecting messages.
-var ErrNotFound = errors.New("store: not found")
+// ErrNotFound is the shared sentinel, so the transport can map it to 404
+// without importing this package.
+var ErrNotFound = domain.ErrNotFound
 
 // DB is an opened database. One process owns the directory, so there is no
 // cross-process locking beyond SQLite's own busy timeout.

@@ -19,12 +19,14 @@ const maxSettingsBody = 256 << 10
 
 type Options struct {
 	Settings *config.FileStore
+	App      API   // use cases; nil serves settings and the UI only
 	Assets   fs.FS // built frontend, rooted where index.html lives; may be nil
 	Logger   *slog.Logger
 }
 
 type Server struct {
 	opts Options
+	app  API
 	log  *slog.Logger
 	mux  *http.ServeMux
 }
@@ -36,6 +38,8 @@ func New(opts Options) *Server {
 	}
 
 	s := &Server{opts: opts, log: log, mux: http.NewServeMux()}
+
+	s.addAppRoutes(opts.App)
 
 	s.mux.HandleFunc("GET /api/health", s.handleHealth)
 	s.mux.HandleFunc("GET /api/settings", s.handleGetSettings)

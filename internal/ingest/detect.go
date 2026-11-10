@@ -8,10 +8,18 @@ import (
 	"libris/internal/domain"
 )
 
-// Detect classifies a file. Extension wins because it is more specific than
-// sniffing (a .md and a .json are both text/plain to http.DetectContentType);
-// the sniffed MIME type is the fallback for extensionless input.
+// Detect classifies a file.
+//
+// Magic bytes decide for PDF, image and audio: a PNG saved as notes.txt would
+// otherwise be read as text and produce chunks of mojibake. Extension decides
+// for everything else, because it is more specific than sniffing — a .md and a
+// .json are both text/plain to http.DetectContentType — and for text there is no
+// wrong-but-harmless reading to avoid.
 func Detect(name string, head []byte) domain.SourceKind {
+	if kind := sniffBinary(head); kind != domain.SourceUnsupported {
+		return kind
+	}
+
 	switch strings.ToLower(filepath.Ext(name)) {
 	case ".pdf":
 		return domain.SourcePDF
@@ -26,6 +34,16 @@ func Detect(name string, head []byte) domain.SourceKind {
 		return domain.SourceText
 	}
 
+	// Last resort: an extensionless source file, recognised as text.
+	if mt := http.DetectContentType(head); strings.HasPrefix(mt, "text/") || mt == "application/json" {
+		return domain.SourceText
+	}
+	return domain.SourceUnsupported
+}
+
+// sniffBinary reports the modality only where the bytes are decisive. Anything
+// it is unsure about comes back unsupported so the extension gets a say.
+func sniffBinary(head []byte) domain.SourceKind {
 	switch mt := http.DetectContentType(head); {
 	case strings.HasPrefix(mt, "application/pdf"):
 		return domain.SourcePDF
@@ -33,8 +51,6 @@ func Detect(name string, head []byte) domain.SourceKind {
 		return domain.SourceImage
 	case strings.HasPrefix(mt, "audio/"):
 		return domain.SourceAudio
-	case strings.HasPrefix(mt, "text/"), mt == "application/json":
-		return domain.SourceText
 	}
 	return domain.SourceUnsupported
 }

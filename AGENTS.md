@@ -57,7 +57,8 @@ These have been argued through. Breaking one needs a conversation, not a commit.
 
 | | version |
 |---|---|
-| Go | 1.27.3, module name `libris` (stdlib only, no dependencies) |
+| Go | 1.27.3, module name `libris` |
+| Go dependencies | `github.com/ncruces/go-sqlite3` (cgo-free SQLite) — one, and it is deliberate |
 | Node | 26 / npm 12 |
 | Frontend | Svelte 5.57 (runes), Vite 8.3, TypeScript |
 | External binaries | `pdftotext`, `pdftoppm` (poppler), `ffmpeg`/`ffprobe` — optional, probed at startup |
@@ -72,8 +73,9 @@ make generate   # regenerate web/src/lib/config.gen.ts after changing config
 ./libris -addr 127.0.0.1:8080 -data ~/.config/libris
 ```
 
-The binary is ~10.5 MB and self-contained apart from the model servers and
-poppler/ffmpeg.
+The binary is ~21 MB and self-contained apart from the model servers and
+poppler/ffmpeg. It was 10.5 MB before SQLite: `go-sqlite3` embeds the compiled
+WASM build, which is the price of staying cgo-free (and cross-compilable).
 
 ---
 
@@ -87,14 +89,14 @@ internal/
   domain/              plain types, zero imports: Source, Segment, Provenance, Asset
   llm/                 the only package that knows the OpenAI wire format
     fake/              replays recorded responses (used by later stages)
-  store/{sqlite,blob}/ not built yet
-  ingest/              bytes → segments (+ pdf, sink, chunker)
+  store/sqlite/        migrations + every query (sources, segments, notebooks)
+  ingest/              bytes → segments (+ pdf, audio, sink, chunker, detect)
   index/               not built: embed + vector + lexical
   retrieve/            not built: recall → rerank → evidence registry
   chat/                not built: research loop, prompts, synthesis
-  app/                 not built: use cases shared by httpapi and mcpserver
+  app/                 use cases shared by httpapi and mcpserver (+ ingest queue)
   events/              not built: status/token/job events
-  httpapi/             browser transport: JSON, SSE, embedded SPA
+  httpapi/             browser transport: JSON, files, embedded SPA (SSE later)
   mcpserver/           not built: MCP transport
 web/                   Svelte source + embed.go + dist/ (committed)
 docs/adr/              one file per accepted decision
@@ -112,15 +114,45 @@ mcpserver┘                 └────────────> store
 `chat` takes evidence as *input*; it must not call `retrieve` itself. Orchestration
 lives in `app` so both transports share one implementation.
 
+Two rules that the layout exists to enforce:
+
+- `app` declares the interfaces it needs (`Store`, `Settings`, `Ingestor`) and
+  knows nothing about SQLite or the pipeline's internals. `httpapi` declares
+  `API`. Both are consumer-side (§2 rule 11).
+- `httpapi` handlers do not touch the store. `Options.App` is nil-able, so a
+  build without a database still serves settings and the UI.
+
 ---
 
 ## 5. Data model (`internal/domain`)
 
 ```go
-Source{ID, Name, Kind, SHA256, Bytes}            // ID = sha256 of contents
+Notebook{ID, Name, CreatedAt}
+Source{ID, Name, Kind, SHA256, Bytes, OriginalPath, Status, Detail, Warnings, AddedAt, SegmentCount}
 Provenance{Page, PageEnd, CharStart, CharEnd, T0, T1}
 Asset{ID, Path, MIME, Bytes}                     // a file written by a sink
 Segment{ID, SourceID, DocID, Kind, Ordinal, Text, Asset, Span}
+```
+
+Every domain type marshals snake_case. `domain.ErrNotFound` is the shared
+sentinel, so the transport maps 404 without importing the store's error values.
+
+A **notebook** owns its chats and its memberships; sources are shared, not
+copied (ADR 0003). `Source.ID` is the SHA-256 of the contents, so the same file
+offered to two notebooks is stored, rasterised and extracted once.
+
+`Status` is the async ingest state machine: `processing → ready | unsupported |
+failed`. Only `ready` sources are retrieved, so a half-ingested file cannot be
+cited. A process that died mid-flight leaves `processing`; `app.Service.Start`
+sweeps those to `failed` at boot so the UI can offer a retry.
+
+**Data directory** (`-data`), created on demand:
+
+```
+settings.json   0600, atomic temp+rename — may hold an API key
+libris.db       SQLite (+ -wal/-shm while running)
+originals/      <sha256><ext> — the kept copy, never rewritten or deleted
+assets/         <sha256>/pages/page-0001.png, /slices/slice-0001.wav, …
 ```
 
 `Provenance` char offsets are **page-local**: `CharStart` counts from the start of
@@ -248,14 +280,32 @@ to `llm`, so "external OpenAI API" and "bundled llama.cpp" stay interchangeable.
 ## 8. HTTP surface
 
 ```
-GET  /api/health     {"status":"ok"}
-GET  /api/settings   23 values, effective configuration
-PUT  /api/settings   partial document; 400 on unknown key / bad range / bad JSON
-GET  /               embedded SPA, index.html fallback (client-side routing)
+GET    /api/health                        {"status":"ok"}
+GET    /api/settings                      23 values, effective configuration
+PUT    /api/settings                      partial document; 400 on unknown key / bad range
+POST   /api/notebooks                     {"name":…} → 201
+GET    /api/notebooks                     ·  GET /api/notebooks/{id}
+PATCH  /api/notebooks/{id}                rename ·  DELETE → 204
+POST   /api/notebooks/{id}/sources        multipart field "file" → 202 while processing
+GET    /api/notebooks/{id}/sources        ·  DELETE …/sources/{sourceID} → 204
+GET    /api/sources/{id}                  status, for the UI to poll
+GET    /api/sources/{id}/segments         chunks + provenance + assets
+GET    /api/sources/{id}/original         the kept copy
+GET    /api/assets/{id...}                derived files; id contains slashes
+GET    /                                  embedded SPA, index.html fallback
 ```
 
-Planned: notebooks/sources/segments CRUD, ingest jobs + SSE progress,
-`POST /api/notebooks/{id}/ask` (SSE: status → citations → tokens), `/mcp`.
+Status mapping is one `fail` function: `domain.ErrNotFound` → 404,
+`app.ErrInvalid` → 400, `app.ErrTooLarge` → 413, `app.ErrBusy` → 429 with
+`Retry-After`, everything else → 500 and a log line. Nothing else in the
+transport guesses at statuses.
+
+Both file endpoints stream through `http.ServeContent`, so Range works — that is
+what lets the browser seek inside an audio slice and a PDF viewer page without
+downloading the file.
+
+Planned: SSE progress instead of polling, `POST /api/notebooks/{id}/ask`
+(SSE: status → citations → tokens), `/mcp`.
 
 ---
 
@@ -282,9 +332,16 @@ Planned: notebooks/sources/segments CRUD, ingest jobs + SSE progress,
 - Hermetic by default: `httptest` for HTTP, `fakeRunner` for external processes,
   `t.TempDir()` for files, `fstest.MapFS` for assets. Tests that need real poppler
   skip themselves when the binaries are missing.
-- Coverage today: `domain` 100%, `httpapi` 100%, `llm` 100%, `config` 97%, `ingest`
-  97%. The uncovered lines are unreachable IO/reflect guards; do not contort
-  production code to reach them.
+- Coverage today: `domain` 100%, `llm` 100%, `httpapi` 89%, `config` 97%, `ingest`
+  98%, `app` 88%, `store/sqlite` 81%. The gaps are DB-error guards and
+  unreachable IO/reflect branches; do not contort production code to reach them.
+- `app` tests use the **real** SQLite store with a fake pipeline: the interesting
+  failures are how ingest's output lands in the schema (foreign keys, id
+  idempotency, the ready gate), not what a mock would agree to.
+- `httpapi` tests use a fake `API` and assert only the HTTP mapping.
+- Async ingest is tested without sleeps-as-synchronisation: `waitUntil` polls a
+  condition with a deadline, and blocking processors release on a channel so a
+  bounded queue and a graceful close are both observable.
 - Add a test with every feature. `TestNoSamplingOrInferenceConfig` exists to stop
   sampling parameters creeping back into requests.
 - No sleeps for synchronisation, no network in unit tests.
@@ -303,15 +360,20 @@ Planned: notebooks/sources/segments CRUD, ingest jobs + SSE progress,
   `Client.Timeout` because it would cap streams; no base64 auto-detection because
   `path/to/file` is ambiguous).
 - One ADR per accepted decision in `docs/adr/`. Current: 0001 config single
-  source, 0002 settings API.
+  source, 0002 settings API, 0003 notebooks and content-addressed sources.
+- User-caused mistakes are `app.ErrInvalid` / `ErrTooLarge` / `ErrBusy` or
+  `domain.ErrNotFound`; a bare `errors.New` from a use case means 500, so pick a
+  sentinel deliberately.
 - Commit messages describe behaviour and rationale; run `make check` first.
 
 ---
 
 ## 12. Open decisions (do not assume)
 
-1. **Notebook ↔ collection ↔ sources.** Is a notebook one collection? Can sources
-   be shared? Undecided.
+1. **Per-notebook naming of a shared source.** Sources are content-addressed and
+   shared, so the same file appears under the name it was first offered with.
+   Labelling it "Smith2020" in one notebook and "paper.pdf" in another needs an
+   alias on `notebook_sources`, which is not built.
 2. **Whole-notebook-in-context vs retrieval.** Deferred twice. The reference spec
    is 100% retrieval-based; a frozen-prefix design would change the answer path,
    prompt assembly, chunking and citation format. Prefix stability matters for KV
@@ -329,9 +391,13 @@ Planned: notebooks/sources/segments CRUD, ingest jobs + SSE progress,
 5. **Whether the research/synthesis split survives**, and whether `tool_choice:
    "required"` behaves on real local models (verified in llama.cpp's parser, not
    yet against a live model under load).
-6. **Storage schema**: SQLite via `ncruces/go-sqlite3` (cgo-free, cross-compiles,
-   keeps `sqlite-vec` available). Brute-force cosine in Go is the starting plan;
-   vectors as `BLOB`. Not implemented.
+6. ~~Storage schema~~ — built: SQLite via `ncruces/go-sqlite3`, embedded
+   migrations, `embedding BLOB` reserved and NULL. Still open: brute-force
+   cosine in Go versus `sqlite-vec` once the corpus is big enough to care.
+11. **Garbage collection.** Detaching a source and deleting a notebook never
+    remove files, so re-ingesting after a delete costs nothing but disk. Nothing
+    yet decides when an unreferenced source or asset may be collected, and a
+    wrong guess deletes a cited file.
 7. **MCP shape**: same process at `/mcp`, Loopback, bearer token, read-only by
    default; `cmd/libris-mcp` as a stdio shim. Details deferred.
 8. **Packaging the model servers** (supervise/spawn `llama-server`, or require it
@@ -361,3 +427,25 @@ Planned: notebooks/sources/segments CRUD, ingest jobs + SSE progress,
   a settings-style page done.
 - `strings.TrimSpace` uses Unicode spaces; word splitting uses ASCII spaces. A
   string of only U+2003 has no words.
+- `json:"…,omitempty"` deletes meaningful zeros. `Provenance.T0` is the first
+  audio slice's timestamp and it is `0.0`; it must stay on the wire. Zero is a
+  value here, not an absence — check that before tagging a field.
+- `PathValue("id...")` returns nothing. For a `{id...}` wildcard the value is
+  read with the bare name, `PathValue("id")`, slashes intact.
+- SQLite foreign keys are enforced by this driver, and silently so: an ignored
+  error in a test reads as a passing test. Insert assets before the segments that
+  reference them.
+- A migration file that fails on its *second* statement cannot prove rollback —
+  it fails identically every time. Make it do work, then fail on something
+  unrelated (`SELECT * FROM no_such_table`), and read the file back with a raw
+  `sql.Open` since a failed `Open` hands you nothing.
+- `Close()` must not cancel the context the in-flight job writes with. It did:
+  the rasterising finished and then its results were discarded, leaving the
+  source "processing" forever. Stopping the queue and cancelling the job are two
+  different acts.
+- `ingest.Detect` reads magic bytes first for PDF/image/audio, extension for the
+  rest. A PNG named `notes.txt` must not become text (mojibake chunks); a `.md`
+  stays text whatever the sniffer says. Do not "simplify" this to one order.
+- Two sources must never emit the same `Segment.ID` — it is derived from the
+  source's doc id, and a test fixture that hardcodes `"doc:0000"` for both fails
+  on the primary key in a way that looks like a storage bug.

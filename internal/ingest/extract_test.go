@@ -110,6 +110,14 @@ func TestDetect(t *testing.T) {
 		{"noext", "\x89PNG\r\n\x1a\n", "image"},
 		{"noext", "just some plain text here", "text"},
 		{"archive.zip", "PK\x03\x04", "unsupported"},
+
+		// Magic beats a misleading extension: a PNG named .txt must not be
+		// read as text. The reverse does not apply — a .md is text whatever
+		// the sniffer makes of its first bytes.
+		{"mislabelled.txt", "\x89PNG\r\n\x1a\n", "image"},
+		{"speech.txt", "RIFF\x00\x00\x00\x00WAVEfmt ", "audio"},
+		{"renamed.ai", "%PDF-1.7", "pdf"},
+		{"notes.md", "# heading\n", "text"},
 	}
 
 	for _, tc := range tests {
