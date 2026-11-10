@@ -36,8 +36,15 @@ type Source struct {
 
 // Provenance points back into the original file. Every segment carries one so
 // the UI can open the PDF at a page, or the audio at a timestamp.
+//
+// Char offsets are byte offsets into the extracted text of a page: CharStart
+// counts from the start of Page, CharEnd from the start of PageEnd. PageEnd is
+// 0 unless the chunk straddles a page break, in which case it is the page the
+// chunk ends on. A chunk never spans more than two pages, because a page holds
+// far more words than a chunk.
 type Provenance struct {
 	Page      int     `json:"page,omitempty"` // 1-based; 0 when not paginated
+	PageEnd   int     `json:"page_end,omitempty"`
 	CharStart int     `json:"char_start,omitempty"`
 	CharEnd   int     `json:"char_end,omitempty"`
 	T0        float64 `json:"t0,omitempty"` // seconds, for audio

@@ -176,10 +176,15 @@ func TestPDFSkipsEmptyPages(t *testing.T) {
 
 	seen := map[int]bool{}
 	for _, seg := range res.Segments {
-		if seg.Kind == domain.KindText {
-			seen[seg.Span.Page] = true
+		if seg.Kind != domain.KindText {
+			continue
+		}
+		seen[seg.Span.Page] = true
+		if seg.Span.PageEnd != 0 {
+			seen[seg.Span.PageEnd] = true
 		}
 	}
+	// The blank page has no text, so no chunk may name it.
 	if seen[2] {
 		t.Fatalf("empty page 2 produced a segment: %v", seen)
 	}

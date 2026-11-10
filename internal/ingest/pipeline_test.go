@@ -404,13 +404,13 @@ func TestProcessImageStoreFailure(t *testing.T) {
 	}
 }
 
-func TestProcessUnsupportedAndAudio(t *testing.T) {
+func TestProcessUnsupported(t *testing.T) {
 	p, _ := New(testConfig(), DirSink{Root: t.TempDir()})
 
 	// A .zip is sniffed by its magic bytes, not its extension.
 	for name, want := range map[string]string{
-		"a.zip": "unsupported file type",
-		"a.mp3": "transcription",
+		"a.zip":  "unsupported file type",
+		"a.docx": "unsupported file type",
 	} {
 		res, err := p.Process(context.Background(), writeTemp(t, name, "PK\x03\x04 binary payload"))
 		if err != nil {
@@ -491,6 +491,9 @@ func TestProcessPDF(t *testing.T) {
 		case domain.KindText:
 			text++
 			pages[seg.Span.Page] = true
+			if seg.Span.PageEnd != 0 {
+				pages[seg.Span.PageEnd] = true
+			}
 		case domain.KindImage:
 			images++
 			if seg.Asset == nil {
@@ -498,11 +501,16 @@ func TestProcessPDF(t *testing.T) {
 			}
 		}
 	}
-	if text != 2 || images != 2 {
+	// Both pages hold a few words, so the document is one chunk that runs
+	// across the page break — that is the point of chunking the whole text.
+	if text != 1 || images != 2 {
 		t.Fatalf("text=%d images=%d", text, images)
 	}
 	if !pages[1] || !pages[2] {
 		t.Fatalf("pages = %v", pages)
+	}
+	if res.Segments[0].Span.PageEnd != 2 {
+		t.Fatalf("span = %+v, want a chunk spanning pages 1 and 2", res.Segments[0].Span)
 	}
 }
 

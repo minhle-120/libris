@@ -117,11 +117,30 @@ lives in `app` so both transports share one implementation.
 ## 5. Data model (`internal/domain`)
 
 ```go
-Source{ID, Name, Kind, SHA256, Bytes}          // ID = sha256 of contents
-Provenance{Page, CharStart, CharEnd, T0, T1}   // page is 1-based, 0 = not paginated
-Asset{ID, Path, MIME, Bytes}                   // a file written by a sink
+Source{ID, Name, Kind, SHA256, Bytes}            // ID = sha256 of contents
+Provenance{Page, PageEnd, CharStart, CharEnd, T0, T1}
+Asset{ID, Path, MIME, Bytes}                     // a file written by a sink
 Segment{ID, SourceID, DocID, Kind, Ordinal, Text, Asset, Span}
 ```
+
+`Provenance` char offsets are **page-local**: `CharStart` counts from the start of
+`Page`, `CharEnd` from the start of `PageEnd`. `PageEnd` is 0 unless the chunk
+straddles a page break. Since a page holds far more words than a chunk, a chunk
+can never span more than two pages.
+
+**Chunking** (`ingest.SplitText` + `ingest/pagespan.go`): text is chunked by
+words — `chunkWords` 100, `chunkOverlap` 50 — over the **whole document's** text,
+not page by page, so a paragraph that crosses a page break stays one chunk.
+`JoinPages` builds the concatenation plus each page's byte range; `MapSpan`
+resolves a chunk back onto page-local offsets. For a plain text file there is no
+page, so offsets are into the file itself.
+
+| Modality | Chunk granularity | Why |
+|---|---|---|
+| Text | 100 words, 50 overlap | the reference spec's numbers; ~300 tokens worst case, far under the batch ceiling |
+| PDF page raster | one segment per page | a raster is already a coherent unit; cites at page level (~280 tokens) |
+| Image | one segment per file | ditto |
+| Audio | `ingest.AudioSliceSeconds` = 30 s | ~25 tokens/s ⇒ ~750 tokens, near the 1022-token single-ubatch ceiling. Longer slices need a larger `-ub` |
 
 `Segment` is the ingest→embed contract:
 
@@ -297,9 +316,13 @@ Planned: notebooks/sources/segments CRUD, ingest jobs + SSE progress,
    is 100% retrieval-based; a frozen-prefix design would change the answer path,
    prompt assembly, chunking and citation format. Prefix stability matters for KV
    cache reuse, so this is a load-bearing choice.
-3. **Citation granularity for images and audio.** `Provenance` has `Page` and
-   `T0/T1` placeholders but nothing has exercised them yet; region/bbox for images
-   is not designed.
+3. **Citation granularity inside a page.** Settled: text cites a char range
+   within a page (or the two pages a chunk spans), audio cites a timestamp range,
+   page rasters cite the page. Unsettled: a region/bbox inside an image, which
+   would let a raster cite a figure rather than a whole page.
+   The viewer contract is a hash route per modality —
+   `#/source/<id>?page=7&c=1200-1640`, `?page=7`, `?t=84.2-104.6` — and a
+   straddling chunk should anchor on the page it *starts* on.
 4. **Multimodal retrieval strategy.** Native audio/image embeddings, text
    renditions (captions/transcripts), or both. `Segment.Text` currently stays
    empty for images.
@@ -313,8 +336,10 @@ Planned: notebooks/sources/segments CRUD, ingest jobs + SSE progress,
    default; `cmd/libris-mcp` as a stdio shim. Details deferred.
 8. **Packaging the model servers** (supervise/spawn `llama-server`, or require it
    pre-installed).
-9. **Office formats** (docx/pptx/xlsx/epub) and **audio transcription**: both
-   currently land in `Unsupported` with a reason.
+9. **Office formats** (docx/pptx/xlsx/epub) still land in `Unsupported` with a
+   reason. **Audio transcription** is the bigger gap: slicing works, so audio is
+   retrievable by embedding, but `Segment.Text` stays empty — the synthesiser
+   cannot quote an audio chunk and a citation can only offer to play it.
 10. **Eval set**: ~30 golden questions per corpus, recall@k and citation accuracy.
     Not started; needed before tuning retrieval.
 
