@@ -32,7 +32,30 @@ type Source struct {
 	Kind   SourceKind
 	SHA256 string
 	Bytes  int64
+
+	// OriginalPath is where the kept copy lives, never the upload site's path.
+	OriginalPath string `json:"original_path"`
+
+	Status   SourceStatus `json:"status"`
+	Detail   string       `json:"detail,omitempty"`   // why unsupported or failed
+	Warnings []string     `json:"warnings,omitempty"` // non-fatal findings
+	AddedAt  int64        `json:"added_at"`           // unix seconds
+
+	// SegmentCount is read from the database rather than stored: it is how the
+	// UI shows "8 chunks" next to a finished source, and is 0 while processing.
+	SegmentCount int `json:"segment_count"`
 }
+
+// SourceStatus is where a source has got. Ingest is asynchronous, so an upload
+// answers before any of it has happened.
+type SourceStatus string
+
+const (
+	StatusProcessing  SourceStatus = "processing"  // queued or running
+	StatusReady       SourceStatus = "ready"       // segments written
+	StatusUnsupported SourceStatus = "unsupported" // read, but nothing to extract
+	StatusFailed      SourceStatus = "failed"      // crashed, or died mid-flight
+)
 
 // Provenance points back into the original file. Every segment carries one so
 // the UI can open the PDF at a page, or the audio at a timestamp.
@@ -78,6 +101,14 @@ type Segment struct {
 	Text     string     `json:"text"`
 	Asset    *Asset     `json:"asset,omitempty"`
 	Span     Provenance `json:"span"`
+}
+
+// Notebook is a workspace: its own sources, its own chats, and the scope every
+// answer is retrieved within.
+type Notebook struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	CreatedAt int64  `json:"created_at"` // unix seconds
 }
 
 func (s Segment) String() string {
