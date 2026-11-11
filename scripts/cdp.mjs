@@ -100,6 +100,8 @@ async function connect(port, app, body) {
   }
 }
 
+const KEY_CODES = { Escape: 27, Enter: 13, Tab: 9, Backspace: 8 };
+
 class UI {
   constructor(ws) {
     this.ws = ws;
@@ -175,6 +177,38 @@ class UI {
     await new Promise((r) => setTimeout(r, ms));
   }
 
+  /** Reloads the app, so server-side changes appear in a client-side list. */
+  async reload(url) {
+    await this.send('Page.navigate', { url });
+    await this.settle();
+  }
+
+  /** Pretends to be a narrower window. This is for layout checks, not behaviour. */
+  async setViewport(width, height = 800) {
+    await this.send('Emulation.setDeviceMetricsOverride', {
+      width,
+      height,
+      deviceScaleFactor: 1,
+      mobile: false
+    });
+    await this.settle(200);
+  }
+
+  async clearViewport() {
+    await this.send('Emulation.clearDeviceMetricsOverride');
+  }
+
+  /**
+   * A real key press. Synthetic KeyboardEvents cannot close a <dialog>: the
+   * browser only honours Escape for trusted input, which is exactly the
+   * behaviour a test must not fake away.
+   */
+  async press(key, code = '') {
+    const base = { type: 'keyDown', key, windowsVirtualKeyCode: KEY_CODES[key] ?? 0, code };
+    await this.send('Input.dispatchKeyEvent', base);
+    await this.send('Input.dispatchKeyEvent', { ...base, type: 'keyUp' });
+  }
+
   /** Clicks a header/sidebar button by its visible label. */
   click(text) {
     return this.eval(`
@@ -187,15 +221,22 @@ class UI {
     `);
   }
 
-  /** Polls in the page until the expression is truthy, then returns it. */
-  until(expression, tries = 120, every = 50) {
+  /**
+   * Polls in the page until the code returns something truthy, then returns it.
+   * Like `eval`, the argument is a function body and must `return` — passing a
+   * bare expression used to fail as a syntax error inside the page.
+   */
+  until(code, tries = 120, every = 50) {
     return this.eval(`
+      const step = () => {
+        ${code}
+      };
       for (let i = 0; i < ${tries}; i++) {
-        const value = ${expression};
+        const value = step();
         if (value) return value;
         await new Promise((r) => setTimeout(r, ${every}));
       }
-      return ${expression};
+      return step();
     `);
   }
 }

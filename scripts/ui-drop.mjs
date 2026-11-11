@@ -6,13 +6,40 @@
 import { Checks, withBrowser } from './cdp.mjs';
 
 const app = process.env.APP ?? 'http://127.0.0.1:8080/';
+// Unique per run: make ui shares one server between both scripts, and a
+// leftover notebook is enough to make a "wait for the drop zone" test pass
+// against the wrong view.
+const notebook = `drop-${Date.now()}`;
 const cdpPort = Number(process.env.CDP_PORT ?? 9322);
 
 const checks = new Checks();
 
 await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ui-profile-drop' }, async (ui) => {
-  await ui.click('New');
-  await ui.until(`document.querySelector('.dropzone') && true`);
+  // Created through the API on purpose. Creating it with the New button and then
+  // waiting for `.dropzone` races: the previous notebook's drop zone is already
+  // on screen, so the first drop can land in it before the view switches.
+  await ui.eval(`
+    return await (await fetch('/api/notebooks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: ${JSON.stringify(notebook)} })
+    })).json();
+  `);
+  await ui.reload(app);
+
+  await ui.eval(`
+    const item = [...document.querySelectorAll('.sidebar .list .item')]
+      .find((i) => i.textContent.includes(${JSON.stringify(notebook)}));
+    if (!item) throw new Error('the notebook is not in the sidebar');
+    item.click();
+    for (let i = 0; i < 100; i++) {
+      if (document.querySelector('.title h1')?.textContent === ${JSON.stringify(notebook)}) return true;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    return false;
+  `);
+  checks.check('the empty notebook under test is the open one',
+    await ui.eval(`return document.querySelector('.title h1')?.textContent === ${JSON.stringify(notebook)}`));
 
   // ── a real drop of a markdown file ─────────────────────────────
   const dropped = await ui.eval(`
@@ -80,6 +107,112 @@ await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ui-profile-drop' }
   checks.check('its status is unsupported', unsupported.status === 'unsupported', `status=${unsupported.status}`);
   checks.check('the reason is visible to the user', !!unsupported.detail, `detail=${unsupported.detail}`);
   checks.check('an unsupported file can still be opened', unsupported.openable === true);
+  // ── the inspector, on a file built to show the overlap ─────────
+  // dropped.md is 20 identical lines, so its word sequence is periodic and every
+  // 100-word window is identical: a degenerate case that would shade whole
+  // chunks. Unique words make the 50-word overlap observable.
+  await ui.eval(`
+    const zone = document.querySelector('.dropzone');
+    const dt = new DataTransfer();
+    dt.items.add(new File([Array.from({ length: 200 }, (_, i) => 'w' + i).join(' ')],
+      'overlap.txt', { type: 'text/plain' }));
+    zone.dispatchEvent(new DragEvent('drop', { bubbles: true, dataTransfer: dt }));
+    for (let i = 0; i < 200; i++) {
+      const row = [...document.querySelectorAll('.source')]
+        .find((r) => r.querySelector('.name')?.textContent === 'overlap.txt');
+      if (row?.querySelector('.badge')?.textContent.trim() === 'ready') return true;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    return false;
+  `);
+
+  // The chunker's 100-word chunks exceed the preview cap, and a collapsed chunk
+  // hides the tail the suffix test needs, so expand them first.
+  await ui.eval(`
+    const row = [...document.querySelectorAll('.source')]
+      .find((r) => r.querySelector('.name')?.textContent === 'overlap.txt');
+    row.querySelector('button[title="See how this source was chunked"]').click();
+    for (let i = 0; i < 60; i++) {
+      if (document.querySelector('dialog')?.open) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    document.querySelectorAll('dialog .more').forEach((b) => b.click());
+    await new Promise((r) => setTimeout(r, 60));
+    return true;
+  `);
+
+  const overlap = await ui.until(`
+    const row = [...document.querySelectorAll('.source')]
+      .find((r) => r.querySelector('.name')?.textContent === 'overlap.txt');
+    if (!row) return null;
+    // Opened above; the step function is sync, so expansion happens there too.
+    const d = document.querySelector('dialog');
+    if (!d || !d.open) return null;
+
+    const texts = [...d.querySelectorAll('.chunk .text')].map((t) => {
+      const mark = t.querySelector('mark');
+      const head = mark ? mark.textContent : '';
+      // Text nodes only: the "… +N chars" control is not part of the chunk.
+      const body = [...t.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join('');
+      return { head, full: head + body };
+    });
+    if (!texts.length) return null;
+
+    let honest = true;
+    for (let i = 1; i < texts.length; i++) {
+      if (!texts[i].head) honest = false;
+      else if (!texts[i - 1].full.endsWith(texts[i].head) || !texts[i].full.startsWith(texts[i].head)) honest = false;
+    }
+    const words = (t) => t.trim().split(/\\s+/).filter(Boolean).length;
+    return {
+      rows: texts.length,
+      shaded: texts.map((t) => words(t.head)),
+      sizes: texts.map((t) => words(t.full)),
+      honest,
+      legend: d.querySelector('footer .small')?.textContent.trim()
+    };
+  `, 200, 100);
+
+  checks.check('a 200-word text becomes three chunks', overlap?.rows === 3, `rows=${overlap?.rows}`);
+  checks.check('chunks step by 100 words', JSON.stringify(overlap?.sizes) === JSON.stringify([100, 100, 100]),
+    JSON.stringify(overlap?.sizes));
+  // The configured overlap is 50 words, so the second and third chunk repeat 50.
+  checks.check('the overlap between chunks is marked as 50 words',
+    JSON.stringify(overlap?.shaded) === JSON.stringify([0, 50, 50]), JSON.stringify(overlap?.shaded));
+  checks.check('the shading is literally the previous chunk tail', overlap?.honest === true,
+    () => 'shading does not match the text around it');
+  checks.check('the legend explains the shading', /shaded text repeats/.test(overlap?.legend ?? ''), overlap?.legend);
+
+  await ui.eval(`document.querySelector('dialog').close(); return true;`);
+
+  // ── layout, at the widths that have bitten this repo before ──────
+  for (const width of [640, 1180]) {
+    await ui.setViewport(width);
+    await ui.eval(`
+      const row = [...document.querySelectorAll('.source')]
+        .find((r) => r.querySelector('.name')?.textContent === 'overlap.txt');
+      row.querySelector('button[title="See how this source was chunked"]').click();
+      for (let i = 0; i < 60; i++) {
+        if (document.querySelector('dialog')?.open && document.querySelector('.chunk')) break;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      return true;
+    `);
+    const fit = await ui.eval(`
+      const box = document.querySelector('dialog').getBoundingClientRect();
+      return {
+        width: Math.round(box.width),
+        fits: box.left >= 0 && box.right <= window.innerWidth + 0.5 &&
+              box.height <= window.innerHeight,
+        pageScrollsX: document.documentElement.scrollWidth > window.innerWidth
+      };
+    `);
+    checks.check(`the dialog fits at ${width}px`, fit?.fits && !fit?.pageScrollsX, JSON.stringify(fit));
+    await ui.press('Escape');
+    await ui.settle(150);
+  }
+  await ui.clearViewport();
+
   checks.check('no uncaught page errors', ui.pageErrors.length === 0, ui.pageErrors.slice(0, 2).join(' | '));
   checks.check('no console errors', ui.consoleErrors.length === 0, ui.consoleErrors.slice(0, 2).join(' | '));
 });

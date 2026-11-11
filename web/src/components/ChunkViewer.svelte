@@ -1,0 +1,447 @@
+<script lang="ts">
+  import { onMount } from 'svelte';
+  import { assetURL, listSegments } from '../lib/api';
+  import { formatBytes } from '../lib/format';
+  import type { Segment, Source } from '../lib/types';
+  import Icon from '../lib/Icon.svelte';
+  import Badge from '../lib/Badge.svelte';
+  import Button from '../lib/Button.svelte';
+
+  let { source, onclose }: { source: Source; onclose: () => void } = $props();
+
+  let segments = $state<Segment[]>([]);
+  let loading = $state(true);
+  let error = $state('');
+
+  /** Natural sizes, learned as page rasters load. Keyed by asset id. */
+  let dims = $state<Record<string, string>>({});
+  let open = $state<Record<string, boolean>>({});
+  let dlg: HTMLDialogElement | undefined = $state();
+
+  // A chunk longer than this collapses, so a 100-word default stays scannable.
+  const PREVIEW = 420;
+
+  onMount(() => {
+    // showModal() gives Esc-to-close, focus trapping and the top layer for free,
+    // which is why this is a native dialog rather than a positioned div.
+    dlg?.showModal();
+    load();
+  });
+
+  /** Esc closes the dialog itself, so the parent is told here rather than in a key handler. */
+  function onDialogClose() {
+    onclose();
+  }
+
+  function close() {
+    dlg?.close();
+  }
+
+  /** A click on the backdrop lands on the dialog element itself. */
+  function onBackdrop(e: MouseEvent) {
+    if (e.target === dlg) close();
+  }
+
+  async function load() {
+    try {
+      segments = await listSegments(source.id);
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    } finally {
+      loading = false;
+    }
+  }
+
+  /**
+   * Longest tail of the previous chunk that the current one repeats — the
+   * overlap the chunker inserts on purpose. Snapped back to a word boundary so
+   * the shading never starts mid-word.
+   */
+  function overlap(prev: string, cur: string): number {
+    const max = Math.min(prev.length, cur.length);
+    for (let n = max; n > 0; n--) {
+      if (prev.slice(-n) === cur.slice(0, n)) {
+        let cut = n;
+        while (cut > 0 && !/\s/.test(cur[cut] ?? ' ')) cut--;
+        return cut;
+      }
+    }
+    return 0;
+  }
+
+  function words(text: string): number {
+    const trimmed = text.trim();
+    return trimmed ? trimmed.split(/\s+/).length : 0;
+  }
+
+  /** A PDF yields two documents, and the viewer should say so in plain words. */
+  function docLabel(docID: string): string {
+    if (docID === source.id) return 'page text';
+    if (docID.endsWith('#pages')) return 'page rasters';
+    if (docID.endsWith('#audio')) return 'audio slices';
+    return docID;
+  }
+
+  /** Provenance, in the unit that document actually has. */
+  function spanLabel(seg: Segment): string {
+    const { page, page_end: pageEnd, t0, t1 } = seg.span;
+    if (page) return pageEnd && pageEnd !== page ? `p${page}–${pageEnd}` : `p${page}`;
+    if (seg.kind === 'audio') return t1 ? `${t0.toFixed(0)}–${t1.toFixed(0)}s` : `${t0.toFixed(0)}s`;
+    return '—';
+  }
+
+  type Chunk = { seg: Segment; head: string; body: string; words: number };
+
+  // Segments arrive ordered by doc then ordinal, so a single pass groups them and
+  // compares each chunk with the one before it in the same document.
+  const groups = $derived.by(() => {
+    const built: { docID: string; chunks: Chunk[]; prev: string }[] = [];
+    for (const seg of segments) {
+      let last = built[built.length - 1];
+      if (!last || last.docID !== seg.doc_id) {
+        last = { docID: seg.doc_id, chunks: [], prev: '' };
+        built.push(last);
+      }
+      const cut = overlap(last.prev, seg.text);
+      last.chunks.push({
+        seg,
+        head: seg.text.slice(0, cut),
+        body: seg.text.slice(cut),
+        words: words(seg.text)
+      });
+      last.prev = seg.text;
+    }
+    return built.map((g) => ({
+      docID: g.docID,
+      label: docLabel(g.docID),
+      chunks: g.chunks
+    }));
+  });
+
+  const summary = $derived.by(() => {
+    const text = segments.filter((s) => s.kind === 'text').length;
+    const images = segments.filter((s) => s.kind === 'image').length;
+    const audio = segments.filter((s) => s.kind === 'audio').length;
+    const parts = [`${segments.length} chunk${segments.length === 1 ? '' : 's'}`];
+    if (text) parts.push(`${text} text`);
+    if (images) parts.push(`${images} image${images === 1 ? '' : 's'}`);
+    if (audio) parts.push(`${audio} slice${audio === 1 ? '' : 's'}`);
+    return parts.join(' · ');
+  });
+
+  const hasOverlap = $derived(groups.some((g) => g.chunks.some((c) => c.head.length > 0)));
+
+  function measure(assetID: string, img: HTMLImageElement) {
+    dims[assetID] = `${img.naturalWidth}×${img.naturalHeight}`;
+  }
+</script>
+
+<dialog class="modal" aria-label="Chunks of {source.name}" bind:this={dlg} onclick={onBackdrop} onclose={onDialogClose}>
+    <header>
+      <div class="head-text">
+        <h2>How “{source.name}” is chunked</h2>
+        <p class="muted small">
+          {#if loading}loading…{:else if error}{error}{:else}{summary} · {source.kind} · {formatBytes(source.bytes)}{/if}
+        </p>
+      </div>
+      <button type="button" class="close" aria-label="Close" onclick={close}>
+        <Icon name="x" size={16} />
+      </button>
+    </header>
+
+    <div class="body">
+      {#if !loading && !error && segments.length === 0}
+        <p class="muted center">Nothing was extracted from this source.</p>
+      {/if}
+
+      {#each groups as group (group.docID)}
+        <div class="doc">
+          <div class="doc-head">
+            <h3>{group.label}</h3>
+            <span class="muted small" title={group.docID}>
+              {group.chunks.length} chunk{group.chunks.length === 1 ? '' : 's'} · doc {group.docID === source.id
+                ? 'same as source'
+                : group.docID.slice(group.docID.indexOf('#') + 1)}
+            </span>
+          </div>
+
+          {#if group.chunks[0].seg.kind === 'image'}
+            <div class="grid">
+              {#each group.chunks as chunk (chunk.seg.id)}
+                <a
+                  class="tile"
+                  href={assetURL(chunk.seg.asset!)}
+                  target="_blank"
+                  rel="noreferrer"
+                  title="Open the full raster"
+                >
+                  <img
+                    src={assetURL(chunk.seg.asset!)}
+                    alt="Page {chunk.seg.span.page}"
+                    loading="lazy"
+                    onload={(e) =>
+                      measure(chunk.seg.asset!.id, e.currentTarget as HTMLImageElement)
+                    }
+                  />
+                  <span class="cap">
+                    <code>{String(chunk.seg.ordinal).padStart(4, '0')}</code>
+                    <span>{spanLabel(chunk.seg)}</span>
+                    <span class="muted">
+                      {dims[chunk.seg.asset!.id] ?? '…'} · {formatBytes(chunk.seg.asset!.bytes)}
+                    </span>
+                  </span>
+                </a>
+              {/each}
+            </div>
+          {:else}
+            <ul class="chunks">
+              {#each group.chunks as chunk (chunk.seg.id)}
+                <li class="chunk" title={chunk.seg.id}>
+                  <div class="chip">
+                    <div class="ord">{String(chunk.seg.ordinal).padStart(4, '0')}</div>
+                    <div class="prov">
+                      <span>{spanLabel(chunk.seg)}</span>
+                      <span>{chunk.words} words</span>
+                      {#if chunk.seg.span.char_end}
+                        <span class="muted">
+                          chars {chunk.seg.span.char_start ?? 0}–{chunk.seg.span.char_end}
+                        </span>
+                      {/if}
+                    </div>
+                  </div>
+
+                  {#if chunk.seg.text}
+                    <div class="text">
+                      {#if chunk.head}
+                        <mark title="Repeated from the previous chunk">{chunk.head}</mark>
+                      {/if}
+                      {#if open[chunk.seg.id] || chunk.body.length <= PREVIEW}
+                        {chunk.body}
+                      {:else}
+                        {chunk.body.slice(0, PREVIEW)}<button
+                          type="button"
+                          class="more"
+                          onclick={() => (open[chunk.seg.id] = true)}>… +{chunk.body.length - PREVIEW} chars</button>
+                      {/if}
+                    </div>
+                  {:else}
+                    <p class="muted small empty-text">no text rendition</p>
+                  {/if}
+                </li>
+              {/each}
+            </ul>
+          {/if}
+        </div>
+      {/each}
+    </div>
+
+    <footer>
+      <span class="muted small">
+        {#if hasOverlap}
+          <span class="swatch"></span> shaded text repeats the tail of the previous chunk
+        {:else}
+          no chunk repeats any part of the one before it
+        {/if}
+      </span>
+      <Badge tone="neutral">{source.segment_count} segments</Badge>
+    </footer>
+</dialog>
+
+<style>
+  .modal {
+    display: flex;
+    flex-direction: column;
+    width: min(920px, calc(100vw - 48px));
+    max-height: min(860px, calc(100vh - 48px));
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--canvas-overlay);
+    box-shadow: var(--shadow-md);
+    overflow: hidden;
+  }
+  .modal::backdrop {
+    background: rgba(1, 4, 9, 0.55);
+  }
+  header {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .head-text {
+    flex: 1;
+    min-width: 0;
+  }
+  header h2 {
+    margin: 0;
+    font-size: 15px;
+  }
+  header p {
+    margin: 4px 0 0;
+  }
+  .close {
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    flex-shrink: 0;
+    color: var(--fg-muted);
+    border: 1px solid transparent;
+    border-radius: var(--radius);
+    background: none;
+    cursor: pointer;
+  }
+  .close:hover {
+    border-color: var(--border);
+    background: var(--canvas-subtle);
+  }
+  .body {
+    flex: 1;
+    padding: 16px;
+    overflow: auto;
+  }
+  .doc {
+    margin-bottom: 24px;
+  }
+  .doc:last-child {
+    margin-bottom: 0;
+  }
+  .doc-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border-muted);
+  }
+  .doc-head h3 {
+    margin: 0;
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--fg-muted);
+  }
+  .small {
+    font-size: 12px;
+  }
+  .center {
+    padding: 24px 0;
+    text-align: center;
+  }
+  .chunks {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .chunk {
+    display: flex;
+    gap: 12px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border-muted);
+  }
+  .chunk:last-child {
+    border-bottom: none;
+  }
+  .chip {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    width: 108px;
+    flex-shrink: 0;
+  }
+  .ord {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--fg-muted);
+  }
+  .prov {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    font-size: 11px;
+  }
+  .text {
+    flex: 1;
+    min-width: 0;
+    font-size: 13px;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .text mark {
+    color: inherit;
+    background: color-mix(in srgb, var(--attention) 20%, transparent);
+    border-radius: 2px;
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--attention) 35%, transparent);
+  }
+  .more {
+    border: none;
+    padding: 0;
+    font: inherit;
+    color: var(--accent);
+    background: none;
+    cursor: pointer;
+  }
+  .empty-text {
+    margin: 0;
+    font-style: italic;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+    gap: 12px;
+    padding-top: 12px;
+  }
+  .tile {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--canvas-subtle);
+    text-decoration: none;
+    color: inherit;
+  }
+  .tile:hover {
+    border-color: var(--accent);
+  }
+  .tile img {
+    width: 100%;
+    height: 150px;
+    object-fit: contain;
+    border-radius: var(--radius-sm);
+    background: var(--canvas);
+  }
+  .cap {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 6px;
+    font-size: 11px;
+  }
+  .cap code {
+    font-family: var(--font-mono);
+    color: var(--fg-muted);
+  }
+  footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 16px;
+    border-top: 1px solid var(--border);
+    background: var(--canvas-subtle);
+  }
+  .swatch {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    margin-right: 6px;
+    vertical-align: -1px;
+    background: color-mix(in srgb, var(--attention) 20%, transparent);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--attention) 35%, transparent);
+  }
+</style>

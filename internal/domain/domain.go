@@ -44,8 +44,10 @@ type Source struct {
 	Bytes  int64      `json:"bytes"`
 
 	// OriginalPath is where the kept copy lives, never the upload site's path.
-	// It is absolute on the machine that owns the data directory.
-	OriginalPath string `json:"original_path"`
+	// It is absolute on the machine that owns the data directory, and it is not
+	// sent to the client: the API offers /api/sources/{id}/original instead, so
+	// the browser never needs to know where the data directory is.
+	OriginalPath string `json:"-"`
 
 	Status   SourceStatus `json:"status"`
 	Detail   string       `json:"detail,omitempty"`   // why unsupported or failed
@@ -90,8 +92,10 @@ type Provenance struct {
 // Asset is a file written by the sink: an extracted page image, a copied
 // original, or a media slice.
 type Asset struct {
-	ID    string `json:"id"`
-	Path  string `json:"path"`
+	ID string `json:"id"` // also its URL path under /api/assets/
+	// Path is absolute on this machine, and internal: the file endpoints look it
+	// up by ID rather than accepting a path, so it stays out of the JSON.
+	Path  string `json:"-"`
 	MIME  string `json:"mime"`
 	Bytes int64  `json:"bytes"`
 }

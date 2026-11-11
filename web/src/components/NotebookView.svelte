@@ -8,6 +8,7 @@
   import Button from '../lib/Button.svelte';
   import Icon from '../lib/Icon.svelte';
   import EmptyState from '../lib/EmptyState.svelte';
+  import ChunkViewer from './ChunkViewer.svelte';
 
   let {
     notebook,
@@ -24,6 +25,7 @@
   let uploading = $state(0);
   let dragging = $state(false);
   let tab = $state('sources');
+  let inspecting: Source | null = $state(null);
 
   let fileInput: HTMLInputElement | undefined = $state();
 
@@ -243,6 +245,17 @@
                 </div>
 
                 <div class="row-actions">
+                  {#if source.status === 'ready'}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      iconOnly
+                      title="See how this source was chunked"
+                      onclick={() => (inspecting = source)}
+                    >
+                      <Icon name="layers" size={14} />
+                    </Button>
+                  {/if}
                   {#if source.status === 'ready' || source.status === 'unsupported' || source.status === 'failed'}
                     <a
                       class="iconlink"
@@ -290,6 +303,10 @@
     {/if}
   </div>
 </div>
+
+{#if inspecting}
+  <ChunkViewer source={inspecting} onclose={() => (inspecting = null)} />
+{/if}
 
 <style>
   .page {

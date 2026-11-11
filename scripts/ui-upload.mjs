@@ -23,7 +23,7 @@ const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ui-pr
   const before = boot.notebooks;
   await ui.click('New');
   const created = await ui.until(
-    `document.querySelectorAll('.sidebar .list .item').length > ${before}
+    `return document.querySelectorAll('.sidebar .list .item').length > ${before}
        ? document.querySelectorAll('.sidebar .list .item').length : null`
   );
   checks.check('New creates a notebook on the server', created === before + 1, `rows=${created}`);
@@ -45,7 +45,7 @@ const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ui-pr
 
   // `until` takes an expression (it is evaluated up to twice per poll).
   const row = await ui.until(`
-    document.querySelector('.source') && {
+    return document.querySelector('.source') && {
       name: document.querySelector('.source .name')?.textContent,
       status: document.querySelector('.source .badge')?.textContent.trim()
     }
@@ -54,7 +54,7 @@ const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ui-pr
   checks.check('the row starts as processing', row?.status === 'processing', `status=${row?.status}`);
 
   const ready = await ui.until(`
-    document.querySelector('.source .badge')?.textContent.trim() !== 'processing' &&
+    return document.querySelector('.source .badge')?.textContent.trim() !== 'processing' &&
       document.querySelector('.source') && {
       status: document.querySelector('.source .badge')?.textContent.trim(),
       facts: document.querySelector('.source .facts')?.textContent.replace(/\\s+/g, ' ').trim(),
@@ -72,6 +72,62 @@ const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ui-pr
     /^\/api\/sources\/[0-9a-f]{64}\/original$/.test(ready?.open ?? ''),
     ready?.open
   );
+
+  // ── the chunk inspector ────────────────────────────────────────
+  await ui.click('See how this source was chunked');
+  const view = await ui.until(`
+    const d = document.querySelector('dialog');
+    // Truthiness must mean "rendered", not merely "open": the first poll lands
+    // while listSegments is still in flight and would read the loading text.
+    if (!d || !d.open || !d.querySelector('.chunk, .tile')) return null;
+    return {
+      heading: d.querySelector('h2')?.textContent,
+      summary: d.querySelector('header p')?.textContent.replace(/\\s+/g, ' ').trim(),
+      docs: [...d.querySelectorAll('.doc-head h3')].map((h) => h.textContent),
+      ordinals: [...d.querySelectorAll('.ord')].map((o) => o.textContent),
+      prov: [...d.querySelectorAll('.prov span:first-child')].map((p) => p.textContent),
+      text: d.querySelector('.text')?.textContent.trim().slice(0, 24),
+      legend: d.querySelector('footer .small')?.textContent.trim()
+    };
+  `);
+  checks.check('the inspector opens on the source name', /two-page.pdf/.test(view?.heading ?? ''), view?.heading);
+  checks.check('it counts the chunks by kind',
+    /3 chunks/.test(view?.summary ?? '') && /1 text/.test(view?.summary ?? '') && /2 images/.test(view?.summary ?? ''),
+    view?.summary);
+  checks.check('a PDF is shown as its two derived documents',
+    JSON.stringify(view?.docs) === JSON.stringify(['page text', 'page rasters']), JSON.stringify(view?.docs));
+  // Only the text document uses .ord; the raster tiles show their ordinal in the
+  // caption, which the raster checks below assert on.
+  checks.check('a text chunk carries its ordinal id',
+    JSON.stringify(view?.ordinals) === JSON.stringify(['0000']), JSON.stringify(view?.ordinals));
+  // The text chunk straddles a page break, which is what page_end is for.
+  checks.check('provenance shows the page span', /p1[^0-9]2/.test((view?.prov ?? [])[0] ?? ''), JSON.stringify(view?.prov));
+  checks.check('the text chunk shows its passage', /Page one says the sky/.test(view?.text ?? ''), view?.text);
+  checks.check('a lone chunk reports no overlap', /no chunk repeats/.test(view?.legend ?? ''), view?.legend);
+
+  const imgs = await ui.until(`
+    const list = [...document.querySelectorAll('dialog img')];
+    return list.length === 2 && list.every((i) => i.complete && i.naturalWidth > 0) && {
+      sizes: list.map((i) => i.naturalWidth + '\u00d7' + i.naturalHeight).join(' '),
+      caps: [...document.querySelectorAll('dialog .cap')].map((c) => c.textContent.replace(/\\s+/g, ' ').trim())
+    }
+  `, 100, 100);
+  checks.check('page rasters are served and rendered', imgs?.sizes === '459\u00d7459 459\u00d7459', imgs?.sizes);
+  checks.check('a raster is labelled with its own page',
+    /0000 p1 459/.test(imgs?.caps?.[0] ?? '') && /0001 p2 459/.test(imgs?.caps?.[1] ?? ''),
+    JSON.stringify(imgs?.caps));
+
+  // A real Escape press: a synthetic KeyboardEvent is untrusted, and Chrome only
+  // closes a <dialog> on trusted input.
+  await ui.press('Escape');
+  await ui.settle(300);
+  const closed = await ui.eval(`
+    return ({
+    dialogs: document.querySelectorAll('dialog').length,
+      open: document.querySelector('dialog')?.open ?? null
+    });
+  `);
+  checks.check('the dialog closes', closed?.dialogs === 0, JSON.stringify(closed));
 
   // ── the same bytes again must not create a second row ──────────
   await ui.setFiles('input[type=file]', [UPLOAD_FIXTURE]);
@@ -101,9 +157,16 @@ const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ui-pr
   checks.check('filter shows matching sources', filtered.hits === 1, `hits=${filtered.hits}`);
 
   // ── detach ─────────────────────────────────────────────────────
-  await ui.eval(`document.querySelector('.source .row-actions button').click(); return true;`);
+  // The remove button is found by title, not position: the inspect button now
+  // sits in the same group, and a positional selector silently clicks that.
+  await ui.eval(`
+    document
+      .querySelector('.source .row-actions button[title^="Remove"]')
+      .click();
+    return true;
+  `);
   const removed = await ui.until(`
-    document.querySelectorAll('.source').length === 0 && {
+    return document.querySelectorAll('.source').length === 0 && {
       empty: document.querySelector('.empty h2')?.textContent,
       count: document.querySelector('.sidebar .count')?.textContent ?? null
     };

@@ -27,7 +27,6 @@ export type Source = {
   kind: SourceKind;
   sha256: string;
   bytes: number;
-  original_path: string;
   status: SourceStatus;
   detail?: string; // why unsupported or failed
   warnings?: string[];
@@ -37,7 +36,8 @@ export type Source = {
 
 export type Asset = {
   id: string; // also the URL path under /api/assets/
-  path: string; // absolute on the machine that owns the data directory
+  // No path field on purpose: absolute paths stay on the server, and files are
+  // fetched by ID through /api/assets/ or /api/sources/{id}/original.
   mime: string;
   bytes: number;
 };

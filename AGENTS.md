@@ -187,6 +187,12 @@ page, so offsets are into the file itself.
 Segment IDs are `"<docID>:<ordinal padded to 4>"`. A PDF yields two doc IDs:
 `<source>` (text) and `<source>#pages` (rasters).
 
+`Source.Status` describes the whole path from bytes to retrievable, so **`ready`
+means every segment has a vector** — ADR 0004, accepted and not yet implemented:
+ingest still stops at segmentation, so `ready` currently means "segmented". Until
+the embedding stage lands, the chunk inspector is the only place segment counts are
+shown, and it never implies retrievability.
+
 ---
 
 ## 6. Configuration
@@ -303,8 +309,15 @@ Status mapping is one `fail` function: `domain.ErrNotFound` → 404,
 transport guesses at statuses.
 
 The frontend consumes all of the above: sidebar counts come from
-`GET /api/notebooks`, and the notebook view polls that source list while anything
-is `processing`.
+`GET /api/notebooks`, the notebook view polls that source list while anything is
+`processing`, and the chunk inspector reads `…/segments` then fetches each page
+raster from `/api/assets/`.
+
+**No absolute path crosses the API.** `Source.OriginalPath` and `Asset.Path` are
+`json:"-"`: the client asks for `/api/sources/{id}/original` or
+`/api/assets/{id}` and never learns where the data directory is. Files are looked
+up by ID, which is also why the asset route is `{id...}` — the ID *is* a path, and
+`DirSink` already refuses `..` and absolute names.
 
 Both file endpoints stream through `http.ServeContent`, so Range works — that is
 what lets the browser seek inside an audio slice and a PDF viewer page without
@@ -322,6 +335,15 @@ Planned: SSE progress instead of polling, `POST /api/notebooks/{id}/ask`
   `#0d1117` / `#3d444d` / `#4493f8`. Tokens live in `web/src/app.css`.
 - `#app` is exactly viewport height with `overflow:hidden`, so `<main>` is the
   only scroller. Do not go back to `min-height:100%` — it scrolls the sidebar away.
+- Overlays are native `<dialog>` + `showModal()`, not positioned divs: Esc, focus
+  trapping and the top layer come from the browser, and a hand-rolled scrim fails
+  the a11y checks honestly. Backdrop-click-to-close is the `onclick` on the dialog
+  comparing `e.target === dlg`.
+- `ChunkViewer.svelte` is the ingest debugger: one section per derived document,
+  every chunk with its ordinal, page span, word count and text, and page rasters as
+  tiles labelled with their measured pixel size. It shades the region where a chunk
+  repeats the previous chunk's tail — computed in the viewer from the two texts, so
+  it shows what the chunker actually did rather than what it is configured to do.
 - `SettingsView.svelte` renders `settingGroups` generically; it defines no labels,
   defaults or ranges. Reads go through `str()/num()/bool()` accessors and writes
   through `set()` because `Settings` is a union-typed record.
@@ -363,7 +385,7 @@ Planned: SSE progress instead of polling, `POST /api/notebooks/{id}/ask`
 - **Browser checks**: `make ui` builds, starts the binary against a throwaway
   data directory, and runs `scripts/ui-upload.mjs` and `scripts/ui-drop.mjs`
   over CDP (`scripts/cdp.mjs`, no dependencies). They assert on DOM state —
-  computed text and counts — not screenshots. 33 checks cover create-notebook,
+  computed text and counts — not screenshots. 51 checks cover create-notebook,
   file-picker upload, `processing → ready` polling, dedupe, drag-and-drop,
   unsupported files, filtering, detach, and console/page errors. They skip
   successfully when Chrome is missing. They caught a 10× byte-formatting bug
@@ -383,7 +405,8 @@ Planned: SSE progress instead of polling, `POST /api/notebooks/{id}/ask`
   `Client.Timeout` because it would cap streams; no base64 auto-detection because
   `path/to/file` is ambiguous).
 - One ADR per accepted decision in `docs/adr/`. Current: 0001 config single
-  source, 0002 settings API, 0003 notebooks and content-addressed sources.
+  source, 0002 settings API, 0003 notebooks and content-addressed sources, 0004
+  `ready` means searchable (accepted, not built).
 - User-caused mistakes are `app.ErrInvalid` / `ErrTooLarge` / `ErrBusy` or
   `domain.ErrNotFound`; a bare `errors.New` from a use case means 500, so pick a
   sentinel deliberately.
@@ -486,3 +509,27 @@ Planned: SSE progress instead of polling, `POST /api/notebooks/{id}/ask`
   element matches", which is a lie about the selector.
 - A `check(name, ok, detail)` helper that prints `detail` on success will happily
   print "rows never reached 0" next to a PASS. Make `detail` a thunk.
+- Page code is built by an **untagged template literal**, so `\s` in it becomes
+  `s`: `text.split(/\s+/)` reached the page as `/s+/` and reported every chunk as
+  one word. Regexes and unicode escapes handed to the page need doubling (`\\s`).
+- Both `eval` and `until` wrap their argument in a function body, so it must
+  `return`. A bare expression returns `undefined`, which reads as "the app did not
+  do the thing"; an object literal is worse — `({…})` parses as a block and fails
+  with a syntax error inside the page.
+- A test that waits for `.dropzone` proves only that *some* drop zone is on screen.
+  With a shared server the previous notebook's is already there, the drop lands in
+  it, and the click that was supposed to switch notebooks wins later. Wait for the
+  thing you created, by name.
+- Positional selectors are silent breakage: `.source .row-actions button` was the
+  remove button until the inspect button was added in front of it, and the detach
+  test "passed" by opening a dialog. Select by title.
+- A synthetic `KeyboardEvent('keydown', {key:'Escape'})` cannot close a `<dialog>`:
+  Chrome honours Escape only for trusted input. Use `Input.dispatchKeyEvent`
+  (`ui.press`), which is the behaviour worth testing anyway.
+- Truthiness in a poll must mean "rendered", not "present": a dialog that is open
+  while its fetch is in flight satisfies `dialog && dialog.open` and the first
+  measurement reads the loading text.
+- Degenerate fixtures hide logic bugs. A fixture of 20 identical lines has a
+  period-10 word sequence, so *every* 100-word window is identical and full-chunk
+  shading is correct — assert the overlap on unique words, where 50 words is a
+  number that can be wrong.
