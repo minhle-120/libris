@@ -94,6 +94,18 @@ export function getSource(sourceId: string): Promise<Source> {
   return request<Source>(`/api/sources/${sourceId}`);
 }
 
+/**
+ * Re-runs ingest for a source that gave up — usually because the embedding
+ * server was not reachable when the file arrived. Answers 202 with the source
+ * back in `processing`, so the caller reloads to watch it work.
+ *
+ * Only a failed source moves; asking for a ready or processing one returns it
+ * unchanged rather than tearing down vectors it already has.
+ */
+export function retrySource(sourceId: string): Promise<Source> {
+  return request<Source>(`/api/sources/${sourceId}/retry`, { method: 'POST' });
+}
+
 export async function listSegments(sourceId: string): Promise<Segment[]> {
   return list(await request<Segment[] | null>(`/api/sources/${sourceId}/segments`));
 }

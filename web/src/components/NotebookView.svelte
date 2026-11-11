@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { detachSource, listSources, originalURL, uploadSource } from '../lib/api';
+  import { detachSource, listSources, originalURL, retrySource, uploadSource } from '../lib/api';
   import { formatAge, formatBytes, errorMessage } from '../lib/format';
   import type { Notebook, Source, SourceKind, SourceStatus, Tab } from '../lib/types';
   import Tabs from '../lib/Tabs.svelte';
@@ -118,6 +118,19 @@
       await detachSource(notebook.id, source.id);
       sources = sources.filter((s) => s.id !== source.id);
       onchange?.();
+    } catch (e) {
+      error = errorMessage(e);
+    }
+  }
+
+  /**
+   * Re-runs ingest for a source that gave up. The answer is the row back in
+   * `processing`, and the poller already running picks it up from there.
+   */
+  async function retry(source: Source) {
+    error = '';
+    try {
+      sources = upsert(sources, await retrySource(source.id));
     } catch (e) {
       error = errorMessage(e);
     }
@@ -245,7 +258,18 @@
                 </div>
 
                 <div class="row-actions">
-                  {#if source.status === 'ready'}
+                  {#if source.status === 'failed'}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      iconOnly
+                      title="Try again — the chunks are kept, so only the embedding is redone"
+                      onclick={() => retry(source)}
+                    >
+                      <Icon name="retry" size={14} />
+                    </Button>
+                  {/if}
+                  {#if source.status === 'ready' || source.status === 'failed'}
                     <Button
                       variant="ghost"
                       size="sm"
