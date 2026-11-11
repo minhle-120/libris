@@ -3,7 +3,18 @@
 //
 // Requires a running server: `make ui` starts one against a throwaway data
 // directory. Standalone: APP=http://127.0.0.1:8080 node scripts/ui-upload.mjs
+import { writeFileSync } from 'node:fs';
 import { Checks, withBrowser, UPLOAD_FIXTURE } from './cdp.mjs';
+
+// The fake embeddings server `make ui` starts alongside the app; /control makes
+// it refuse, which is how a source ends up in the state the retry button is for.
+const embed = process.env.EMBED;
+const control = (down) =>
+  fetch(`${embed}/control`, {
+    method: 'POST',
+    body: JSON.stringify({ down }),
+    headers: { 'content-type': 'application/json' }
+  });
 
 const app = process.env.APP ?? 'http://127.0.0.1:8080/';
 const cdpPort = Number(process.env.CDP_PORT ?? 9321);
@@ -174,6 +185,73 @@ const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ui-pr
   checks.check('remove detaches the source', !!removed, () => 'rows never reached 0');
   checks.check('empty state returns', /Nothing in this notebook yet/.test(removed?.empty ?? ''), removed?.empty);
   checks.check('sidebar count cleared', removed?.count === null, `count=${removed?.count}`);
+
+  // ── the embedding server goes away, and comes back ─────────────
+  // `ready` means searchable, so a source uploaded while the embedding server is
+  // down must not claim to be ready — and must be recoverable without the user
+  // finding the file again. This is the whole point of ADR 0004, seen from the UI.
+  if (embed) {
+    // The filter section leaves a search applied, which would hide this row.
+    // Leaving app state dirty between sections is how a later check ends up
+    // asserting on an empty list.
+    await ui.eval(`
+      const input = document.querySelector('.filter input');
+      input.value = '';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      return true;
+    `);
+
+    await control(true);
+    const textFile = '/tmp/libris-retry-fixture.txt';
+    writeFileSync(textFile, `retry probe ${Date.now()}\n` + 'unique sentence ninety-one.\n');
+
+    await ui.setFiles('input[type=file]', [textFile]);
+    const broken = await ui.until(`
+      const row = [...document.querySelectorAll('.source')].find((r) =>
+        r.textContent.includes('libris-retry-fixture'));
+      if (!row) return null;
+      const note = row.querySelector('.note');
+      if (!/failed/.test(row.querySelector('.badge')?.textContent ?? '') && !note) return null;
+      return {
+        badge: row.querySelector('.badge')?.textContent,
+        note: note?.textContent ?? '',
+        retry: !!row.querySelector('button[title^="Try again"]'),
+        // The chunks survive, so the inspector stays useful even when embedding did not.
+        chunks: !!row.querySelector('button[title^="See how"]')
+      };
+    `, 200);
+    checks.check(
+      'a source with no embedding server reports failed, never ready',
+      /failed/.test(broken?.badge ?? ''),
+      () => `badge=${broken?.badge}`
+    );
+    checks.check(
+      'the reason names the server to fix',
+      /8124|embed/i.test(broken?.note ?? ''),
+      broken?.note
+    );
+    checks.check('a failed source offers retry', broken?.retry === true, () => JSON.stringify(broken));
+    checks.check('a failed source can still be inspected', broken?.chunks === true);
+
+    await control(false);
+    await ui.eval(`
+      const btn = document.querySelector('button[title^="Try again"]');
+      if (!btn) throw new Error('no retry button on the failed row');
+      btn.click();
+      return true;
+    `);
+    const healed = await ui.until(`
+      const row = [...document.querySelectorAll('.source')].find((r) =>
+        r.textContent.includes('libris-retry-fixture'));
+      // trim(): Svelte renders {source.status} with surrounding whitespace, so
+      // the text node is " ready". Every other check in this file trims too.
+      const badge = row?.querySelector('.badge')?.textContent.trim();
+      return badge === 'ready' ? { badge } : null;
+    `);
+    checks.check('retry takes it to ready once the server returns', healed?.badge === 'ready', `badge=${healed?.badge}`);
+  } else {
+    console.log('  skip EMBED is not set, so the retry path is not exercised');
+  }
 
   // ── settings still work in the same session ────────────────────
   const settings = await ui.eval(`

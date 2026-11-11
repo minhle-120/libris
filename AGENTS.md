@@ -67,6 +67,7 @@ These have been argued through. Breaking one needs a conversation, not a commit.
 make build      # npm run build, then go build -o libris ./cmd/libris
 make web-check  # svelte-check + build (the frontend equivalent of make check)
 make ui         # build, run, then drive the real UI in headless Chrome
+make e2e        # build, run, then upload against a fake embeddings server
 make run        # go run ./cmd/libris
 make test       # go test ./... -race -shuffle=on
 make cover      # coverage profile + total
@@ -93,7 +94,7 @@ internal/
     fake/              replays recorded responses (used by later stages)
   store/sqlite/        migrations + every query (sources, segments, notebooks)
   ingest/              bytes → segments (+ pdf, audio, sink, chunker, detect)
-  index/               not built: embed + vector + lexical
+  index/               embed (text/image/audio → vectors via llm); lexical not built
   retrieve/            not built: recall → rerank → evidence registry
   chat/                not built: research loop, prompts, synthesis
   app/                 use cases shared by httpapi and mcpserver (+ ingest queue)
@@ -278,6 +279,16 @@ Verified against the llama.cpp server README and `common/chat.cpp`,
   token/subword, an image ≈ 280, audio ≈ 25 per second.
 - `EmbeddingGemma 2` (`ggml-org/embeddinggemma-2-GGUF`) ships an `mmproj`, and is
   genuinely multimodal: text, images, audio, video in one vector space.
+- `/v1/embeddings` takes the same content parts as chat: each element of `input`
+  may be `{"content":[{"type":"image_url",…},{"type":"text",…}]}`, and one element
+  still yields exactly one vector. **A base64 `data:` URI needs no `--media-path`**
+  — only a `file://` path does. So `index` inlines the raster it just wrote
+  (`ImageBase64`, `AudioBase64`) rather than sending a path: one less flag for the
+  user to get right, at the cost of re-reading and re-encoding each asset once per
+  batch (`maxAssetBytes` bounds it).
+- Multimodal embedding is recent and experimental upstream. A build without
+  `--mmproj`, or older than that work, accepts the request shape and fails on the
+  image part — which is why a failed source keeps its chunks and offers retry.
 
 `internal/llm` deliberately excludes process management. A future
 `internal/llamacpp` (control) will spawn/probe servers and hand plain base URLs
@@ -297,6 +308,7 @@ PATCH  /api/notebooks/{id}                rename ·  DELETE → 204
 POST   /api/notebooks/{id}/sources        multipart field "file" → 202 while processing
 GET    /api/notebooks/{id}/sources        ·  DELETE …/sources/{sourceID} → 204
 GET    /api/sources/{id}                  status, for the UI to poll
+POST   /api/sources/{id}/retry            re-queue a failed source → 202
 GET    /api/sources/{id}/segments         chunks + provenance + assets
 GET    /api/sources/{id}/original         the kept copy
 GET    /api/assets/{id...}                derived files; id contains slashes
@@ -369,9 +381,14 @@ Planned: SSE progress instead of polling, `POST /api/notebooks/{id}/ask`
 - Hermetic by default: `httptest` for HTTP, `fakeRunner` for external processes,
   `t.TempDir()` for files, `fstest.MapFS` for assets. Tests that need real poppler
   skip themselves when the binaries are missing.
-- Coverage today: `domain` 100%, `llm` 100%, `httpapi` 89%, `config` 97%, `ingest`
-  98%, `app` 88%, `store/sqlite` 81%. The gaps are DB-error guards and
-  unreachable IO/reflect branches; do not contort production code to reach them.
+- Coverage today: `domain` 100%, `llm` 100%, `index` 95%, `config` 97%, `ingest`
+  98%, `httpapi` 89%, `app` 88%, `store/sqlite` 81%. The gaps are DB-error guards
+  and unreachable IO/reflect branches; do not contort production code to reach them.
+- `make e2e` (`scripts/e2e-embed.mjs`) runs the **real binary** against a fake
+  embeddings server speaking llama.cpp's shape, and reads the database with
+  `sqlite3` rather than trusting the API: unit tests pin each layer's shape, this
+  pins that the settings a user saves actually reach the pipeline, that the probe
+  writes the dimension back, and that `ready` is backed by rows.
 - `app` tests use the **real** SQLite store with a fake pipeline: the interesting
   failures are how ingest's output lands in the schema (foreign keys, id
   idempotency, the ready gate), not what a mock would agree to.
@@ -529,6 +546,19 @@ Planned: SSE progress instead of polling, `POST /api/notebooks/{id}/ask`
 - Truthiness in a poll must mean "rendered", not "present": a dialog that is open
   while its fetch is in flight satisfies `dialog && dialog.open` and the first
   measurement reads the loading text.
+- Ingest dispatches on the filename, so a fixture called `x.pdf` whose bytes are
+  text is genuinely `unsupported` ("PDF produced no text layer"), not `failed`.
+  When a test wants to exercise the embedding path, name the file honestly.
+- A 202 body is not decoration. The UI decides whether to keep polling from the
+  status in the response, so `RetrySource` answering with the row it read *before*
+  flipping it to `processing` left the row saying `failed`, stopped the poll, and the
+  source looked stuck until reload. Return the state you just caused.
+- `{source.status}` inside an element renders as one text node with the template's
+  whitespace: `.textContent` is `" ready"`. Compare trimmed — or a check passes on
+  a regex and fails on `===`, which reads like the feature is broken.
+- An empty `[]domain.Segment` serialises to `null`, not `[]`. Every list reader
+  has to tolerate it — `api.ts` routes all lists through `list()` for that reason
+  — and a script that asserts `segs.length` on a fresh source will crash.
 - Degenerate fixtures hide logic bugs. A fixture of 20 identical lines has a
   period-10 word sequence, so *every* 100-word window is identical and full-chunk
   shading is correct — assert the overlap on unique words, where 50 words is a

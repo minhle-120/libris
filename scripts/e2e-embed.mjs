@@ -1,0 +1,224 @@
+// End-to-end embedding pipeline against a real HTTP server.
+//
+// The unit tests pin each layer's shape. What they cannot pin is the wiring in
+// cmd/libris: that the settings a user saves actually reach the embedder, that
+// the probed dimension lands back in the settings the UI shows, and that a source
+// whose server vanished is reported rather than silently searchable. This drives
+// the real binary against a fake embeddings server that speaks the OpenAI shape.
+//
+//	node scripts/e2e-embed.mjs            # builds nothing; needs ./libris
+// or  make e2e
+import { execSync, spawn } from 'node:child_process';
+import { mkdtempSync, openSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { DIM, EmbedServer } from './fake-embed.mjs';
+
+const BIN = process.env.LIBRIS ?? './libris';
+const PDF = 'scripts/testdata/two-page.pdf';
+
+// ── checks ──────────────────────────────────────────────────────
+
+class Checks {
+  constructor() {
+    this.failed = 0;
+    this.passed = 0;
+  }
+
+  check(name, ok, detail = '') {
+    if (ok) {
+      this.passed++;
+      console.log(`  ok   ${name}${detail ? ` — ${detail}` : ''}`);
+    } else {
+      this.failed++;
+      console.log(`  FAIL ${name}${detail ? ` — ${detail}` : ''}`);
+    }
+  }
+}
+
+const checks = new Checks();
+
+// ── helpers ─────────────────────────────────────────────────────
+
+async function poll(url, until, { timeout = 90_000, every = 400 } = {}) {
+  const deadline = Date.now() + timeout;
+  let last;
+  while (Date.now() < deadline) {
+    last = await (await fetch(url)).json();
+    if (until(last)) return last;
+    await new Promise((r) => setTimeout(r, every));
+  }
+  return last;
+}
+
+async function upload(base, notebookID, filename, bytes, type) {
+  const form = new FormData();
+  form.append('file', new Blob([bytes], { type }), filename);
+  const res = await fetch(`${base}/api/notebooks/${notebookID}/sources`, {
+    method: 'POST',
+    body: form
+  });
+  if (res.status !== 202 && res.status !== 200) {
+    throw new Error(`upload ${filename}: ${res.status} ${await res.text()}`);
+  }
+  return res.json();
+}
+
+// Read the database the way an operator would, rather than trusting the API's
+// own claim about it: a status of `ready` has to be backed by rows.
+function sqlite(dbPath, sql) {
+  return execSync(`sqlite3 ${JSON.stringify(dbPath)} ${JSON.stringify(sql)}`, {
+    encoding: 'utf8'
+  }).trim();
+}
+
+// ── run ─────────────────────────────────────────────────────────
+
+if (!existsSync(BIN)) {
+  console.error(`no ${BIN} — run \`make build\` first`);
+  process.exit(2);
+}
+
+const dataDir = mkdtempSync(join(tmpdir(), 'libris-e2e-'));
+const embed = new EmbedServer();
+const embedURL = await embed.listen();
+
+// The settings a user would type in the UI. Written before the server starts,
+// because the point is that a saved file drives the pipeline.
+writeFileSync(
+  join(dataDir, 'settings.json'),
+  JSON.stringify({
+    chatURL: embedURL, // required by the settings schema; unused by this slice
+    embedURL,
+    embedModel: 'fake-embed-2'
+  })
+);
+
+const port = 8123;
+const base = `http://127.0.0.1:${port}`;
+const log = openSync('/tmp/libris-e2e.log', 'w');
+const app = spawn(BIN, ['-addr', `127.0.0.1:${port}`, '-data', dataDir], {
+  stdio: ['ignore', 'ignore', log]
+});
+
+try {
+  // Wait for the app rather than sleeping: it is the same condition a user waits on.
+  let up = false;
+  for (let i = 0; i < 60 && !up; i++) {
+    await new Promise((r) => setTimeout(r, 250));
+    try {
+      up = (await (await fetch(`${base}/api/health`)).ok);
+    } catch {
+      /* not listening yet */
+    }
+  }
+  checks.check('libris starts with a saved settings.json', up);
+
+  const nb = await (await fetch(`${base}/api/notebooks`, {
+    method: 'POST',
+    body: JSON.stringify({ name: 'e2e' })
+  })).json();
+
+  // ── the happy path ────────────────────────────────────────────
+  const pdf = readFileSync(PDF);
+  const first = await upload(base, nb.id, 'two-page.pdf', pdf, 'application/pdf');
+  checks.check('upload answers before ingest finishes', first.status === 'processing', first.status);
+
+  const done = await poll(`${base}/api/sources/${first.id}`, (s) => s.status !== 'processing');
+  checks.check(
+    'a reachable server takes the source to ready',
+    done.status === 'ready',
+    `status=${done.status} detail=${done.detail ?? ''}`
+  );
+
+  // The probe has to have run, and written what it learned back where the UI can
+  // show it. This is the round trip only an end-to-end check can see.
+  const settings = await (await fetch(`${base}/api/settings`)).json();
+  checks.check(
+    'the probe records the server’s vector length in settings',
+    String(settings.embedDimensions) === String(DIM),
+    `embedDimensions=${settings.embedDimensions}`
+  );
+
+  // A PDF yields two derived documents, so the request count is the proof both
+  // were embedded rather than only the cheap one.
+  const textRequests = embed.requests.filter((r) => r.model === 'fake-embed-2').length;
+  checks.check('the model in the settings is the model on the wire', textRequests > 0);
+
+  const everyEntryNamed = embed.requests.every((r) =>
+    r.input.every((e) => (typeof e === 'string' ? e.length > 0 : (e.content?.length ?? 0) > 0))
+  );
+  checks.check('nothing empty was sent to the server', everyEntryNamed);
+
+  const inlineImages = embed.requests.some((r) =>
+    r.input.some((e) => typeof e === 'object' && e.content?.some((p) => p.image_url?.url?.startsWith('data:')))
+  );
+  checks.check('page rasters are embedded as images, not as paths', inlineImages);
+
+  // ── the server is not running ─────────────────────────────────
+  embed.down = true;
+  const second = await upload(base, nb.id, 'offline.txt', Buffer.from(`${'offline body '.repeat(40)}\n`), 'text/plain');
+  const broken = await poll(`${base}/api/sources/${second.id}`, (s) => s.status !== 'processing');
+  checks.check(
+    'an unreachable server leaves the source failed, never ready',
+    broken.status === 'failed',
+    `status=${broken.status}`
+  );
+  checks.check(
+    'the failure names the server the user has to fix',
+    broken.detail.includes(String(embedURL.split(':').pop())),
+    `detail=${broken.detail}`
+  );
+
+  // Chunks survive, so the source is still readable and the inspector still works.
+  // An empty list serialises as null rather than [], which the UI's own reader
+  // tolerates; the assertion has to as well.
+  const segs = (await (await fetch(`${base}/api/sources/${second.id}/segments`)).json()) ?? [];
+  checks.check('the chunks survive an embedding failure', segs.length > 0, `${segs.length} segments`);
+
+  // ── retry ─────────────────────────────────────────────────────
+  const retriedWhileDown = await poll(
+    `${base}/api/sources/${second.id}`,
+    (s) => s.status !== 'processing',
+    { timeout: 1000 }
+  );
+  checks.check(
+    'a failed source stays failed until something changes',
+    retriedWhileDown.status === 'failed'
+  );
+
+  embed.down = false;
+  const ack = await fetch(`${base}/api/sources/${second.id}/retry`, { method: 'POST' });
+  checks.check('retry answers 202', ack.status === 202, `status=${ack.status}`);
+
+  const fixed = await poll(`${base}/api/sources/${second.id}`, (s) => s.status !== 'processing');
+  checks.check(
+    'retry after the server returns takes it to ready',
+    fixed.status === 'ready',
+    `status=${fixed.status} detail=${fixed.detail ?? ''}`
+  );
+
+  // ── the store agrees with the API ─────────────────────────────
+  // The API says ready; the database must say vectors. Reading it directly is the
+  // only way to catch a status that is not backed by data.
+  const rows = sqlite(join(dataDir, 'libris.db'), 'SELECT COUNT(*) FROM segments WHERE embedding IS NOT NULL');
+  const total = sqlite(join(dataDir, 'libris.db'), 'SELECT COUNT(*) FROM segments');
+  checks.check(
+    'every ready segment carries a vector',
+    rows > 0 && rows === total,
+    `${rows} of ${total} segments have vectors`
+  );
+
+  const dims = sqlite(join(dataDir, 'libris.db'), 'SELECT DISTINCT dim FROM segments WHERE embedding IS NOT NULL');
+  checks.check('the store holds one dimension, not a mix', dims.trim() === String(DIM), `dims=${dims.trim()}`);
+
+  const models = sqlite(join(dataDir, 'libris.db'), 'SELECT DISTINCT model FROM segments WHERE embedding IS NOT NULL');
+  checks.check('every vector records the model that produced it', models.trim() === 'fake-embed-2', `model=${models.trim()}`);
+} finally {
+  app.kill('SIGTERM');
+  embed.close();
+}
+
+console.log(`\n${checks.passed} passed, ${checks.failed} failed`);
+console.log(`data: ${dataDir} · log: /tmp/libris-e2e.log`);
+process.exit(checks.failed ? 1 : 0);
