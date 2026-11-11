@@ -31,6 +31,7 @@ type fakeAPI struct {
 	created string // name passed to CreateNotebook
 	upload  string // filename passed to AddUpload
 	body    string // contents passed to AddUpload
+	retried string // id passed to RetrySource
 }
 
 func (f *fakeAPI) CreateNotebook(_ context.Context, name string) (domain.Notebook, error) {
@@ -90,6 +91,14 @@ func (f *fakeAPI) ListSources(context.Context, string) ([]domain.Source, error) 
 
 func (f *fakeAPI) ListSegments(context.Context, string) ([]domain.Segment, error) {
 	return f.segments, f.err
+}
+
+func (f *fakeAPI) RetrySource(_ context.Context, id string) (domain.Source, error) {
+	f.retried = id
+	if f.err != nil {
+		return domain.Source{}, f.err
+	}
+	return domain.Source{ID: id, Name: "p.pdf", Status: domain.StatusProcessing}, nil
 }
 
 func (f *fakeAPI) GetAsset(_ context.Context, id string) (domain.Asset, error) {
@@ -522,5 +531,34 @@ func TestAppEndpointsAbsentWithoutApp(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("health = %d", resp.StatusCode)
+	}
+}
+
+// A retried source answers 202 with the new state: the call starts work rather
+// than reporting one that finished, and the UI re-renders the row from the body.
+func TestRetrySourceStartsTheWork(t *testing.T) {
+	srv := newAppServer(t, &fakeAPI{})
+
+	resp := request(t, srv, "POST", "/api/sources/abc123/retry", nil)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202: %s", resp.StatusCode, readAll(t, resp))
+	}
+
+	var got domain.Source
+	if err := json.Unmarshal([]byte(readAll(t, resp)), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != "abc123" || got.Status != domain.StatusProcessing {
+		t.Errorf("body = %+v", got)
+	}
+}
+
+func TestRetrySourceMapsNotFound(t *testing.T) {
+	api := &fakeAPI{err: domain.ErrNotFound}
+	srv := newAppServer(t, api)
+
+	resp := request(t, srv, "POST", "/api/sources/nope/retry", nil)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
 	}
 }

@@ -80,10 +80,75 @@ func imageSegment(docID string, ordinal int, assetDir string) domain.Segment {
 	}
 }
 
+// fakeEmbedder stands in for internal/index. The wire behaviour is tested there;
+// what is tested here is the promise ingest makes with it: a source does not
+// become ready until every one of its segments has a vector.
+type fakeEmbedder struct {
+	mu       sync.Mutex
+	calls    int
+	embedded int
+	segments []domain.Segment
+
+	dim int
+	err error
+}
+
+func (f *fakeEmbedder) Embed(_ context.Context, segs []domain.Segment) ([]domain.Embedding, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.calls++
+	f.embedded += len(segs)
+	f.segments = append(f.segments, segs...)
+	if f.err != nil {
+		return nil, f.err
+	}
+
+	dim := f.dim
+	if dim == 0 {
+		dim = 3
+	}
+	out := make([]domain.Embedding, 0, len(segs))
+	for _, s := range segs {
+		out = append(out, domain.Embedding{
+			SegmentID: s.ID, Model: "fake-embed", Dim: dim, Vector: make([]float32, dim),
+		})
+	}
+	return out, nil
+}
+
+func (f *fakeEmbedder) stats() (calls, embedded int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls, f.embedded
+}
+
+// failWith turns the fake server off or on mid-test. Written as a method because
+// Embed reads the field under the same lock: assigning to f.err from the test
+// goroutine would be a data race that -race only sometimes catches.
+func (f *fakeEmbedder) failWith(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.err = err
+}
+
 // testService wires a real sqlite store to a fake pipeline. The store is real
 // because the interesting failures are in how ingest's output lands in the
 // schema — foreign keys, idempotency, the ready gate.
 func testService(t *testing.T, proc Ingestor) (*Service, *sqlite.DB, string) {
+	t.Helper()
+	return testServiceWith(t, proc, &fakeEmbedder{})
+}
+
+func testServiceWith(t *testing.T, proc Ingestor, emb Embedder) (*Service, *sqlite.DB, string) {
+	t.Helper()
+	return testServiceWired(t, proc, func(config.Config) (Embedder, error) { return emb, nil })
+}
+
+// testServiceWired is the full knob: tests that care about how the embedder is
+// built — a factory that itself fails, or one that sees the live settings — pass
+// their own EmbedderFor.
+func testServiceWired(t *testing.T, proc Ingestor, factory EmbedderFor) (*Service, *sqlite.DB, string) {
 	t.Helper()
 
 	dir := t.TempDir()
@@ -100,6 +165,7 @@ func testService(t *testing.T, proc Ingestor) (*Service, *sqlite.DB, string) {
 		Processor: func(config.Config, ingest.Sink) (Ingestor, error) {
 			return proc, nil
 		},
+		Embedder:  factory,
 		Originals: filepath.Join(dir, "originals"),
 		Assets:    filepath.Join(dir, "assets"),
 	})
@@ -111,6 +177,28 @@ func testService(t *testing.T, proc Ingestor) (*Service, *sqlite.DB, string) {
 	}
 	t.Cleanup(svc.Close)
 	return svc, db, dir
+}
+
+// segmentCount and storedVectors read the schema directly, so a test cannot be
+// satisfied by the same bookkeeping it is checking.
+func segmentCount(t *testing.T, db *sqlite.DB, sourceID string) int {
+	t.Helper()
+	segs, err := db.ListSegments(context.Background(), sourceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(segs)
+}
+
+func storedVectors(t *testing.T, db *sqlite.DB, sourceID string) int {
+	t.Helper()
+	var n int
+	if err := db.Raw().QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM segments WHERE source_id = ? AND embedding IS NOT NULL`, sourceID).
+		Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
 }
 
 type constSettings config.Config
@@ -138,6 +226,182 @@ func sourceStatus(t *testing.T, db *sqlite.DB, id string) domain.Source {
 		t.Fatal(err)
 	}
 	return got
+}
+
+// ── embedding ─────────────────────────────────────────────────
+
+func TestIngestEmbedsEverySegmentBeforeReady(t *testing.T) {
+	proc := &fakeProcessor{res: &ingest.Result{Segments: []domain.Segment{
+		textSegment("doc1", 0, "first"),
+		textSegment("doc1", 1, "second"),
+		imageSegment("doc1#pages", 0, t.TempDir()),
+	}}}
+	emb := &fakeEmbedder{dim: 8}
+	svc, db, _ := testServiceWith(t, proc, emb)
+
+	nb, _ := svc.CreateNotebook(context.Background(), "embed")
+	src, err := svc.AddUpload(context.Background(), nb.ID, strings.NewReader("x"), "p.pdf")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := sourceStatus(t, db, src.ID)
+	waitUntil(t, "the source to become ready", func() bool {
+		got = sourceStatus(t, db, src.ID)
+		return got.Status == domain.StatusReady
+	})
+
+	calls, embedded := emb.stats()
+	if calls != 1 {
+		t.Errorf("embedder called %d times, want one batch", calls)
+	}
+	if embedded != 3 {
+		t.Errorf("%d segments embedded, want all 3", embedded)
+	}
+
+	// The promise ADR 0004 makes: ready means the vectors are in the database,
+	// not merely that ingest finished.
+	if n := storedVectors(t, db, src.ID); n != 3 {
+		t.Errorf("%d of 3 segments carry a vector while the source says ready", n)
+	}
+}
+
+func TestEmbeddingFailureLeavesTheSourceFailed(t *testing.T) {
+	proc := &fakeProcessor{}
+	emb := &fakeEmbedder{err: errors.New("embed server at http://127.0.0.1:8082: connection refused")}
+	svc, db, _ := testServiceWith(t, proc, emb)
+
+	nb, _ := svc.CreateNotebook(context.Background(), "offline")
+	src, err := svc.AddUpload(context.Background(), nb.ID, strings.NewReader("x"), "p.pdf")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var got domain.Source
+	waitUntil(t, "the source to be marked failed", func() bool {
+		got = sourceStatus(t, db, src.ID)
+		return got.Status != domain.StatusProcessing
+	})
+
+	if got.Status != domain.StatusFailed {
+		t.Fatalf("status = %s, want failed: a source nobody can search is not ready",
+			got.Status)
+	}
+	// The reason has to name the server, because this string is what the user reads.
+	if !strings.Contains(got.Detail, "8082") {
+		t.Errorf("detail %q should say which server failed", got.Detail)
+	}
+	// The chunks stay: the source is still readable, and the inspector still works.
+	if n := segmentCount(t, db, src.ID); n == 0 {
+		t.Error("segments were discarded on an embedding failure")
+	}
+	if n := storedVectors(t, db, src.ID); n != 0 {
+		t.Errorf("%d vectors stored after a failed embed", n)
+	}
+}
+
+func TestEmbedderConstructionFailureIsRecorded(t *testing.T) {
+	// Settings can be edited into something unusable while the process runs; the
+	// source must report that rather than sit in processing forever.
+	proc := &fakeProcessor{}
+	svc, db, _ := testServiceWired(t, proc, func(config.Config) (Embedder, error) {
+		return nil, errors.New("embedURL is not a URL")
+	})
+
+	nb, _ := svc.CreateNotebook(context.Background(), "bad settings")
+	src, err := svc.AddUpload(context.Background(), nb.ID, strings.NewReader("x"), "p.pdf")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var got domain.Source
+	waitUntil(t, "the source to be marked failed", func() bool {
+		got = sourceStatus(t, db, src.ID)
+		return got.Status != domain.StatusProcessing
+	})
+	if got.Status != domain.StatusFailed || !strings.Contains(got.Detail, "embedURL") {
+		t.Errorf("status = %s detail = %q", got.Status, got.Detail)
+	}
+}
+
+func TestRetryRequeuesAFailedSource(t *testing.T) {
+	emb := &fakeEmbedder{err: errors.New("server down")}
+	proc := &fakeProcessor{}
+	svc, db, _ := testServiceWith(t, proc, emb)
+
+	nb, _ := svc.CreateNotebook(context.Background(), "retry")
+	src, err := svc.AddUpload(context.Background(), nb.ID, strings.NewReader("x"), "p.pdf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, "the first attempt to fail", func() bool {
+		return sourceStatus(t, db, src.ID).Status == domain.StatusFailed
+	})
+
+	// Retrying is a user action in the UI, so the returned source is what the row
+	// is written from. If it still says "failed": the row looks unchanged, the UI
+	// sees nothing in flight and stops polling, and the source only appears stuck
+	// until the user reloads. Reading the database is not enough to catch that.
+	back, err := svc.RetrySource(context.Background(), src.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if back.Status != domain.StatusProcessing {
+		t.Errorf("retry answered %s, want processing: the caller polls on this value", back.Status)
+	}
+	if back.Detail != "" {
+		t.Errorf("retry kept the stale reason %q", back.Detail)
+	}
+	if got := sourceStatus(t, db, src.ID); got.Status == domain.StatusFailed {
+		t.Errorf("a retried source still reports %s: %q", got.Status, got.Detail)
+	}
+
+	// Still broken: the second attempt has to fail and be *observed* as failed
+	// before the next retry, or the retry would be refused as already processing.
+	waitUntil(t, "the retry to fail as well", func() bool {
+		calls, _ := emb.stats()
+		return calls >= 2 && sourceStatus(t, db, src.ID).Status == domain.StatusFailed
+	})
+
+	emb.failWith(nil) // the server is fixed
+	if _, err := svc.RetrySource(context.Background(), src.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, "the source to become ready after the fix", func() bool {
+		return sourceStatus(t, db, src.ID).Status == domain.StatusReady
+	})
+	if n := storedVectors(t, db, src.ID); n == 0 {
+		t.Error("ready without a single stored vector")
+	}
+}
+
+func TestRetryOfAWorkingSourceIsANoOp(t *testing.T) {
+	svc, db, _ := testService(t, &fakeProcessor{})
+	nb, _ := svc.CreateNotebook(context.Background(), "healthy")
+	src, err := svc.AddUpload(context.Background(), nb.ID, strings.NewReader("x"), "p.pdf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, "the source to become ready", func() bool {
+		return sourceStatus(t, db, src.ID).Status == domain.StatusReady
+	})
+
+	before := sourceStatus(t, db, src.ID)
+	if _, err := svc.RetrySource(context.Background(), src.ID); err != nil {
+		t.Fatal(err)
+	}
+	// A retried ready source would drop to processing while it re-does work that
+	// succeeded, which is a lie about a source that is still searchable.
+	if got := sourceStatus(t, db, src.ID); got.Status != before.Status {
+		t.Errorf("retrying a ready source moved it to %s", got.Status)
+	}
+}
+
+func TestRetryOfAMissingSourceIsNotFound(t *testing.T) {
+	svc, _, _ := testService(t, &fakeProcessor{})
+	if _, err := svc.RetrySource(context.Background(), "nope"); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("err = %v, want domain.ErrNotFound", err)
+	}
 }
 
 // ── uploads ──────────────────────────────────────────────────────
@@ -474,6 +738,7 @@ func TestStartClosesOutInterruptedWork(t *testing.T) {
 		Store:     db,
 		Settings:  constSettings(config.Default()),
 		Processor: func(config.Config, ingest.Sink) (Ingestor, error) { return &fakeProcessor{}, nil },
+		Embedder:  func(config.Config) (Embedder, error) { return &fakeEmbedder{}, nil },
 		Originals: filepath.Join(dir, "originals"),
 		Assets:    filepath.Join(dir, "assets"),
 	})
@@ -646,14 +911,15 @@ func TestNewValidatesItsWiring(t *testing.T) {
 	defer db.Close()
 
 	processor := func(config.Config, ingest.Sink) (Ingestor, error) { return &fakeProcessor{}, nil }
+	embedder := func(config.Config) (Embedder, error) { return &fakeEmbedder{}, nil }
 	settings := constSettings(config.Default())
 
 	good := Options{
-		Store: db, Settings: settings, Processor: processor,
+		Store: db, Settings: settings, Processor: processor, Embedder: embedder,
 		Originals: filepath.Join(t.TempDir(), "o"), Assets: filepath.Join(t.TempDir(), "a"),
 	}
 
-	for _, field := range []string{"Store", "Settings", "Processor", "Originals", "Assets"} {
+	for _, field := range []string{"Store", "Settings", "Processor", "Embedder", "Originals", "Assets"} {
 		bad := good
 		switch field {
 		case "Store":
@@ -662,6 +928,8 @@ func TestNewValidatesItsWiring(t *testing.T) {
 			bad.Settings = nil
 		case "Processor":
 			bad.Processor = nil
+		case "Embedder":
+			bad.Embedder = nil
 		case "Originals":
 			bad.Originals = ""
 		case "Assets":
@@ -693,6 +961,7 @@ func TestProcessorFailureIsRecordedNotLost(t *testing.T) {
 		Processor: func(config.Config, ingest.Sink) (Ingestor, error) {
 			return nil, errors.New("no writable assets directory")
 		},
+		Embedder:  func(config.Config) (Embedder, error) { return &fakeEmbedder{}, nil },
 		Originals: filepath.Join(dir, "originals"),
 		Assets:    filepath.Join(dir, "assets"),
 	})

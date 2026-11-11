@@ -35,6 +35,7 @@ type Store interface {
 
 	PutAssets(context.Context, string, []domain.Asset) error
 	PutSegments(context.Context, string, []domain.Segment) error
+	PutEmbeddings(context.Context, []domain.Embedding) error
 	ListSegments(context.Context, string) ([]domain.Segment, error)
 	GetAsset(context.Context, string) (domain.Asset, error)
 
@@ -49,6 +50,24 @@ type Settings interface{ Get() config.Config }
 type Ingestor interface {
 	Process(ctx context.Context, path string) (*ingest.Result, error)
 }
+
+// Embedder produces one vector per segment, in input order, or an error. It is
+// declared here rather than borrowed from internal/index because this package is
+// the caller: app must be able to run against a recorded fake or a hosted API
+// without knowing which.
+//
+// Returning fewer vectors than it was given is an error, not a partial success.
+// A source with some vectors and not others answers questions with a silent
+// slice of itself, which is the failure ADR 0004 exists to prevent.
+type Embedder interface {
+	Embed(ctx context.Context, segments []domain.Segment) ([]domain.Embedding, error)
+}
+
+// EmbedderFor builds an embedder for one configuration. It is a factory for the
+// same reason Processor is: settings can change while the process runs, and a
+// job must use the server the user has configured now, not the one that was set
+// when libris started.
+type EmbedderFor func(cfg config.Config) (Embedder, error)
 
 // ProcessorFor builds an ingestor for one configuration.
 type ProcessorFor func(config.Config, ingest.Sink) (Ingestor, error)
@@ -81,6 +100,7 @@ type Options struct {
 	Store     Store
 	Settings  Settings
 	Processor ProcessorFor
+	Embedder  EmbedderFor
 	Originals string // where kept originals live; created if absent
 	Assets    string // where derived files live; created if absent
 	Logger    *slog.Logger
@@ -91,6 +111,7 @@ type Service struct {
 	store     Store
 	settings  Settings
 	processor ProcessorFor
+	embedder  EmbedderFor
 	originals Originals
 	assetsDir string
 	log       *slog.Logger
@@ -110,6 +131,10 @@ func New(opts Options) (*Service, error) {
 		return nil, errors.New("app: Settings is required")
 	case opts.Processor == nil:
 		return nil, errors.New("app: Processor is required")
+	case opts.Embedder == nil:
+		// No opt-out: "ready" means searchable (ADR 0004), so a Service that
+		// cannot embed would have to report a state that does not exist.
+		return nil, errors.New("app: Embedder is required")
 	case opts.Originals == "":
 		return nil, errors.New("app: Originals directory is required")
 	case opts.Assets == "":
@@ -125,6 +150,7 @@ func New(opts Options) (*Service, error) {
 		store:     opts.Store,
 		settings:  opts.Settings,
 		processor: opts.Processor,
+		embedder:  opts.Embedder,
 		originals: Originals{Dir: opts.Originals},
 		assetsDir: opts.Assets,
 		log:       log,
@@ -247,10 +273,67 @@ func (s *Service) AddUpload(ctx context.Context, notebookID string, r io.Reader,
 	case stored.Status == domain.StatusFailed:
 		// Re-offering a file that failed is the cheapest way to retry it.
 		s.log.Info("re-queueing a failed source", "source", stored.ID, "was", stored.Detail)
-		return stored, s.enqueue(stored.ID)
+		return s.requeue(ctx, stored)
 	default:
 		return stored, nil
 	}
+}
+
+// RetrySource re-queues a source that gave up. A failed embedding usually means
+// the embedding server was not running when the file arrived, and asking the user
+// to find and re-upload the file to fix that is a bad trade.
+//
+// Only a failed source is retried. A ready source is complete, and re-ingesting
+// one deletes its segments — and their vectors with them — so it would answer
+// questions with nothing while the UI still said "ready": the exact window ADR
+// 0004 exists to close. Re-doing a source on purpose (after changing chunk
+// settings, say) deserves an action of its own rather than a side effect of
+// "retry". Re-running ingest from the beginning rather than only the embedding
+// half is deliberate: segments already stored may come from a different chunker,
+// and a half-refreshed source is the state this exists to avoid.
+func (s *Service) RetrySource(ctx context.Context, id string) (domain.Source, error) {
+	source, err := s.store.GetSource(ctx, id)
+	if err != nil {
+		return domain.Source{}, err
+	}
+	if source.Status != domain.StatusFailed {
+		return source, nil // ready, processing or unsupported: nothing to redo
+	}
+	return s.requeue(ctx, source)
+}
+
+// requeue marks a source as working again, puts it back in the queue, and answers
+// with the source as it now is.
+//
+// The returned value matters: it is the body the UI writes into the row, and a row
+// still saying "failed" after a retry that started is worse than no answer at all
+// — the UI decides whether to keep polling from that status, so a stale one stops
+// the poll and the row never updates by itself.
+//
+// The status is written before enqueueing on purpose. A source re-ingests by
+// deleting its segments, which deletes their vectors with them, so a `ready`
+// source sitting in the queue is a source answering questions with nothing while
+// the UI says it is searchable.
+func (s *Service) requeue(ctx context.Context, source domain.Source) (domain.Source, error) {
+	if err := s.store.SetSourceStatus(ctx, source.ID, domain.StatusProcessing, "", nil); err != nil {
+		return source, err
+	}
+	if err := s.enqueue(source.ID); err != nil {
+		// Undo, or the row waits at "processing" for the next start's sweep.
+		if restore := s.store.SetSourceStatus(ctx, source.ID, source.Status, source.Detail, source.Warnings); restore != nil {
+			s.log.Warn("could not restore status after a refused retry",
+				"source", source.ID, "status", source.Status, "err", restore)
+		}
+		return source, err
+	}
+
+	// Mirrors the row just written, rather than reading it back: the queue worker
+	// may already have moved it on, and either way the caller only needs to know
+	// that work has started.
+	source.Status = domain.StatusProcessing
+	source.Detail = ""
+	source.Warnings = nil
+	return source, nil
 }
 
 // AttachNotebook puts a source the user already uploaded into a notebook.
@@ -374,10 +457,43 @@ func (s *Service) ingest(ctx context.Context, sourceID string) {
 		return
 	}
 
+	// Embedding is part of ingest, not a stage a caller opts into. Until it
+	// succeeds this source is not `ready`, because `ready` is the promise that
+	// asking a question will search this source (ADR 0004).
+	if err := s.embed(ctx, res.Segments); err != nil {
+		s.log.Warn("embedding failed", "source", sourceID, "segments", len(res.Segments), "err", err)
+		// The chunks stay, so the source is still readable and inspectable; what
+		// is missing is retrievability, and the detail says which server to fix.
+		s.setStatus(ctx, sourceID, domain.StatusFailed, err.Error(), res.Warnings)
+		return
+	}
+
 	s.setStatus(ctx, sourceID, domain.StatusReady, "", res.Warnings)
 	s.log.Info("ingest done",
 		"source", sourceID, "kind", source.Kind, "segments", len(res.Segments),
-		"assets", len(assets), "seconds", time.Since(start).Round(time.Millisecond))
+		"assets", len(assets), "embedded", "yes", "seconds", time.Since(start).Round(time.Millisecond))
+}
+
+// embed turns segments into vectors and stores them.
+func (s *Service) embed(ctx context.Context, segments []domain.Segment) error {
+	if len(segments) == 0 {
+		return nil
+	}
+
+	embedder, err := s.embedder(s.settings.Get())
+	if err != nil {
+		return fmt.Errorf("could not start the embedder: %w", err)
+	}
+
+	vectors, err := embedder.Embed(ctx, segments)
+	if err != nil {
+		return err
+	}
+	if len(vectors) != len(segments) {
+		return fmt.Errorf("embedder returned %d vectors for %d segments",
+			len(vectors), len(segments))
+	}
+	return s.store.PutEmbeddings(ctx, vectors)
 }
 
 // setStatus records an outcome. Its own failure is logged, not propagated: the

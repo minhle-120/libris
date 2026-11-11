@@ -12,13 +12,16 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
 	"libris/internal/app"
 	"libris/internal/config"
 	"libris/internal/httpapi"
+	"libris/internal/index"
 	"libris/internal/ingest"
+	"libris/internal/llm"
 	"libris/internal/store/sqlite"
 	"libris/web"
 )
@@ -51,6 +54,36 @@ func main() {
 	}
 	defer db.Close()
 
+	// One client for chat, embeddings and reranking: libris talks to llama.cpp
+	// servers that speak the OpenAI wire format, and one API key covers all
+	// three. Read from the settings store rather than the environment-only base,
+	// or a key saved through the UI would be ignored.
+	live := settings.Get()
+	llmClient, err := llm.New(llm.Config{
+		ChatURL:   live.ChatURL,
+		EmbedURL:  live.EmbedURL,
+		RerankURL: live.RerankURL,
+		APIKey:    live.APIKey,
+		Timeout:   time.Duration(live.TimeoutSeconds) * time.Second,
+	})
+	if err != nil {
+		fail(log, "llm client", err)
+	}
+
+	// The embedding server is probed the first time it is needed, and its vector
+	// length is written back into the settings so the UI shows what the store is
+	// keyed on. Re-pointing the settings at a different server re-probes it.
+	embedders := index.NewSupplier(llmClient, log, func(dim int) {
+		next := settings.Get()
+		if next.EmbedDim == strconv.Itoa(dim) {
+			return
+		}
+		next.EmbedDim = strconv.Itoa(dim)
+		if err := settings.Save(next); err != nil {
+			log.Warn("could not record the probed embedding dimensions", "dimensions", dim, "err", err)
+		}
+	})
+
 	// The processor is built per job from the live settings, so a DPI change
 	// applies to the next upload without a restart.
 	service, err := app.New(app.Options{
@@ -58,6 +91,11 @@ func main() {
 		Settings: settings,
 		Processor: func(cfg config.Config, sink ingest.Sink) (app.Ingestor, error) {
 			return ingest.New(cfg, sink)
+		},
+		// Likewise the embedder: a job embeds against the server configured when
+		// that job ran, not the one that was set when libris booted.
+		Embedder: func(cfg config.Config) (app.Embedder, error) {
+			return embedders.For(cfg)
 		},
 		Originals: filepath.Join(*dataDir, "originals"),
 		Assets:    filepath.Join(*dataDir, "assets"),

@@ -31,6 +31,7 @@ type API interface {
 	GetSource(context.Context, string) (domain.Source, error)
 	ListSources(context.Context, string) ([]domain.Source, error)
 	ListSegments(context.Context, string) ([]domain.Segment, error)
+	RetrySource(context.Context, string) (domain.Source, error)
 	GetAsset(context.Context, string) (domain.Asset, error)
 }
 
@@ -58,6 +59,7 @@ func (s *Server) addAppRoutes(a API) {
 
 	s.mux.HandleFunc("GET /api/sources/{id}", s.handleGetSource)
 	s.mux.HandleFunc("GET /api/sources/{id}/segments", s.handleListSegments)
+	s.mux.HandleFunc("POST /api/sources/{id}/retry", s.handleRetrySource)
 	s.mux.HandleFunc("GET /api/sources/{id}/original", s.handleOriginal)
 
 	// Asset ids contain slashes ("<sha>/pages/page-0001.png"), so this is the
@@ -184,6 +186,17 @@ func (s *Server) handleGetSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, source)
+}
+
+// handleRetrySource re-queues a source that gave up. 202, not 200: the call
+// starts work rather than reporting a finished one.
+func (s *Server) handleRetrySource(w http.ResponseWriter, r *http.Request) {
+	source, err := s.app.RetrySource(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.fail(w, "retry source", err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, source)
 }
 
 func (s *Server) handleListSegments(w http.ResponseWriter, r *http.Request) {
