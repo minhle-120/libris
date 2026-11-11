@@ -227,6 +227,12 @@ PDFDPI int `key:"pdfDPI" group:"ingest" label:"PDF raster DPI" help:"…"
 - `FileStore` mirrors memory to `<data>/settings.json`: atomic temp+rename, mode
   `0600` (it can hold an API key); a failed write leaves the old config in force.
 - `MaxFileBytes()` is a method derived from `MaxFileMB`, so size has one unit.
+- **A saved setting takes effect on the next job, not the next restart.** `app`
+  reads `Settings.Get()` per job, and `cmd/libris/clients.go` keeps the one
+  `llm` client keyed by what it *connects with* (three URLs, API key, timeout) and
+  rebuilds it when that changes — model names are not part of the key, they travel
+  per request. Anything new that caches a client, a pool or a path from settings
+  must go through the same discipline, or the settings UI lies.
 
 **Never hand-edit `web/src/lib/config.gen.ts`.** Never add a setting to the
 frontend. 23 settings exist today.
@@ -397,7 +403,9 @@ Planned: SSE progress instead of polling, `POST /api/notebooks/{id}/ask`
   embeddings server speaking llama.cpp's shape, and reads the database with
   `sqlite3` rather than trusting the API: unit tests pin each layer's shape, this
   pins that the settings a user saves actually reach the pipeline, that the probe
-  writes the dimension back, and that `ready` is backed by rows.
+  writes the dimension back, that repointing the embedding server *while the binary
+  runs* moves the socket and not only the error text, and that `ready` is backed by
+  rows.
 - `app` tests use the **real** SQLite store with a fake pipeline: the interesting
   failures are how ingest's output lands in the schema (foreign keys, id
   idempotency, the ready gate), not what a mock would agree to.
@@ -519,6 +527,12 @@ Planned: SSE progress instead of polling, `POST /api/notebooks/{id}/ask`
 - `ingest.Detect` reads magic bytes first for PDF/image/audio, extension for the
   rest. A PNG named `notes.txt` must not become text (mojibake chunks); a `.md`
   stays text whatever the sniffer says. Do not "simplify" this to one order.
+- A failure message can be newer than the socket it describes. `Embedder` carried
+  `baseURL` "only for error messages" while the `llm` client carried the URL it was
+  built with at boot, so changing the embedding URL in Settings produced
+  `…through http://localhost:3333: Post "http://127.0.0.1:8082/…"` and told the
+  user to fix a server that had never been asked. If two places hold the same
+  address, build both from one snapshot and assert it in a test with two servers.
 - Go has no "Documents folder" call. `os.UserHomeDir()` plus a hardcoded
   `Documents` is wrong twice over: Windows moves that folder into OneDrive with
   Known Folder redirection, and a non-English Linux desktop names it `Dokumente`

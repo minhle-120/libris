@@ -79,8 +79,11 @@ if (!existsSync(BIN)) {
   process.exit(2);
 }
 
+const DIM2 = 512; // a second server, a different length, a different model
+
 const dataDir = mkdtempSync(join(tmpdir(), 'libris-e2e-'));
 const embed = new EmbedServer();
+let embed2 = null;
 const embedURL = await embed.listen();
 
 // The settings a user would type in the UI. Written before the server starts,
@@ -214,9 +217,65 @@ try {
 
   const models = sqlite(join(dataDir, 'libris.db'), 'SELECT DISTINCT model FROM segments WHERE embedding IS NOT NULL');
   checks.check('every vector records the model that produced it', models.trim() === 'fake-embed-2', `model=${models.trim()}`);
+
+  // ── the user repoints Settings while libris runs ──────────────────
+  // The bug this pins: a saved embedding URL reached the error message but not the
+  // socket, so the next upload dialled whatever address libris booted with and the
+  // failure text blamed a server that had never been asked. Everything below is
+  // only true if the setting moved the connection.
+  embed2 = new EmbedServer(DIM2);
+  const embed2URL = await embed2.listen();
+
+  const saved = await fetch(`${base}/api/settings`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ embedURL: embed2URL, embedModel: 'fake-embed-b' })
+  });
+  checks.check('the settings API takes a new embedding server', saved.ok, `status=${saved.status}`);
+
+  const askedBefore = embed.requests.length;
+  const third = await upload(
+    base, nb.id, 'repoint.txt', Buffer.from(`${'repointed body '.repeat(40)}\n`), 'text/plain'
+  );
+  const repointed = await poll(`${base}/api/sources/${third.id}`, (s) => s.status !== 'processing');
+  checks.check(
+    'the next upload embeds against the server the settings now name',
+    repointed.status === 'ready',
+    `status=${repointed.status} detail=${repointed.detail ?? ''}`
+  );
+  checks.check(
+    'the new server is the one that was asked',
+    embed2.requests.length > 0 && embed2.requests.every((r) => r.model === 'fake-embed-b'),
+    `${embed2.requests.length} requests to the new server`
+  );
+  checks.check(
+    'the old server got nothing after the change',
+    embed.requests.length === askedBefore,
+    `${embed.requests.length - askedBefore} extra requests to the old one`
+  );
+
+  // A new server gets probed on its own merits, and what the UI shows follows it.
+  const shown = await (await fetch(`${base}/api/settings`)).json();
+  checks.check(
+    'the new server is probed and its length replaces the one shown',
+    String(shown.embedDimensions) === String(DIM2),
+    `embedDimensions=${shown.embedDimensions}`
+  );
+
+  // And the vectors land in the store under the new length and model, while the
+  // sources embedded earlier keep theirs — the store is allowed to hold both.
+  const newDims = sqlite(join(dataDir, 'libris.db'), `SELECT DISTINCT dim FROM segments WHERE source_id = '${third.id}'`);
+  checks.check('the new source’s vectors carry the new length', newDims.trim() === String(DIM2), `dims=${newDims.trim()}`);
+
+  const newModels = sqlite(join(dataDir, 'libris.db'), `SELECT DISTINCT model FROM segments WHERE source_id = '${third.id}'`);
+  checks.check('and the model that produced them', newModels.trim() === 'fake-embed-b', `model=${newModels.trim()}`);
+
+  const oldDims = sqlite(join(dataDir, 'libris.db'), `SELECT DISTINCT dim FROM segments WHERE source_id != '${third.id}'`);
+  checks.check('earlier sources keep the length they were embedded at', oldDims.trim() === String(DIM), `dims=${oldDims.trim()}`);
 } finally {
   app.kill('SIGTERM');
   embed.close();
+  embed2?.close();
 }
 
 console.log(`\n${checks.passed} passed, ${checks.failed} failed`);

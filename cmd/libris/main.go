@@ -21,7 +21,6 @@ import (
 	"libris/internal/httpapi"
 	"libris/internal/index"
 	"libris/internal/ingest"
-	"libris/internal/llm"
 	"libris/internal/store/sqlite"
 	"libris/web"
 )
@@ -73,22 +72,20 @@ func main() {
 	// servers that speak the OpenAI wire format, and one API key covers all
 	// three. Read from the settings store rather than the environment-only base,
 	// or a key saved through the UI would be ignored.
-	live := settings.Get()
-	llmClient, err := llm.New(llm.Config{
-		ChatURL:   live.ChatURL,
-		EmbedURL:  live.EmbedURL,
-		RerankURL: live.RerankURL,
-		APIKey:    live.APIKey,
-		Timeout:   time.Duration(live.TimeoutSeconds) * time.Second,
-	})
-	if err != nil {
+	// One client for chat, embeddings and reranking, rebuilt whenever the settings
+	// that decide how libris connects stop matching the one it built. Resolved per
+	// job rather than once at boot: a URL or API key saved through the UI has to
+	// reach the pipeline on the next upload, and a client frozen at startup makes
+	// the failure text name a server libris is no longer configured to use.
+	var clients clientCache
+	if _, err := clients.For(settings.Get()); err != nil {
 		fail(log, "llm client", err)
 	}
 
 	// The embedding server is probed the first time it is needed, and its vector
 	// length is written back into the settings so the UI shows what the store is
 	// keyed on. Re-pointing the settings at a different server re-probes it.
-	embedders := index.NewSupplier(llmClient, log, func(dim int) {
+	embedders := index.NewSupplier(clients.For, log, func(dim int) {
 		next := settings.Get()
 		if next.EmbedDim == strconv.Itoa(dim) {
 			return

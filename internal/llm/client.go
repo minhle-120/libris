@@ -200,3 +200,9 @@ func endpoint(base, suffix string) string {
 
 // Drain is a helper for callers that want the body consumed before reuse.
 func Drain(r io.Reader) { io.Copy(io.Discard, io.LimitReader(r, 1<<20)) }
+
+// CloseIdleConnections releases pooled sockets to this client's servers. Called
+// when the wiring replaces a client because its URLs changed: a user edits an
+// embedding URL precisely because that server went away, and the old transport
+// would otherwise hold its idle connections until the process exits.
+func (c *Client) CloseIdleConnections() { c.hc.CloseIdleConnections() }

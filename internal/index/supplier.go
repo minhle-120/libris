@@ -30,7 +30,7 @@ var probeTimeout = 20 * time.Second
 // enforced length, and the model name is recorded with every vector, so a mixed
 // store can still be identified and rebuilt.
 type Supplier struct {
-	client  *llm.Client
+	clients ClientSource
 	log     *slog.Logger
 	onProbe func(dim int) // may be nil
 
@@ -38,10 +38,20 @@ type Supplier struct {
 	probed map[string]int // "url\x00model" -> dimension
 }
 
-// NewSupplier builds embedders over one client. onProbe, if given, is called with
-// the dimension of a newly seen server.
-func NewSupplier(client *llm.Client, log *slog.Logger, onProbe func(dim int)) *Supplier {
-	return &Supplier{client: client, log: log, onProbe: onProbe, probed: map[string]int{}}
+// ClientSource yields a client for the settings in force. The caller implements
+// it, so llm stays a wire-format package and config stays a struct.
+//
+// It is a function rather than one client built at startup because a settings
+// change has to move the socket, not just the message. The first build of this
+// took a finished client, so changing the embedding URL in Settings changed the
+// URL in the error text while the POST went on dialling the address libris booted
+// with — a detail telling the user to fix the server that was never asked.
+type ClientSource func(cfg config.Config) (*llm.Client, error)
+
+// NewSupplier builds embedders from whatever client the settings point at.
+// onProbe, if given, is called with the dimension of a newly seen server.
+func NewSupplier(clients ClientSource, log *slog.Logger, onProbe func(dim int)) *Supplier {
+	return &Supplier{clients: clients, log: log, onProbe: onProbe, probed: map[string]int{}}
 }
 
 // For returns an embedder matching cfg. It is safe to call from several ingest
@@ -49,13 +59,18 @@ func NewSupplier(client *llm.Client, log *slog.Logger, onProbe func(dim int)) *S
 func (s *Supplier) For(cfg config.Config) (*Embedder, error) {
 	url, model := cfg.EmbedURL, cfg.EmbedModel
 
+	client, err := s.clients(cfg)
+	if err != nil {
+		return nil, err
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	key := url + "\x00" + model
 	dim, seen := s.probed[key]
 	if !seen {
-		dim = s.discover(cfg, url, model)
+		dim = s.discover(client, cfg, url, model)
 		s.probed[key] = dim
 	}
 
@@ -68,13 +83,15 @@ func (s *Supplier) For(cfg config.Config) (*Embedder, error) {
 		// reach still gets a length enforced once we do reach it.
 		dim = atoi(cfg.EmbedDim)
 	}
-	return NewEmbedder(s.client, url, model, dim), nil
+	// The client and the URL in its error messages come from one cfg, so a
+	// failure can never name a server it did not dial.
+	return NewEmbedder(client, url, model, dim), nil
 }
 
 // discover asks the server for one vector. Split out so tests do not have to wait
 // behind a dead port.
-func (s *Supplier) discover(cfg config.Config, url, model string) int {
-	probe := NewEmbedder(s.client, url, model, 0)
+func (s *Supplier) discover(client *llm.Client, cfg config.Config, url, model string) int {
+	probe := NewEmbedder(client, url, model, 0)
 
 	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
 	defer cancel()

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -61,13 +62,14 @@ func embedServer(t *testing.T, dim int, probes *atomic.Int64) *httptest.Server {
 	return srv
 }
 
-func supplierClient(t *testing.T, url string) *llm.Client {
+// supplierClients builds a client out of the settings it is handed, which is what
+// the wiring does. The whole point is that the client and the URL libris reports
+// come from the same snapshot.
+func supplierClients(t *testing.T) ClientSource {
 	t.Helper()
-	c, err := llm.New(llm.Config{ChatURL: url, EmbedURL: url})
-	if err != nil {
-		t.Fatal(err)
+	return func(cfg config.Config) (*llm.Client, error) {
+		return llm.New(llm.Config{ChatURL: cfg.EmbedURL, EmbedURL: cfg.EmbedURL})
 	}
-	return c
 }
 
 func quietLogger() *slog.Logger {
@@ -89,7 +91,7 @@ func TestSupplierProbesEachServerOnce(t *testing.T) {
 	srv := embedServer(t, 4, &probes)
 
 	var recorded []int
-	sup := NewSupplier(supplierClient(t, srv.URL), quietLogger(), func(dim int) {
+	sup := NewSupplier(supplierClients(t), quietLogger(), func(dim int) {
 		recorded = append(recorded, dim)
 	})
 
@@ -120,7 +122,7 @@ func TestSupplierProbesEachServerOnce(t *testing.T) {
 func TestSupplierEnforcesTheServerLengthNotTheSetting(t *testing.T) {
 	var probes atomic.Int64
 	srv := embedServer(t, 4, &probes)
-	sup := NewSupplier(supplierClient(t, srv.URL), quietLogger(), nil)
+	sup := NewSupplier(supplierClients(t), quietLogger(), nil)
 
 	emb, err := sup.For(testConfig(srv.URL, "model-a", "768"))
 	if err != nil {
@@ -147,7 +149,7 @@ func TestSupplierToleratesAnUnreachableServer(t *testing.T) {
 	srv.Close() // now a port nobody listens on
 
 	var probed bool
-	sup := NewSupplier(supplierClient(t, url), quietLogger(), func(int) { probed = true })
+	sup := NewSupplier(supplierClients(t), quietLogger(), func(int) { probed = true })
 
 	emb, err := sup.For(testConfig(url, "model-a", "1024"))
 	if err != nil {
@@ -172,7 +174,7 @@ func TestSupplierToleratesAnUnreachableServer(t *testing.T) {
 func TestSupplierKeepsGoingWhenTheProbeDisagreesWithSettings(t *testing.T) {
 	var probes atomic.Int64
 	srv := embedServer(t, 4, &probes)
-	sup := NewSupplier(supplierClient(t, srv.URL), quietLogger(), nil)
+	sup := NewSupplier(supplierClients(t), quietLogger(), nil)
 
 	if _, err := sup.For(testConfig(srv.URL, "model-a", "768")); err != nil {
 		t.Fatal(err)
@@ -182,5 +184,76 @@ func TestSupplierKeepsGoingWhenTheProbeDisagreesWithSettings(t *testing.T) {
 	_, err := sup.For(testConfig(srv.URL, "model-a", "768"))
 	if err != nil {
 		t.Fatalf("disagreement should not stop ingest: %v", err)
+	}
+}
+
+// port is the "127.0.0.1:53123" part of a server URL — the only part of it that
+// distinguishes two local fakes from each other.
+func port(t *testing.T, raw string) string {
+	t.Helper()
+	u, err := url.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u.Host
+}
+
+// The bug this pins is the one a user sees: they repoint the embedding URL in
+// Settings, the next upload fails, and the failure names the server they just
+// typed while the request went to the one libris booted with. So the dial target
+// and the URL in the message must come from one settings snapshot, always.
+func TestSupplierFollowsARepointedURL(t *testing.T) {
+	var hitsA, hitsB atomic.Int64
+	a := embedServer(t, 4, &hitsA)
+	b := embedServer(t, 7, &hitsB)
+
+	sup := NewSupplier(supplierClients(t), quietLogger(), nil)
+	ctx := context.Background()
+	one := []domain.Segment{{ID: "d:0000", DocID: "d", Kind: domain.KindText, Text: "hello"}}
+
+	first, err := sup.For(testConfig(a.URL, "model-a", ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	vecs, err := first.Embed(ctx, one)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vecs[0].Dim != 4 {
+		t.Errorf("first job produced a vector of length %d, want server A's 4", vecs[0].Dim)
+	}
+	if n := hitsB.Load(); n != 0 {
+		t.Fatalf("server B was asked %d times while the settings still named A", n)
+	}
+
+	// The user edits Settings. The next job follows, including its vectors.
+	second, err := sup.For(testConfig(b.URL, "model-a", ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	vecs, err = second.Embed(ctx, one)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vecs[0].Dim != 7 {
+		t.Errorf("after the change, vector length %d, want server B's 7", vecs[0].Dim)
+	}
+	if n := hitsB.Load(); n != 2 {
+		t.Errorf("server B got %d requests, want 2 (one probe, one batch)", n)
+	}
+
+	// And when that server goes away, the message may not fall back to naming the
+	// old one. This is the exact assertion the reported error string fails.
+	bURL, aHost := b.URL, port(t, a.URL)
+	b.Close()
+
+	dead, err := sup.For(testConfig(bURL, "model-a", ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dead.Embed(ctx, one); err == nil {
+		t.Fatal("a server that stopped listening produced no error")
+	} else if msg := err.Error(); !strings.Contains(msg, port(t, bURL)) || strings.Contains(msg, aHost) {
+		t.Errorf("the failure must name only the server it dialled:\n%s", msg)
 	}
 }
