@@ -28,10 +28,25 @@ import (
 
 func main() {
 	addr := flag.String("addr", "127.0.0.1:8080", "listen address; loopback only unless you mean otherwise")
-	dataDir := flag.String("data", defaultDataDir(), "directory for the database, originals and derived files")
+	dataDir := flag.String("data", defaultDataDir(),
+		"directory for the database, originals and derived files; defaults to Documents/libris")
 	flag.Parse()
 
+	given := map[string]bool{}
+	flag.Visit(func(f *flag.Flag) { given[f.Name] = true })
+
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	log.Info("data directory", "path", *dataDir)
+	if !given["data"] {
+		// Builds before this default kept everything under the OS config
+		// directory. Its originals are all still there, so say where they are
+		// rather than let a returning user read an empty library as a deletion.
+		if old := legacyDataDir(); old != "" && old != *dataDir {
+			log.Info("a previous data directory is here; move its contents or pass -data",
+				"previous", old)
+		}
+	}
 
 	// Ctrl-C stops a long ingest between files rather than in the middle of one.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -139,14 +154,6 @@ func main() {
 		log.Warn("http shutdown", "err", err)
 	}
 	service.Close()
-}
-
-func defaultDataDir() string {
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		return "data"
-	}
-	return filepath.Join(dir, "libris")
 }
 
 func fail(log *slog.Logger, what string, err error) {

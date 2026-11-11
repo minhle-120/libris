@@ -73,7 +73,8 @@ make test       # go test ./... -race -shuffle=on
 make cover      # coverage profile + total
 make check      # fmt + vet + test
 make generate   # regenerate web/src/lib/config.gen.ts after changing config
-./libris -addr 127.0.0.1:8080 -data ~/.config/libris
+./libris                                  # data goes to Documents/libris
+./libris -addr 127.0.0.1:8080 -data /mnt/nvme/libris
 ```
 
 The binary is ~21 MB and self-contained apart from the model servers and
@@ -158,6 +159,12 @@ originals/      <sha256><ext> — the kept copy, never rewritten or deleted
 assets/         <sha256>/pages/page-0001.png, /slices/slice-0001.wav, …
 ```
 
+The default location is `Documents/libris` — the registry's `Personal` folder on
+Windows, `XDG_DOCUMENTS_DIR` on Linux, each with a fallback (ADR 0005). It is a
+place the user can see and back up, because this directory holds the only copy of
+their originals. `-data` overrides it; the resolved path is logged on every start,
+and an older default's directory is only *mentioned*, never touched.
+
 `Provenance` char offsets are **page-local**: `CharStart` counts from the start of
 `Page`, `CharEnd` from the start of `PageEnd`. `PageEnd` is 0 unless the chunk
 straddles a page break. Since a page holds far more words than a chunk, a chunk
@@ -189,10 +196,12 @@ Segment IDs are `"<docID>:<ordinal padded to 4>"`. A PDF yields two doc IDs:
 `<source>` (text) and `<source>#pages` (rasters).
 
 `Source.Status` describes the whole path from bytes to retrievable, so **`ready`
-means every segment has a vector** — ADR 0004, accepted and not yet implemented:
-ingest still stops at segmentation, so `ready` currently means "segmented". Until
-the embedding stage lands, the chunk inspector is the only place segment counts are
-shown, and it never implies retrievability.
+means every segment has a vector** — ADR 0004, implemented: ingest ends by
+embedding, and a source whose embedding fails is `failed` with a detail naming
+the server URL, keeping its chunks so that retry has something to work with. The
+migration did not backfill, so a source some older build marked `ready` can still
+have no vectors — and `RetrySource` accepts only `failed` and `unsupported`, so
+nothing in the UI can currently fix that row.
 
 ---
 
@@ -423,7 +432,8 @@ Planned: SSE progress instead of polling, `POST /api/notebooks/{id}/ask`
   `path/to/file` is ambiguous).
 - One ADR per accepted decision in `docs/adr/`. Current: 0001 config single
   source, 0002 settings API, 0003 notebooks and content-addressed sources, 0004
-  `ready` means searchable (accepted, not built).
+  `ready` means searchable (accepted, implemented), 0005 the data directory
+  defaults to `Documents/libris`.
 - User-caused mistakes are `app.ErrInvalid` / `ErrTooLarge` / `ErrBusy` or
   `domain.ErrNotFound`; a bare `errors.New` from a use case means 500, so pick a
   sentinel deliberately.
@@ -509,6 +519,13 @@ Planned: SSE progress instead of polling, `POST /api/notebooks/{id}/ask`
 - `ingest.Detect` reads magic bytes first for PDF/image/audio, extension for the
   rest. A PNG named `notes.txt` must not become text (mojibake chunks); a `.md`
   stays text whatever the sniffer says. Do not "simplify" this to one order.
+- Go has no "Documents folder" call. `os.UserHomeDir()` plus a hardcoded
+  `Documents` is wrong twice over: Windows moves that folder into OneDrive with
+  Known Folder redirection, and a non-English Linux desktop names it `Dokumente`
+  or `文档` and records the real name in `~/.config/user-dirs.dirs`. Read those
+  instead — `HKCU\…\User Shell Folders\Personal` through `syscall` is enough, no
+  new dependency — and reject a resolved value that is relative, unanchored
+  (`\Users\name` is `IsAbs` on Windows), the filesystem root, or home itself.
 - Two sources must never emit the same `Segment.ID` — it is derived from the
   source's doc id, and a test fixture that hardcodes `"doc:0000"` for both fails
   on the primary key in a way that looks like a storage bug.
