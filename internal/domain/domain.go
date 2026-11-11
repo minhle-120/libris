@@ -122,6 +122,11 @@ type Notebook struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
 	CreatedAt int64  `json:"created_at"` // unix seconds
+
+	// SourceCount is read from the database rather than stored, the way
+	// Source.SegmentCount is: it is what the sidebar shows beside a notebook.
+	// It is 0 on a notebook that was just created, before any query reads it.
+	SourceCount int `json:"source_count"`
 }
 
 func (s Segment) String() string {

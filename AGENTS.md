@@ -60,11 +60,13 @@ These have been argued through. Breaking one needs a conversation, not a commit.
 | Go | 1.27.3, module name `libris` |
 | Go dependencies | `github.com/ncruces/go-sqlite3` (cgo-free SQLite) — one, and it is deliberate |
 | Node | 26 / npm 12 |
-| Frontend | Svelte 5.57 (runes), Vite 8.3, TypeScript |
+| Frontend | Svelte 5.57 (runes), Vite 8.3, TypeScript. `npx svelte-check` is the type gate |
 | External binaries | `pdftotext`, `pdftoppm` (poppler), `ffmpeg`/`ffprobe` — optional, probed at startup |
 
 ```bash
 make build      # npm run build, then go build -o libris ./cmd/libris
+make web-check  # svelte-check + build (the frontend equivalent of make check)
+make ui         # build, run, then drive the real UI in headless Chrome
 make run        # go run ./cmd/libris
 make test       # go test ./... -race -shuffle=on
 make cover      # coverage profile + total
@@ -300,6 +302,10 @@ Status mapping is one `fail` function: `domain.ErrNotFound` → 404,
 `Retry-After`, everything else → 500 and a log line. Nothing else in the
 transport guesses at statuses.
 
+The frontend consumes all of the above: sidebar counts come from
+`GET /api/notebooks`, and the notebook view polls that source list while anything
+is `processing`.
+
 Both file endpoints stream through `http.ServeContent`, so Range works — that is
 what lets the browser seek inside an audio slice and a PDF viewer page without
 downloading the file.
@@ -321,7 +327,16 @@ Planned: SSE progress instead of polling, `POST /api/notebooks/{id}/ask`
   through `set()` because `Settings` is a union-typed record.
 - `web/dist/` is **committed** (it is what `go:embed` bakes in). Rebuild it in the
   same commit as any frontend change.
-- `lib/api.ts` is the only place that talks to `/api`.
+- `lib/api.ts` is the only place that talks to `/api`. Multipart uploads must not
+  set a Content-Type — the browser has to add the boundary itself.
+- `lib/types.ts` mirrors the **JSON**, not the Go: field names are snake_case
+  because that is what `internal/domain` marshals. `format.ts` holds the only
+  display formatting rules, so byte and duration strings cannot diverge.
+- The UI holds no mock data. Notebooks, sources and settings all load from the
+  backend on mount; a notebook's source list refetches while anything is
+  `processing` (an effect that destroys itself when idle).
+- `NotebookView` and `SettingsView` define no labels, defaults or ranges for
+  settings, and no fixtures for anything else.
 
 ---
 
@@ -345,6 +360,14 @@ Planned: SSE progress instead of polling, `POST /api/notebooks/{id}/ask`
 - Add a test with every feature. `TestNoSamplingOrInferenceConfig` exists to stop
   sampling parameters creeping back into requests.
 - No sleeps for synchronisation, no network in unit tests.
+- **Browser checks**: `make ui` builds, starts the binary against a throwaway
+  data directory, and runs `scripts/ui-upload.mjs` and `scripts/ui-drop.mjs`
+  over CDP (`scripts/cdp.mjs`, no dependencies). They assert on DOM state —
+  computed text and counts — not screenshots. 33 checks cover create-notebook,
+  file-picker upload, `processing → ready` polling, dedupe, drag-and-drop,
+  unsupported files, filtering, detach, and console/page errors. They skip
+  successfully when Chrome is missing. They caught a 10× byte-formatting bug
+  that no amount of staring at the component would have found.
 
 ---
 
@@ -449,3 +472,17 @@ Planned: SSE progress instead of polling, `POST /api/notebooks/{id}/ask`
 - Two sources must never emit the same `Segment.ID` — it is derived from the
   source's doc id, and a test fixture that hardcodes `"doc:0000"` for both fails
   on the primary key in a way that looks like a storage bug.
+- `formatBytes` said 12 KB for a 1.2 KB file: `bytes / 10 ** (2 * i)` is decimal,
+  `bytes / 1024 ** i` is binary. The index was chosen by log₂₀₄₈ — write the
+  divisor to match and add an exact-value check, not a `/KB/` one.
+- Svelte applies a `$state` write on a microtask. A test that dispatches
+  `dragenter` and reads `classList.contains('dragging')` on the next line sees
+  the *old* class, and reports a working feature as broken. Await a tick first.
+- A test helper that takes an **expression** must not be handed a statement
+  block. `until("const r = …; return r")` compiles to `const value = const r = …`
+  and fails with a syntax error inside the page, which looks like an app bug.
+- `Runtime.evaluate` returns the object handle nested under `result`: reading
+  `{ objectId }` off the response gives `undefined`, and the error says "no
+  element matches", which is a lie about the selector.
+- A `check(name, ok, detail)` helper that prints `detail` on success will happily
+  print "rows never reached 0" next to a PASS. Make `detail` a thunk.

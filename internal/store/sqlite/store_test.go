@@ -85,6 +85,61 @@ func mustText(t *testing.T, db *DB, q string) string {
 
 // ── notebooks ────────────────────────────────────────────────────
 
+// TestNotebookSourceCount covers the count the sidebar shows. A just-created
+// notebook reports 0 without a query, so the read path is what proves it.
+func TestNotebookSourceCount(t *testing.T) {
+	ctx := context.Background()
+	db := openDB(t)
+
+	a, err := db.CreateNotebook(ctx, "first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := db.CreateNotebook(ctx, "second")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// One file in both notebooks, and a second file in the first.
+	for _, nb := range []string{a.ID, b.ID} {
+		if _, _, err := db.AddSource(ctx, nb, source("one", "one.pdf")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := db.AddSource(ctx, a.ID, source("two", "two.pdf")); err != nil {
+		t.Fatal(err)
+	}
+
+	counts := map[string]int{}
+	list, err := db.ListNotebooks(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, nb := range list {
+		counts[nb.ID] = nb.SourceCount
+	}
+	if counts[a.ID] != 2 || counts[b.ID] != 1 {
+		t.Errorf("counts = %v, want 2 for the first notebook and 1 for the second", counts)
+	}
+
+	// A shared source counts once per notebook, not once per copy.
+	got, err := db.GetNotebook(ctx, b.ID)
+	if err != nil || got.SourceCount != 1 {
+		t.Errorf("GetNotebook = %+v, %v", got, err)
+	}
+
+	// Deleting a source's membership drops the count; the source survives.
+	if err := db.DetachSource(ctx, a.ID, "one"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := db.GetNotebook(ctx, a.ID); err != nil || got.SourceCount != 1 {
+		t.Errorf("after detach = %+v, %v", got, err)
+	}
+	if _, err := db.GetSource(ctx, "one"); err != nil {
+		t.Errorf("a detached source must still be readable: %v", err)
+	}
+}
+
 func TestNotebookLifecycle(t *testing.T) {
 	ctx := context.Background()
 	db := openDB(t)

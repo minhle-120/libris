@@ -58,16 +58,23 @@ func (db *DB) DeleteNotebook(ctx context.Context, id string) error {
 	return one(res, id)
 }
 
+// notebookSelect is the shared projection of the two notebook queries. The
+// count rides along because the sidebar lists it next to every notebook, and a
+// separate round trip per row would be the alternative.
+const notebookSelect = `
+	SELECT n.id, n.name, n.created_at,
+	       (SELECT COUNT(*) FROM notebook_sources m WHERE m.notebook_id = n.id)
+	  FROM notebooks n`
+
 // GetNotebook fetches one by id.
 func (db *DB) GetNotebook(ctx context.Context, id string) (domain.Notebook, error) {
-	return scanNotebook(db.sql.QueryRowContext(ctx,
-		`SELECT id, name, created_at FROM notebooks WHERE id = ?`, id))
+	return scanNotebook(db.sql.QueryRowContext(ctx, notebookSelect+` WHERE n.id = ?`, id))
 }
 
 // ListNotebooks returns every notebook, oldest first.
 func (db *DB) ListNotebooks(ctx context.Context) ([]domain.Notebook, error) {
 	rows, err := db.sql.QueryContext(ctx,
-		`SELECT id, name, created_at FROM notebooks ORDER BY created_at, id`)
+		notebookSelect+` ORDER BY n.created_at, n.id`)
 	if err != nil {
 		return nil, fmt.Errorf("store: list notebooks: %w", err)
 	}
@@ -88,7 +95,7 @@ type rowScanner interface{ Scan(...any) error }
 
 func scanNotebook(row rowScanner) (domain.Notebook, error) {
 	var n domain.Notebook
-	err := row.Scan(&n.ID, &n.Name, &n.CreatedAt)
+	err := row.Scan(&n.ID, &n.Name, &n.CreatedAt, &n.SourceCount)
 	if err == sql.ErrNoRows {
 		return domain.Notebook{}, ErrNotFound
 	}

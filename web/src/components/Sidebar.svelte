@@ -39,8 +39,8 @@
             >
               <Icon name="book" size={14} />
               <span class="label truncate">{nb.name}</span>
-              {#if nb.sourceCount > 0}
-                <span class="count">{nb.sourceCount}</span>
+              {#if nb.source_count > 0}
+                <span class="count">{nb.source_count}</span>
               {/if}
             </button>
           </li>
