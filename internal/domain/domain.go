@@ -104,7 +104,12 @@ type Asset struct {
 // embedder:
 //
 //	KindText  -> embed Text
-//	KindImage -> embed the bytes at Asset.Path (llama.cpp wants a file:// URL)
+//	KindImage -> embed the bytes at Asset.Path, as a base64 data URL: verified
+//	            against llama.cpp's server README, image_url.url accepts a data
+//	            URI, a remote URL or a file:// path, and only the last one needs
+//	            the server started with --media-path. Libris owns the assets
+//	            directory, so it reads the raster off disk instead of asking the
+//	            user for a flag.
 //	KindAudio -> embed the slice at Asset.Path (T0..T1 within it)
 //
 // Text always stays for citation and lexical search, even when the payload is
@@ -118,6 +123,18 @@ type Segment struct {
 	Text     string     `json:"text"`
 	Asset    *Asset     `json:"asset,omitempty"`
 	Span     Provenance `json:"span"`
+}
+
+// Embedding is one segment's vector, in the shape the store keeps.
+//
+// The model is recorded because a vector is only comparable with vectors from
+// the same model: changing embeddingModel invalidates every stored vector,
+// which is the consequence ADR 0004 accepts.
+type Embedding struct {
+	SegmentID string
+	Model     string
+	Dim       int
+	Vector    []float32
 }
 
 // Notebook is a workspace: its own sources, its own chats, and the scope every

@@ -66,6 +66,21 @@ func ImagePart(url string) ContentPart {
 	return ContentPart{Type: PartImage, ImageURL: &ImageURL{URL: url}}
 }
 
+// ImageBase64 inlines an image as a data: URL.
+//
+// Verified against llama.cpp's server README: image_url.url accepts a remote
+// URL, a base64 data URI, or a local file — and only the local file needs the
+// server started with --media-path. So inlining is the only form that works
+// against a plain `llama-server --embedding --mmproj …`, which is why the
+// embedding stage sends page rasters this way instead of asking the user for a
+// flag. There is still no auto-detection: choosing to inline is explicit.
+func ImageBase64(mimeType, data string) ContentPart {
+	return ContentPart{
+		Type:     PartImage,
+		ImageURL: &ImageURL{URL: "data:" + mimeType + ";base64," + data},
+	}
+}
+
 // AudioPart and VideoPart reference media by URL or local file, keeping whole
 // files out of the request body. There is no auto-detection: a path such as
 // "path/to/file" is indistinguishable from base64 by charset alone, so
