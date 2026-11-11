@@ -88,16 +88,28 @@ type fakeEmbedder struct {
 	calls    int
 	embedded int
 	segments []domain.Segment
+	titles   []string // what the source was called, in embedding order
 
 	dim int
 	err error
 }
 
-func (f *fakeEmbedder) Embed(_ context.Context, segs []domain.Segment) ([]domain.Embedding, error) {
+// title is the document name the most recent batch was embedded under.
+func (f *fakeEmbedder) title() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.titles) == 0 {
+		return ""
+	}
+	return f.titles[len(f.titles)-1]
+}
+
+func (f *fakeEmbedder) Embed(_ context.Context, title string, segs []domain.Segment) ([]domain.Embedding, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
 	f.calls++
+	f.titles = append(f.titles, title)
 	f.embedded += len(segs)
 	f.segments = append(f.segments, segs...)
 	if f.err != nil {
@@ -254,6 +266,12 @@ func TestIngestEmbedsEverySegmentBeforeReady(t *testing.T) {
 	calls, embedded := emb.stats()
 	if calls != 1 {
 		t.Errorf("embedder called %d times, want one batch", calls)
+	}
+	// EmbeddingGemma steers text inputs with the document's name, so what the user
+	// called the source has to reach the embedder — not its id, and not the path
+	// libris stored it under, which is the one thing the API must never leak.
+	if title := emb.title(); title != src.Name {
+		t.Errorf("embedded under title %q, want the source name %q", title, src.Name)
 	}
 	if embedded != 3 {
 		t.Errorf("%d segments embedded, want all 3", embedded)

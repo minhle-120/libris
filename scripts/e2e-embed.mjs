@@ -148,6 +148,32 @@ try {
   const textRequests = embed.requests.filter((r) => r.model === 'fake-embed-2').length;
   checks.check('the model in the settings is the model on the wire', textRequests > 0);
 
+  // EmbeddingGemma wants its text inputs steered by the document they came from.
+  // The prefix is wire-only, so it shows up here and nowhere in the stored text.
+  const docPrefix = 'title: two-page.pdf | text: ';
+  const steered = embed.requests.some((r) =>
+    r.input.some((e) => typeof e === 'string' && e.startsWith(docPrefix))
+  );
+  checks.check(
+    'text inputs carry the model’s document prompt',
+    steered,
+    `expected the prefix ${JSON.stringify(docPrefix)}`
+  );
+
+  const mediaUnprefixed = embed.requests.every((r) =>
+    r.input.every((e) =>
+      typeof e === 'string' ? true : (e.content ?? []).every((p) => p.type !== 'text' || !p.text.startsWith('title: '))
+    )
+  );
+  checks.check('media inputs are sent without any prefix', mediaUnprefixed);
+
+  const stored = (await (await fetch(`${base}/api/sources/${first.id}/segments`)).json()) ?? [];
+  checks.check(
+    'the prompt never reaches the stored text a citation quotes',
+    stored.length > 0 && stored.every((s) => !s.text.startsWith('title: ')),
+    `${stored.length} segments`
+  );
+
   const everyEntryNamed = embed.requests.every((r) =>
     r.input.every((e) => (typeof e === 'string' ? e.length > 0 : (e.content?.length ?? 0) > 0))
   );
@@ -216,7 +242,14 @@ try {
   checks.check('the store holds one dimension, not a mix', dims.trim() === String(DIM), `dims=${dims.trim()}`);
 
   const models = sqlite(join(dataDir, 'libris.db'), 'SELECT DISTINCT model FROM segments WHERE embedding IS NOT NULL');
-  checks.check('every vector records the model that produced it', models.trim() === 'fake-embed-2', `model=${models.trim()}`);
+  // The model column identifies the vector space, and the prompt scheme is part of
+  // that space: a corpus embedded with prefixes must not read as one embedded
+  // without them.
+  checks.check(
+    'every vector records the model and the prompt scheme that produced it',
+    models.trim() === 'fake-embed-2+tp1',
+    `model=${models.trim()}`
+  );
 
   // ── the user repoints Settings while libris runs ──────────────────
   // The bug this pins: a saved embedding URL reached the error message but not the
@@ -268,7 +301,7 @@ try {
   checks.check('the new source’s vectors carry the new length', newDims.trim() === String(DIM2), `dims=${newDims.trim()}`);
 
   const newModels = sqlite(join(dataDir, 'libris.db'), `SELECT DISTINCT model FROM segments WHERE source_id = '${third.id}'`);
-  checks.check('and the model that produced them', newModels.trim() === 'fake-embed-b', `model=${newModels.trim()}`);
+  checks.check('and the model and prompt scheme that produced them', newModels.trim() === 'fake-embed-b+tp1', `model=${newModels.trim()}`);
 
   const oldDims = sqlite(join(dataDir, 'libris.db'), `SELECT DISTINCT dim FROM segments WHERE source_id != '${third.id}'`);
   checks.check('earlier sources keep the length they were embedded at', oldDims.trim() === String(DIM), `dims=${oldDims.trim()}`);

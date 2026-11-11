@@ -60,7 +60,10 @@ type Ingestor interface {
 // A source with some vectors and not others answers questions with a silent
 // slice of itself, which is the failure ADR 0004 exists to prevent.
 type Embedder interface {
-	Embed(ctx context.Context, segments []domain.Segment) ([]domain.Embedding, error)
+	// Embed vectors a batch of segments belonging to one document. title is that
+	// document's display name, used by models that want their inputs steered; an
+	// embedder that has no use for it ignores it.
+	Embed(ctx context.Context, title string, segments []domain.Segment) ([]domain.Embedding, error)
 }
 
 // EmbedderFor builds an embedder for one configuration. It is a factory for the
@@ -460,7 +463,7 @@ func (s *Service) ingest(ctx context.Context, sourceID string) {
 	// Embedding is part of ingest, not a stage a caller opts into. Until it
 	// succeeds this source is not `ready`, because `ready` is the promise that
 	// asking a question will search this source (ADR 0004).
-	if err := s.embed(ctx, res.Segments); err != nil {
+	if err := s.embed(ctx, source.Name, res.Segments); err != nil {
 		s.log.Warn("embedding failed", "source", sourceID, "segments", len(res.Segments), "err", err)
 		// The chunks stay, so the source is still readable and inspectable; what
 		// is missing is retrievability, and the detail says which server to fix.
@@ -475,7 +478,7 @@ func (s *Service) ingest(ctx context.Context, sourceID string) {
 }
 
 // embed turns segments into vectors and stores them.
-func (s *Service) embed(ctx context.Context, segments []domain.Segment) error {
+func (s *Service) embed(ctx context.Context, title string, segments []domain.Segment) error {
 	if len(segments) == 0 {
 		return nil
 	}
@@ -485,7 +488,7 @@ func (s *Service) embed(ctx context.Context, segments []domain.Segment) error {
 		return fmt.Errorf("could not start the embedder: %w", err)
 	}
 
-	vectors, err := embedder.Embed(ctx, segments)
+	vectors, err := embedder.Embed(ctx, title, segments)
 	if err != nil {
 		return err
 	}

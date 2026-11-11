@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -92,14 +93,18 @@ func (c *capture) inputs(t *testing.T, call int) []any {
 	return in
 }
 
-func TestEmbedsTextAsPlainStrings(t *testing.T) {
+// docTitle is the document name every test embeds under, so the prefix path is
+// the one exercised by default rather than only by its own test.
+const docTitle = "Two Page Notes"
+
+func TestEmbedsTextAsSteeredStrings(t *testing.T) {
 	c := newCapture(t)
 	segs := []domain.Segment{
 		{ID: "a:0000", Kind: domain.KindText, Text: "the sky is blue"},
 		{ID: "a:0001", Kind: domain.KindText, Text: "water is wet"},
 	}
 
-	got, err := c.embedder(t, 0).Embed(context.Background(), segs)
+	got, err := c.embedder(t, 0).Embed(context.Background(), docTitle, segs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,10 +116,15 @@ func TestEmbedsTextAsPlainStrings(t *testing.T) {
 	if len(in) != 2 {
 		t.Fatalf("sent %d inputs, want 2", len(in))
 	}
-	// Text must go as a JSON string, not a content object: the object form is the
-	// llama.cpp extension and not every server accepts it for plain text.
-	if in[0] != "the sky is blue" || in[1] != "water is wet" {
-		t.Errorf("input = %v, want plain strings", in)
+	// Text still goes as a JSON string, not a content object: the object form is the
+	// llama.cpp extension and not every server accepts it for plain text. It carries
+	// the model's document prompt, which is what the card asks for.
+	want := []string{
+		DocumentPrompt(docTitle, "the sky is blue"),
+		DocumentPrompt(docTitle, "water is wet"),
+	}
+	if in[0] != want[0] || in[1] != want[1] {
+		t.Errorf("input = %v, want %v", in, want)
 	}
 
 	body := c.bodies[0]
@@ -128,7 +138,7 @@ func TestEmbedsTextAsPlainStrings(t *testing.T) {
 	if got[0].SegmentID != "a:0000" || got[1].SegmentID != "a:0001" {
 		t.Errorf("segment ids out of order: %v, %v", got[0].SegmentID, got[1].SegmentID)
 	}
-	if got[0].Model != "embeddinggemma-2" || got[0].Dim != 4 || len(got[0].Vector) != 4 {
+	if got[0].Model != ModelIdentity("embeddinggemma-2") || got[0].Dim != 4 || len(got[0].Vector) != 4 {
 		t.Errorf("embedding = %+v", got[0])
 	}
 }
@@ -144,7 +154,7 @@ func TestBatchesSegments(t *testing.T) {
 		})
 	}
 
-	got, err := c.embedder(t, 0).Embed(context.Background(), segs)
+	got, err := c.embedder(t, 0).Embed(context.Background(), docTitle, segs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +191,7 @@ func TestEmbedsImageAsDataURL(t *testing.T) {
 		Kind:  domain.KindImage,
 		Asset: &domain.Asset{ID: "s/pages/page-0001.png", Path: png, MIME: "image/png"},
 	}
-	if _, err := c.embedder(t, 0).Embed(context.Background(), []domain.Segment{seg}); err != nil {
+	if _, err := c.embedder(t, 0).Embed(context.Background(), docTitle, []domain.Segment{seg}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -215,7 +225,7 @@ func TestImageWithRenditionSendsBothParts(t *testing.T) {
 		Text:  "caption: figure 3",
 		Asset: &domain.Asset{ID: "s/pages/scan.jpg", Path: jpg, MIME: "image/jpeg"},
 	}
-	if _, err := c.embedder(t, 0).Embed(context.Background(), []domain.Segment{seg}); err != nil {
+	if _, err := c.embedder(t, 0).Embed(context.Background(), docTitle, []domain.Segment{seg}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -246,7 +256,7 @@ func TestEmbedsAudioAsRawBase64(t *testing.T) {
 		Kind:  domain.KindAudio,
 		Asset: &domain.Asset{ID: "s/audio/slice-0001.wav", Path: wav, MIME: "audio/wav"},
 	}
-	if _, err := c.embedder(t, 0).Embed(context.Background(), []domain.Segment{seg}); err != nil {
+	if _, err := c.embedder(t, 0).Embed(context.Background(), docTitle, []domain.Segment{seg}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -278,7 +288,7 @@ func firstPart(t *testing.T, input any) map[string]any {
 
 func TestEmptyTextInputIsAnError(t *testing.T) {
 	c := newCapture(t)
-	_, err := c.embedder(t, 0).Embed(context.Background(), []domain.Segment{
+	_, err := c.embedder(t, 0).Embed(context.Background(), docTitle, []domain.Segment{
 		{ID: "a:0007", Kind: domain.KindText, Text: "   \n  "},
 	})
 	if err == nil {
@@ -291,7 +301,7 @@ func TestEmptyTextInputIsAnError(t *testing.T) {
 
 func TestMissingAssetIsAnError(t *testing.T) {
 	c := newCapture(t)
-	_, err := c.embedder(t, 0).Embed(context.Background(), []domain.Segment{
+	_, err := c.embedder(t, 0).Embed(context.Background(), docTitle, []domain.Segment{
 		{ID: "a:0000", Kind: domain.KindImage},
 	})
 	if err == nil || !strings.Contains(err.Error(), "no asset") {
@@ -301,7 +311,7 @@ func TestMissingAssetIsAnError(t *testing.T) {
 
 func TestMissingAssetFileIsAnError(t *testing.T) {
 	c := newCapture(t)
-	_, err := c.embedder(t, 0).Embed(context.Background(), []domain.Segment{{
+	_, err := c.embedder(t, 0).Embed(context.Background(), docTitle, []domain.Segment{{
 		ID:    "a:0000",
 		Kind:  domain.KindImage,
 		Asset: &domain.Asset{ID: "gone", Path: filepath.Join(t.TempDir(), "gone.png"), MIME: "image/png"},
@@ -314,7 +324,7 @@ func TestMissingAssetFileIsAnError(t *testing.T) {
 func TestDimensionMismatchAgainstSettings(t *testing.T) {
 	c := newCapture(t) // server returns 4
 	c.dim = 3072
-	_, err := c.embedder(t, 1024).Embed(context.Background(), []domain.Segment{
+	_, err := c.embedder(t, 1024).Embed(context.Background(), docTitle, []domain.Segment{
 		{ID: "a:0000", Kind: domain.KindText, Text: "hello"},
 	})
 	if err == nil {
@@ -330,7 +340,7 @@ func TestDimensionMismatchAgainstSettings(t *testing.T) {
 func TestShortResponseIsAnError(t *testing.T) {
 	c := newCapture(t)
 	c.wrongLen = true
-	_, err := c.embedder(t, 0).Embed(context.Background(), []domain.Segment{
+	_, err := c.embedder(t, 0).Embed(context.Background(), docTitle, []domain.Segment{
 		{ID: "a:0000", Kind: domain.KindText, Text: "hello"},
 		{ID: "a:0001", Kind: domain.KindText, Text: "world"},
 	})
@@ -355,7 +365,7 @@ func TestUnorderedResponseStillMapsByID(t *testing.T) {
 		json.NewEncoder(w).Encode(map[string]any{"data": data})
 	})
 
-	got, err := c.embedder(t, 0).Embed(context.Background(), []domain.Segment{
+	got, err := c.embedder(t, 0).Embed(context.Background(), docTitle, []domain.Segment{
 		{ID: "a:0000", Kind: domain.KindText, Text: "one"},
 		{ID: "a:0001", Kind: domain.KindText, Text: "two"},
 	})
@@ -370,7 +380,7 @@ func TestUnorderedResponseStillMapsByID(t *testing.T) {
 func TestMissingIndexesFallBackToOrder(t *testing.T) {
 	c := newCapture(t)
 	c.skipIndex = true // every row arrives with index 0 by omission
-	got, err := c.embedder(t, 0).Embed(context.Background(), []domain.Segment{
+	got, err := c.embedder(t, 0).Embed(context.Background(), docTitle, []domain.Segment{
 		{ID: "a:0000", Kind: domain.KindText, Text: "one"},
 		{ID: "a:0001", Kind: domain.KindText, Text: "two"},
 	})
@@ -391,7 +401,7 @@ func TestUnreachableServerNamesTheURL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = NewEmbedder(client, url, "m", 0).Embed(context.Background(), []domain.Segment{
+	_, err = NewEmbedder(client, url, "m", 0).Embed(context.Background(), docTitle, []domain.Segment{
 		{ID: "a:0000", Kind: domain.KindText, Text: "hello"},
 	})
 	if err == nil {
@@ -405,7 +415,7 @@ func TestUnreachableServerNamesTheURL(t *testing.T) {
 
 func TestEmptyInputIsNotARequest(t *testing.T) {
 	c := newCapture(t)
-	got, err := c.embedder(t, 0).Embed(context.Background(), nil)
+	got, err := c.embedder(t, 0).Embed(context.Background(), docTitle, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -435,10 +445,141 @@ func TestBusyServerErrorIsPreserved(t *testing.T) {
 		io.WriteString(w, `{"error":{"message":"all inference slots are busy"}}`)
 	})
 
-	_, err := c.embedder(t, 0).Embed(context.Background(), []domain.Segment{
+	_, err := c.embedder(t, 0).Embed(context.Background(), docTitle, []domain.Segment{
 		{ID: "a:0000", Kind: domain.KindText, Text: "hello"},
 	})
 	if !llm.IsBusy(err) {
 		t.Errorf("a 503 must stay recognisable through the embedder: %v", err)
+	}
+}
+
+// textPartOf returns the text carried inside a media content object, or "" when
+// the object has none.
+func textPartOf(t *testing.T, input any) string {
+	t.Helper()
+	parts, ok := input.(map[string]any)["content"].([]any)
+	if !ok {
+		t.Fatal("media input is not a content object")
+	}
+	for _, p := range parts {
+		part, _ := p.(map[string]any)
+		if part["type"] == "text" {
+			if s, ok := part["text"].(string); ok {
+				return s
+			}
+		}
+	}
+	return ""
+}
+
+// The model card is specific: "Prefixes apply to text only. Pass images, video,
+// and audio without any prefix." A page raster is the common case in libris, and a
+// prefix there would describe a document the vector never saw.
+func TestMediaInputsAreNeverPrefixed(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name string, bytes []byte) string {
+		t.Helper()
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, bytes, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+
+	c := newCapture(t)
+	segs := []domain.Segment{
+		{ID: "s#pages:0000", Kind: domain.KindImage, Text: "figure 3: latency",
+			Asset: &domain.Asset{ID: "a", Path: write("p.png", []byte{0x89, 'P', 'N', 'G'}), MIME: "image/png"}},
+		{ID: "s#audio:0000", Kind: domain.KindAudio, Text: "and then the speaker paused",
+			Asset: &domain.Asset{ID: "b", Path: write("s.wav", []byte("RIFFxxxx")), MIME: "audio/wav"}},
+	}
+	if _, err := c.embedder(t, 0).Embed(context.Background(), docTitle, segs); err != nil {
+		t.Fatal(err)
+	}
+
+	inputs := c.inputs(t, 0)
+	for i, want := range []string{"figure 3: latency", "and then the speaker paused"} {
+		if got := textPartOf(t, inputs[i]); got != want {
+			t.Errorf("media %d carries %q, want the rendition verbatim and unprefixed", i, got)
+		}
+	}
+}
+
+// The wording is the card's, not ours, so it is pinned literally: an edit here is
+// a decision to re-embed the corpus, not a refactor.
+func TestDocumentPromptUsesTheCardWording(t *testing.T) {
+	for _, tc := range []struct{ title, text, want string }{
+		{title: "Smith 2020", text: "the sky is blue", want: "title: Smith 2020 | text: the sky is blue"},
+		{title: "", text: "water is wet", want: "title: none | text: water is wet"},
+		{title: "   ", text: "x", want: "title: none | text: x"},
+	} {
+		if got := DocumentPrompt(tc.title, tc.text); got != tc.want {
+			t.Errorf("DocumentPrompt(%q, %q) = %q, want %q", tc.title, tc.text, got, tc.want)
+		}
+	}
+
+	// Query side, verbatim from the same table. SearchQuery and QuestionAnswering
+	// share the document prefix above, which is why one embedding serves both.
+	if QuerySearch != "task: search result | query: " {
+		t.Errorf("QuerySearch = %q", QuerySearch)
+	}
+	if QueryAnswer != "task: question answering | query: " {
+		t.Errorf("QueryAnswer = %q", QueryAnswer)
+	}
+	if got := SteerQuery(QuerySearch, "  why?  "); got != "task: search result | query: why?" {
+		t.Errorf("SteerQuery = %q", got)
+	}
+}
+
+// A source name is user input, and the prompt has structure: a pipe opens a second
+// field, a newline ends the line, and an endless name steals the input's tokens.
+func TestDocumentPromptCleansTitlesThatWouldBreakIt(t *testing.T) {
+	long := strings.Repeat("ü", maxTitleRunes+50)
+
+	for _, tc := range []struct{ title, want string }{
+		{title: "a | b", want: "title: a / b | text: t"},
+		{title: "two\nlines\tand  spaces", want: "title: two lines and spaces | text: t"},
+		{title: "  padded  ", want: "title: padded | text: t"},
+	} {
+		if got := DocumentPrompt(tc.title, "t"); got != tc.want {
+			t.Errorf("DocumentPrompt(%q, \"t\") = %q, want %q", tc.title, got, tc.want)
+		}
+	}
+
+	got := DocumentPrompt(long, "t")
+	if n := len([]rune(got)); n != len("title: ")+maxTitleRunes+len(" | text: t") {
+		t.Errorf("a %d-rune title produced %d runes: %s", maxTitleRunes+50, n, got)
+	}
+	if !strings.HasPrefix(got, "title: ü") {
+		t.Errorf("truncation cut a multi-byte rune: %q", got)
+	}
+}
+
+// The prefix is a wire concern. What the store keeps, and what a citation quotes,
+// is the passage exactly as it was chunked.
+func TestEmbeddingNeverRewritesStoredText(t *testing.T) {
+	c := newCapture(t)
+	segs := []domain.Segment{{ID: "a:0000", Kind: domain.KindText, Text: "the sky is blue"}}
+
+	if _, err := c.embedder(t, 0).Embed(context.Background(), docTitle, segs); err != nil {
+		t.Fatal(err)
+	}
+	if segs[0].Text != "the sky is blue" {
+		t.Errorf("segment text became %q", segs[0].Text)
+	}
+	if !strings.Contains(fmt.Sprint(c.inputs(t, 0)[0]), "the sky is blue") {
+		t.Error("the passage did not reach the wire either")
+	}
+}
+
+// The prompt scheme is part of the vector space's identity, so a corpus embedded
+// one way must not look like a corpus embedded another.
+func TestModelIdentityRecordsThePromptScheme(t *testing.T) {
+	got := ModelIdentity("embeddinggemma-2")
+	if got != "embeddinggemma-2+"+PromptScheme {
+		t.Errorf("ModelIdentity = %q, want the model plus the scheme", got)
+	}
+	if ModelIdentity("") == "" {
+		t.Error("a blank model name erased the scheme too; nothing would identify the vectors")
 	}
 }

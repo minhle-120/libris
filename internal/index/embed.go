@@ -56,7 +56,9 @@ func NewEmbedder(client *llm.Client, baseURL, model string, wantDim int) *Embedd
 // so a wrong model or URL is a log line rather than a hundred failed uploads, and
 // so the dimension the settings promise can be checked.
 func (e *Embedder) Probe(ctx context.Context) (int, error) {
-	vecs, err := e.Embed(ctx, []domain.Segment{{
+	// Probed through the document form rather than a bare string, so the length
+	// discovered belongs to the shape the pipeline will actually send.
+	vecs, err := e.Embed(ctx, "", []domain.Segment{{
 		ID:   "probe",
 		Kind: domain.KindText,
 		Text: "libris embedding probe",
@@ -68,7 +70,12 @@ func (e *Embedder) Probe(ctx context.Context) (int, error) {
 }
 
 // Embed returns one vector per segment, in input order.
-func (e *Embedder) Embed(ctx context.Context, segments []domain.Segment) ([]domain.Embedding, error) {
+//
+// title is the document's display name — the source name the user typed or the
+// filename libris kept — and is used to build the model's document prompt. Empty
+// means there is none. It never reaches the stored text: citations quote the
+// segment, not the prompt.
+func (e *Embedder) Embed(ctx context.Context, title string, segments []domain.Segment) ([]domain.Embedding, error) {
 	if len(segments) == 0 {
 		return nil, nil
 	}
@@ -80,7 +87,7 @@ func (e *Embedder) Embed(ctx context.Context, segments []domain.Segment) ([]doma
 
 		inputs := make([]llm.EmbedInput, len(batch))
 		for i, seg := range batch {
-			in, err := e.inputFor(seg)
+			in, err := e.inputFor(title, seg)
 			if err != nil {
 				return nil, fmt.Errorf("index: segment %s: %w", seg.ID, err)
 			}
@@ -110,7 +117,7 @@ func (e *Embedder) Embed(ctx context.Context, segments []domain.Segment) ([]doma
 			}
 			out = append(out, domain.Embedding{
 				SegmentID: batch[k].ID,
-				Model:     e.model,
+				Model:     ModelIdentity(e.model),
 				Dim:       len(vec),
 				Vector:    vec,
 			})
@@ -170,13 +177,13 @@ func rowFor(data []llm.Embedding, n int) []int {
 }
 
 // inputFor decides the wire form of one segment.
-func (e *Embedder) inputFor(seg domain.Segment) (llm.EmbedInput, error) {
+func (e *Embedder) inputFor(title string, seg domain.Segment) (llm.EmbedInput, error) {
 	switch seg.Kind {
 	case domain.KindText:
 		if strings.TrimSpace(seg.Text) == "" {
 			return llm.EmbedInput{}, fmt.Errorf("text segment has nothing to embed")
 		}
-		return llm.TextInput(seg.Text), nil
+		return llm.TextInput(DocumentPrompt(title, seg.Text)), nil
 
 	case domain.KindImage, domain.KindAudio:
 		if seg.Asset == nil {
@@ -203,7 +210,9 @@ func (e *Embedder) inputFor(seg domain.Segment) (llm.EmbedInput, error) {
 			parts = append(parts, llm.AudioBase64(encoded))
 		}
 		// A rendition travels with the media it describes, in the same content
-		// object, so one vector covers both.
+		// object, so one vector covers both — and it stays unprefixed. The card's
+		// prefixes are for text inputs; "pass images, video, and audio without any
+		// prefix" covers the whole content object, not just the media part.
 		if strings.TrimSpace(seg.Text) != "" {
 			parts = append(parts, llm.TextPart(seg.Text))
 		}

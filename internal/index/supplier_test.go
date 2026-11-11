@@ -129,7 +129,7 @@ func TestSupplierEnforcesTheServerLengthNotTheSetting(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	vecs, err := emb.Embed(context.Background(), []domain.Segment{
+	vecs, err := emb.Embed(context.Background(), docTitle, []domain.Segment{
 		{ID: "d:0000", DocID: "d", Kind: domain.KindText, Text: "hello"},
 	})
 	if err != nil {
@@ -215,7 +215,7 @@ func TestSupplierFollowsARepointedURL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	vecs, err := first.Embed(ctx, one)
+	vecs, err := first.Embed(ctx, docTitle, one)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +231,7 @@ func TestSupplierFollowsARepointedURL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	vecs, err = second.Embed(ctx, one)
+	vecs, err = second.Embed(ctx, docTitle, one)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,7 +251,7 @@ func TestSupplierFollowsARepointedURL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := dead.Embed(ctx, one); err == nil {
+	if _, err := dead.Embed(ctx, docTitle, one); err == nil {
 		t.Fatal("a server that stopped listening produced no error")
 	} else if msg := err.Error(); !strings.Contains(msg, port(t, bURL)) || strings.Contains(msg, aHost) {
 		t.Errorf("the failure must name only the server it dialled:\n%s", msg)
