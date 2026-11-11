@@ -3,7 +3,9 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"encoding/binary"
 	"fmt"
+	"math"
 
 	"libris/internal/domain"
 )
@@ -56,8 +58,15 @@ func (db *DB) PutAssets(ctx context.Context, sourceID string, assets []domain.As
 // previous set for that source.
 //
 // Chunks are re-derived wholesale rather than diffed, so the old rows go first.
-// That also discards vectors for text that changed, which is the honest
-// outcome: a vector for a chunk that no longer exists must not be retrieved.
+// That also discards every vector for the source, which is the honest outcome:
+// a vector for a chunk that no longer exists must not be retrieved. It is why
+// ingest embeds in the same job, right after this call — a re-ingest that left
+// the source `ready` with no vectors would answer questions with a silent slice
+// of itself.
+//
+// The embedding, dim and model columns are deliberately not written here: they
+// belong to PutEmbeddings, so "has segments" and "has vectors" stay separate
+// facts rather than one half-written row.
 func (db *DB) PutSegments(ctx context.Context, sourceID string, segments []domain.Segment) error {
 	tx, err := db.sql.BeginTx(ctx, nil)
 	if err != nil {
@@ -87,9 +96,63 @@ func (db *DB) PutSegments(ctx context.Context, sourceID string, segments []domai
 	return tx.Commit()
 }
 
+// encodeVector packs a vector as little-endian float32s. That is the layout the
+// cosine scan reads, and `dim` stores the count so a truncated blob is a detect-
+// able error rather than a silently short dot product.
+func encodeVector(v []float32) []byte {
+	buf := make([]byte, 4*len(v))
+	for i, f := range v {
+		binary.LittleEndian.PutUint32(buf[i*4:], math.Float32bits(f))
+	}
+	return buf
+}
+
+// PutEmbeddings stores one vector per segment. The caller has just written those
+// segments, so a missing row is not a no-op: it means the source was re-ingested
+// mid-job and the vectors are for chunks that no longer exist.
+func (db *DB) PutEmbeddings(ctx context.Context, embeddings []domain.Embedding) error {
+	if len(embeddings) == 0 {
+		return nil
+	}
+
+	tx, err := db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.PrepareContext(ctx,
+		`UPDATE segments SET embedding = ?, dim = ?, model = ? WHERE id = ?`)
+	if err != nil {
+		return fmt.Errorf("store: prepare embedding write: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, e := range embeddings {
+		res, err := stmt.ExecContext(ctx, encodeVector(e.Vector), e.Dim, e.Model, e.SegmentID)
+		if err != nil {
+			return fmt.Errorf("store: put embedding %s: %w", e.SegmentID, err)
+		}
+		// SQLite counts a matching row whose values were identical as affected, so
+		// zero really does mean "no such segment".
+		n, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("store: put embedding %s: %w", e.SegmentID, err)
+		}
+		if n == 0 {
+			return fmt.Errorf("%w: segment %s vanished mid-ingest", ErrNotFound, e.SegmentID)
+		}
+	}
+	return tx.Commit()
+}
+
 // ListSegments returns a source's segments in reading order. Text and page
 // rasters are separate documents, so ordering by document then ordinal keeps
 // each of them contiguous.
+//
+// It does not read the embedding columns on purpose: a source's chunks are listed
+// for a person to read, and hauling 3072 floats per row through SQLite for that
+// would make the inspector slow for no reason.
 func (db *DB) ListSegments(ctx context.Context, sourceID string) ([]domain.Segment, error) {
 	rows, err := db.sql.QueryContext(ctx, segmentSelect+
 		` WHERE g.source_id = ?

@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"path/filepath"
 	"testing"
 
@@ -50,8 +51,13 @@ func TestOpenMakesDirectory(t *testing.T) {
 	}
 	defer again.Close()
 
-	if got := mustInt(t, again, `SELECT COUNT(*) FROM schema_migrations`); got != 1 {
-		t.Fatalf("migrations applied = %d, want 1", got)
+	// Counted from the embedded files, so adding a migration does not break this.
+	files, err := fs.Glob(migrations, "migrations/*.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := mustInt(t, again, `SELECT COUNT(*) FROM schema_migrations`); got != len(files) {
+		t.Fatalf("migrations applied = %d, want %d", got, len(files))
 	}
 }
 
