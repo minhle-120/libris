@@ -32,6 +32,7 @@ type API interface {
 	ListSources(context.Context, string) ([]domain.Source, error)
 	ListSegments(context.Context, string) ([]domain.Segment, error)
 	RetrySource(context.Context, string) (domain.Source, error)
+	ReembedSource(context.Context, string) (domain.Source, error)
 	GetAsset(context.Context, string) (domain.Asset, error)
 }
 
@@ -60,6 +61,7 @@ func (s *Server) addAppRoutes(a API) {
 	s.mux.HandleFunc("GET /api/sources/{id}", s.handleGetSource)
 	s.mux.HandleFunc("GET /api/sources/{id}/segments", s.handleListSegments)
 	s.mux.HandleFunc("POST /api/sources/{id}/retry", s.handleRetrySource)
+	s.mux.HandleFunc("POST /api/sources/{id}/reembed", s.handleReembedSource)
 	s.mux.HandleFunc("GET /api/sources/{id}/original", s.handleOriginal)
 
 	// Asset ids contain slashes ("<sha>/pages/page-0001.png"), so this is the
@@ -194,6 +196,17 @@ func (s *Server) handleRetrySource(w http.ResponseWriter, r *http.Request) {
 	source, err := s.app.RetrySource(r.Context(), r.PathValue("id"))
 	if err != nil {
 		s.fail(w, "retry source", err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, source)
+}
+
+// handleReembedSource re-vectors a ready source from the chunks it already has.
+// 202 for the same reason retry is: the queue has accepted the work, not done it.
+func (s *Server) handleReembedSource(w http.ResponseWriter, r *http.Request) {
+	source, err := s.app.ReembedSource(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.fail(w, "re-embed source", err)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, source)

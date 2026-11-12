@@ -135,6 +135,22 @@ func (f *fakeEmbedder) stats() (calls, embedded int) {
 	return f.calls, f.embedded
 }
 
+// setDim changes the vector length the fake server hands back, which is how a
+// changed embedding model, --pooling or prompt scheme shows up in a test.
+func (f *fakeEmbedder) setDim(dim int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.dim = dim
+}
+
+// readCount is how many times the file was opened. Tests use it to prove that a
+// re-embed touches vectors only.
+func (f *fakeProcessor) readCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
+}
+
 // failWith turns the fake server off or on mid-test. Written as a method because
 // Embed reads the field under the same lock: assigning to f.err from the test
 // goroutine would be a data race that -race only sometimes catches.
@@ -1001,5 +1017,155 @@ func TestProcessorFailureIsRecordedNotLost(t *testing.T) {
 	})
 	if got := sourceStatus(t, db, src.ID).Detail; !strings.Contains(got, "assets directory") {
 		t.Errorf("detail = %q, want the reason", got)
+	}
+}
+
+// storedDims reports the distinct vector lengths a source carries. A re-embed that
+// only half lands leaves two lengths in one source, which is the state retrieval
+// cannot detect on its own.
+func storedDims(t *testing.T, db *sqlite.DB, sourceID string) []int {
+	t.Helper()
+	rows, err := db.Raw().QueryContext(context.Background(),
+		`SELECT DISTINCT dim FROM segments
+		 WHERE source_id = ? AND embedding IS NOT NULL ORDER BY dim`, sourceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+
+	var dims []int
+	for rows.Next() {
+		var d int
+		if err := rows.Scan(&d); err != nil {
+			t.Fatal(err)
+		}
+		dims = append(dims, d)
+	}
+	return dims
+}
+
+// twoDocResult is a PDF's worth of segments: the page text and the page rasters,
+// which are separate documents and must both move to a new vector space.
+func twoDocResult() *ingest.Result {
+	return &ingest.Result{Segments: []domain.Segment{
+		textSegment("doc1", 0, "first page"),
+		textSegment("doc1", 1, "second page"),
+		textSegment("doc1#pages", 0, ""),
+	}}
+}
+
+// The reason the re-embed button exists: the embedding side of the pipeline can
+// change identity underneath a corpus — a new model, a different --pooling, a new
+// prompt scheme — and every stored vector then belongs to a space the live server
+// does not produce.
+func TestReembedMovesEveryVector(t *testing.T) {
+	emb := &fakeEmbedder{dim: 8}
+	proc := &fakeProcessor{res: twoDocResult()}
+	svc, db, _ := testServiceWith(t, proc, emb)
+
+	nb, _ := svc.CreateNotebook(context.Background(), "reembed")
+	src, err := svc.AddUpload(context.Background(), nb.ID, strings.NewReader("x"), "p.pdf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, "the source to become ready", func() bool {
+		return sourceStatus(t, db, src.ID).Status == domain.StatusReady
+	})
+	if dims := storedDims(t, db, src.ID); len(dims) != 1 || dims[0] != 8 {
+		t.Fatalf("a fresh source carries dims %v, want [8]", dims)
+	}
+
+	emb.setDim(4) // the server's vectors changed shape
+	back, err := svc.ReembedSource(context.Background(), src.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if back.Status != domain.StatusProcessing {
+		t.Errorf("re-embed answered %s, want processing: the caller polls on this value", back.Status)
+	}
+
+	waitUntil(t, "the source to be ready again", func() bool {
+		return sourceStatus(t, db, src.ID).Status == domain.StatusReady
+	})
+	if dims := storedDims(t, db, src.ID); len(dims) != 1 || dims[0] != 4 {
+		t.Errorf("after re-embed the source carries dims %v, want [4]: a corpus in two vector spaces is worse than one that failed", dims)
+	}
+	if n := storedVectors(t, db, src.ID); n != 3 {
+		t.Errorf("%d vectors after re-embed, want all 3 segments", n)
+	}
+	// Only the vectors were supposed to change. Re-rasterising and re-extracting a
+	// 400-page PDF to fix its vectors would make the button something nobody clicks.
+	if got := proc.readCount(); got != 1 {
+		t.Errorf("the file was read %d times, want 1", got)
+	}
+	// Chunks survive, so the inspector still shows the same passages.
+	if segs, err := db.ListSegments(context.Background(), src.ID); err != nil || len(segs) != 3 {
+		t.Errorf("segments after re-embed: %d, err %v", len(segs), err)
+	}
+	if title := emb.title(); title != src.Name {
+		t.Errorf("re-embedded under title %q, want %q", title, src.Name)
+	}
+}
+
+// A re-embed that cannot reach the server must not cost the user a source. The
+// previous vectors are still valid for the space they were made in, and a failed
+// source is excluded from retrieval — so "failed" would break a working source.
+func TestFailedReembedLeavesTheSourceSearchable(t *testing.T) {
+	emb := &fakeEmbedder{dim: 8}
+	svc, db, _ := testServiceWith(t, &fakeProcessor{res: twoDocResult()}, emb)
+
+	nb, _ := svc.CreateNotebook(context.Background(), "reembed-fail")
+	src, err := svc.AddUpload(context.Background(), nb.ID, strings.NewReader("x"), "p.pdf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, "the source to become ready", func() bool {
+		return sourceStatus(t, db, src.ID).Status == domain.StatusReady
+	})
+
+	emb.failWith(errors.New("embed server at http://127.0.0.1:8082: connection refused"))
+	if _, err := svc.ReembedSource(context.Background(), src.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	var got domain.Source
+	waitUntil(t, "the failed re-embed to be reported", func() bool {
+		got = sourceStatus(t, db, src.ID)
+		return got.Status == domain.StatusReady && got.Detail != ""
+	})
+	if dims := storedDims(t, db, src.ID); len(dims) != 1 || dims[0] != 8 {
+		t.Errorf("a failed re-embed left the source carrying dims %v, want the original [8]", dims)
+	}
+	if n := storedVectors(t, db, src.ID); n != 3 {
+		t.Errorf("%d of 3 vectors survived a failed re-embed", n)
+	}
+	if !strings.Contains(got.Detail, "connection refused") {
+		t.Errorf("the row says %q, which does not tell the user which server to fix", got.Detail)
+	}
+}
+
+// Only a source with a complete vector set has something to replace. The others
+// have their own door, and the row must not move while it waits there.
+func TestReembedRefusesWhatIsNotReady(t *testing.T) {
+	emb := &fakeEmbedder{err: errors.New("server down")}
+	svc, db, _ := testServiceWith(t, &fakeProcessor{}, emb)
+
+	nb, _ := svc.CreateNotebook(context.Background(), "reembed-refuse")
+	src, err := svc.AddUpload(context.Background(), nb.ID, strings.NewReader("x"), "p.pdf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, "the source to fail", func() bool {
+		return sourceStatus(t, db, src.ID).Status == domain.StatusFailed
+	})
+
+	if _, err := svc.ReembedSource(context.Background(), src.ID); !errors.Is(err, ErrInvalid) {
+		t.Errorf("re-embedding a failed source: got %v, want ErrInvalid so the UI says why", err)
+	}
+	if got := sourceStatus(t, db, src.ID); got.Status != domain.StatusFailed {
+		t.Errorf("a refused re-embed moved the row to %s", got.Status)
+	}
+	if _, err := svc.ReembedSource(context.Background(), "nope"); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("re-embedding a source that does not exist: got %v, want ErrNotFound", err)
 	}
 }

@@ -9,6 +9,12 @@ import { Checks, withBrowser, UPLOAD_FIXTURE } from './cdp.mjs';
 // The fake embeddings server `make ui` starts alongside the app; /control makes
 // it refuse, which is how a source ends up in the state the retry button is for.
 const embed = process.env.EMBED;
+
+/** What the fake embedding server saw, so a click can be measured at the socket. */
+const stats = async () => {
+  if (!embed) return { requests: 0, lastPrompt: null };
+  return (await fetch(`${embed}/stats`)).json();
+};
 const control = (down) =>
   fetch(`${embed}/control`, {
     method: 'POST',
@@ -216,6 +222,8 @@ const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ui-pr
         badge: row.querySelector('.badge')?.textContent,
         note: note?.textContent ?? '',
         retry: !!row.querySelector('button[title^="Try again"]'),
+        // A source with no vectors has nothing to re-embed.
+        reembed: !!row.querySelector('button[title^="Re-embed"]'),
         // The chunks survive, so the inspector stays useful even when embedding did not.
         chunks: !!row.querySelector('button[title^="See how"]')
       };
@@ -231,6 +239,7 @@ const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ui-pr
       broken?.note
     );
     checks.check('a failed source offers retry', broken?.retry === true, () => JSON.stringify(broken));
+    checks.check('a failed source does not offer re-embed', broken?.reembed === false, () => JSON.stringify(broken));
     checks.check('a failed source can still be inspected', broken?.chunks === true);
 
     await control(false);
@@ -249,6 +258,44 @@ const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ui-pr
       return badge === 'ready' ? { badge } : null;
     `);
     checks.check('retry takes it to ready once the server returns', healed?.badge === 'ready', `badge=${healed?.badge}`);
+
+    // ── re-embedding a source that already works ─────────────────
+    // The embedding model can change identity under a corpus, so a healthy source
+    // needs its own door. The button is only for a source that has vectors.
+    const offered = await ui.eval(`
+      const row = [...document.querySelectorAll('.source')].find((r) =>
+        r.textContent.includes('libris-retry-fixture'));
+      return { on: !!row?.querySelector('button[title^="Re-embed"]') };
+    `);
+    checks.check('a ready source offers re-embed', offered.on);
+
+    // Clicking it has to visibly redo the embedding and bring the row back — a
+    // button that quietly no-ops is worse than not having one.
+    const before = await stats();
+    await ui.eval(`
+      const row = [...document.querySelectorAll('.source')].find((r) =>
+        r.textContent.includes('libris-retry-fixture'));
+      row.querySelector('button[title^="Re-embed"]').click();
+      return true;
+    `);
+    const again = await ui.until(`
+      const row = [...document.querySelectorAll('.source')].find((r) =>
+        r.textContent.includes('libris-retry-fixture'));
+      const badge = row?.querySelector('.badge')?.textContent.trim();
+      return badge === 'ready' ? { badge } : null;
+    `);
+    const after = await stats();
+    checks.check('re-embed brings the row back to ready', again?.badge === 'ready', () => `badge=${again?.badge}`);
+    checks.check(
+      're-embed actually asked the embedding server again',
+      after.requests > before.requests,
+      () => `requests ${before.requests} → ${after.requests}`
+    );
+    checks.check(
+      'the new vectors are embedded the way the pipeline embeds',
+      /title: /.test(after.lastPrompt ?? ''),
+      () => `first input=${after.lastPrompt}`
+    );
   } else {
     console.log('  skip EMBED is not set, so the retry path is not exercised');
   }

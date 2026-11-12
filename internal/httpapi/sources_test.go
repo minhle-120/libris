@@ -32,6 +32,8 @@ type fakeAPI struct {
 	upload  string // filename passed to AddUpload
 	body    string // contents passed to AddUpload
 	retried string // id passed to RetrySource
+
+	reembedded string // id passed to ReembedSource
 }
 
 func (f *fakeAPI) CreateNotebook(_ context.Context, name string) (domain.Notebook, error) {
@@ -95,6 +97,14 @@ func (f *fakeAPI) ListSegments(context.Context, string) ([]domain.Segment, error
 
 func (f *fakeAPI) RetrySource(_ context.Context, id string) (domain.Source, error) {
 	f.retried = id
+	if f.err != nil {
+		return domain.Source{}, f.err
+	}
+	return domain.Source{ID: id, Name: "p.pdf", Status: domain.StatusProcessing}, nil
+}
+
+func (f *fakeAPI) ReembedSource(_ context.Context, id string) (domain.Source, error) {
+	f.reembedded = id
 	if f.err != nil {
 		return domain.Source{}, f.err
 	}
@@ -550,6 +560,38 @@ func TestRetrySourceStartsTheWork(t *testing.T) {
 	}
 	if got.ID != "abc123" || got.Status != domain.StatusProcessing {
 		t.Errorf("body = %+v", got)
+	}
+}
+
+// Re-embed is a different call from retry because it does different work: it
+// should not be able to reach the code path that re-reads the file.
+func TestReembedSourceStartsTheWork(t *testing.T) {
+	api := &fakeAPI{}
+	srv := newAppServer(t, api)
+
+	resp := request(t, srv, "POST", "/api/sources/abc123/reembed", nil)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202: %s", resp.StatusCode, readAll(t, resp))
+	}
+	if api.reembedded != "abc123" || api.retried != "" {
+		t.Errorf("re-embed went to ReembedSource=%q and RetrySource=%q", api.reembedded, api.retried)
+	}
+
+	var got domain.Source
+	if err := json.Unmarshal([]byte(readAll(t, resp)), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != domain.StatusProcessing {
+		t.Errorf("body = %+v, want the row the call just caused: the UI polls on this", got)
+	}
+}
+
+func TestReembedSourceRefusesANonReadySource(t *testing.T) {
+	srv := newAppServer(t, &fakeAPI{err: fmt.Errorf("%w: a failed source has no vectors to re-embed", app.ErrInvalid)})
+
+	resp := request(t, srv, "POST", "/api/sources/abc123/reembed", nil)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", resp.StatusCode, readAll(t, resp))
 	}
 }
 

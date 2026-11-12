@@ -106,6 +106,11 @@ export function retrySource(sourceId: string): Promise<Source> {
   return request<Source>(`/api/sources/${sourceId}/retry`, { method: 'POST' });
 }
 
+/** Re-vectors a ready source from the chunks it already has. The file is not read again. */
+export function reembedSource(sourceId: string): Promise<Source> {
+  return request<Source>(`/api/sources/${sourceId}/reembed`, { method: 'POST' });
+}
+
 export async function listSegments(sourceId: string): Promise<Segment[]> {
   return list(await request<Segment[] | null>(`/api/sources/${sourceId}/segments`));
 }

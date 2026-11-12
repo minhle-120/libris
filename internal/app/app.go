@@ -36,6 +36,7 @@ type Store interface {
 	PutAssets(context.Context, string, []domain.Asset) error
 	PutSegments(context.Context, string, []domain.Segment) error
 	PutEmbeddings(context.Context, []domain.Embedding) error
+	ReplaceEmbeddings(context.Context, string, []domain.Embedding) error
 	ListSegments(context.Context, string) ([]domain.Segment, error)
 	GetAsset(context.Context, string) (domain.Asset, error)
 
@@ -118,7 +119,7 @@ type Service struct {
 	originals Originals
 	assetsDir string
 	log       *slog.Logger
-	jobs      chan string
+	jobs      chan job
 	stop      chan struct{}
 	done      chan struct{}
 	jobCtx    context.Context
@@ -157,7 +158,7 @@ func New(opts Options) (*Service, error) {
 		originals: Originals{Dir: opts.Originals},
 		assetsDir: opts.Assets,
 		log:       log,
-		jobs:      make(chan string, queueDepth),
+		jobs:      make(chan job, queueDepth),
 		stop:      make(chan struct{}),
 		done:      make(chan struct{}),
 	}, nil
@@ -272,11 +273,11 @@ func (s *Service) AddUpload(ctx context.Context, notebookID string, r io.Reader,
 
 	switch {
 	case added:
-		return stored, s.enqueue(stored.ID)
+		return stored, s.enqueue(job{sourceID: stored.ID})
 	case stored.Status == domain.StatusFailed:
 		// Re-offering a file that failed is the cheapest way to retry it.
 		s.log.Info("re-queueing a failed source", "source", stored.ID, "was", stored.Detail)
-		return s.requeue(ctx, stored)
+		return s.requeue(ctx, stored, false)
 	default:
 		return stored, nil
 	}
@@ -302,7 +303,30 @@ func (s *Service) RetrySource(ctx context.Context, id string) (domain.Source, er
 	if source.Status != domain.StatusFailed {
 		return source, nil // ready, processing or unsupported: nothing to redo
 	}
-	return s.requeue(ctx, source)
+	return s.requeue(ctx, source, false)
+}
+
+// ReembedSource re-vectors a ready source from the chunks it already has. It does
+// not re-read the file: no rasterising, no text extraction, and the kept original
+// is not touched — only the vectors are replaced.
+//
+// This is what a corpus needs when the embedding side of the pipeline changes
+// identity underneath it: a new model, a different --pooling, or a new prompt
+// scheme (index.PromptScheme). The store records all three beside every vector,
+// so a corpus can be read back and asked which sources predate the change, which
+// is exactly the list this is for.
+func (s *Service) ReembedSource(ctx context.Context, id string) (domain.Source, error) {
+	source, err := s.store.GetSource(ctx, id)
+	if err != nil {
+		return domain.Source{}, err
+	}
+	if source.Status != domain.StatusReady {
+		// A failed or unsupported source has no complete vector set to replace, and
+		// a processing one is being written by a job already in the queue. Retry is
+		// the door for the first; waiting is the answer to the second.
+		return source, fmt.Errorf("%w: a %s source has no vectors to re-embed", ErrInvalid, source.Status)
+	}
+	return s.requeue(ctx, source, true)
 }
 
 // requeue marks a source as working again, puts it back in the queue, and answers
@@ -317,11 +341,11 @@ func (s *Service) RetrySource(ctx context.Context, id string) (domain.Source, er
 // deleting its segments, which deletes their vectors with them, so a `ready`
 // source sitting in the queue is a source answering questions with nothing while
 // the UI says it is searchable.
-func (s *Service) requeue(ctx context.Context, source domain.Source) (domain.Source, error) {
+func (s *Service) requeue(ctx context.Context, source domain.Source, reembed bool) (domain.Source, error) {
 	if err := s.store.SetSourceStatus(ctx, source.ID, domain.StatusProcessing, "", nil); err != nil {
 		return source, err
 	}
-	if err := s.enqueue(source.ID); err != nil {
+	if err := s.enqueue(job{sourceID: source.ID, reembed: reembed}); err != nil {
 		// Undo, or the row waits at "processing" for the next start's sweep.
 		if restore := s.store.SetSourceStatus(ctx, source.ID, source.Status, source.Detail, source.Warnings); restore != nil {
 			s.log.Warn("could not restore status after a refused retry",
@@ -381,9 +405,9 @@ func (s *Service) requireNotebook(ctx context.Context, id string) error {
 	return nil
 }
 
-func (s *Service) enqueue(sourceID string) error {
+func (s *Service) enqueue(j job) error {
 	select {
-	case s.jobs <- sourceID:
+	case s.jobs <- j:
 		return nil
 	default:
 		return fmt.Errorf("%w: %d uploads waiting", ErrBusy, len(s.jobs))
@@ -392,15 +416,27 @@ func (s *Service) enqueue(sourceID string) error {
 
 // ── worker ───────────────────────────────────────────────────────
 
+// job is one unit of queued work. Both kinds are keyed by source, because the
+// queue's job is to bound how much runs at once next to the model servers — the
+// difference is only whether the pipeline reads the file again.
+type job struct {
+	sourceID string
+	reembed  bool
+}
+
 func (s *Service) worker() {
 	defer close(s.done)
 	for {
 		select {
 		case <-s.stop:
 			return
-		case id := <-s.jobs:
+		case j := <-s.jobs:
 			ctx, cancel := context.WithTimeout(s.jobCtx, jobTimeout)
-			s.ingest(ctx, id)
+			if j.reembed {
+				s.reembed(ctx, j.sourceID)
+			} else {
+				s.ingest(ctx, j.sourceID)
+			}
 			cancel()
 		}
 	}
@@ -475,6 +511,60 @@ func (s *Service) ingest(ctx context.Context, sourceID string) {
 	s.log.Info("ingest done",
 		"source", sourceID, "kind", source.Kind, "segments", len(res.Segments),
 		"assets", len(assets), "embedded", "yes", "seconds", time.Since(start).Round(time.Millisecond))
+}
+
+// reembed replaces a source's vectors from the segments already in the store.
+//
+// On failure the source goes back to ready rather than to failed. Its previous
+// vectors are untouched — nothing is written until the new set is in hand — so it
+// is still searchable, and a failed source is excluded from retrieval, which would
+// make a broken button cost the user a source they could still use. The detail
+// carries why, so the row says both.
+func (s *Service) reembed(ctx context.Context, sourceID string) {
+	source, err := s.store.GetSource(ctx, sourceID)
+	if err != nil {
+		s.log.Warn("re-embed skipped", "source", sourceID, "err", err)
+		return
+	}
+
+	segments, err := s.store.ListSegments(ctx, sourceID)
+	if err != nil {
+		s.setStatus(ctx, sourceID, domain.StatusReady, "could not read the chunks to re-embed: "+err.Error(), source.Warnings)
+		return
+	}
+
+	start := time.Now()
+	if err := s.storeVectors(ctx, sourceID, source.Name, segments); err != nil {
+		s.log.Warn("re-embed failed", "source", sourceID, "segments", len(segments), "err", err)
+		s.setStatus(ctx, sourceID, domain.StatusReady, err.Error(), source.Warnings)
+		return
+	}
+
+	s.setStatus(ctx, sourceID, domain.StatusReady, "", source.Warnings)
+	s.log.Info("re-embed done", "source", sourceID, "segments", len(segments),
+		"seconds", time.Since(start).Round(time.Millisecond))
+}
+
+// storeVectors embeds segments and swaps them in as a source's whole vector set.
+func (s *Service) storeVectors(ctx context.Context, sourceID, title string, segments []domain.Segment) error {
+	if len(segments) == 0 {
+		return nil
+	}
+
+	embedder, err := s.embedder(s.settings.Get())
+	if err != nil {
+		return fmt.Errorf("could not start the embedder: %w", err)
+	}
+
+	vectors, err := embedder.Embed(ctx, title, segments)
+	if err != nil {
+		return err
+	}
+	if len(vectors) != len(segments) {
+		return fmt.Errorf("embedder returned %d vectors for %d segments",
+			len(vectors), len(segments))
+	}
+	return s.store.ReplaceEmbeddings(ctx, sourceID, vectors)
 }
 
 // embed turns segments into vectors and stores them.

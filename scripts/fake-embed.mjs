@@ -28,6 +28,20 @@ export class EmbedServer {
           return;
         }
 
+        // A harness running in another process cannot read this.requests, so it
+        // asks: how many batches arrived, and what the most recent one looked like.
+        if (req.url === '/stats') {
+          const last = this.requests.at(-1);
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({
+            requests: this.requests.length,
+            lastModel: last?.model ?? null,
+            lastInputs: last?.input?.length ?? 0,
+            lastPrompt: typeof last?.input?.[0] === 'string' ? last.input[0].slice(0, 40) : null
+          }));
+          return;
+        }
+
         if (this.down) {
           res.writeHead(503, { 'content-type': 'application/json' });
           res.end(JSON.stringify({ error: { message: 'all inference slots are busy' } }));
