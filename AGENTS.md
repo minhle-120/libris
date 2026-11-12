@@ -100,7 +100,7 @@ internal/
   chat/                research loop, its three tools, both prompts, synthesis call
   app/                 use cases shared by httpapi and mcpserver (+ ingest queue)
   events/              not built: status/token/job events
-  httpapi/             browser transport: JSON, files, embedded SPA (SSE later)
+  httpapi/             browser transport: JSON, files, embedded SPA, the SSE ask stream
   mcpserver/           not built: MCP transport
 web/                   Svelte source + embed.go + dist/ (committed)
 docs/adr/              one file per accepted decision
@@ -143,6 +143,12 @@ answer and is the only prose that survives.
   model, so prior tool-shaped turns cannot influence it, and real role messages for the
   synthesiser. `[[Chunk N]]` is stripped from history; a no-info turn is excluded
   entirely, user message included.
+- The turn is **persisted as it happens** (`app.Ask`): chat, user message, then the
+  assistant row *with its citations* before a word of the answer streams, then that row
+  closed by the final text. A crash mid-answer therefore leaves a UI that can still say
+  what the answer rested on, and `interrupted` is a status a reader is told rather than
+  a message that went missing. The `done` frame carries the stored row, so the client
+  cannot disagree with the database about what was said.
 
 Two rules that the layout exists to enforce:
 
@@ -175,6 +181,28 @@ offered to two notebooks is stored, rasterised and extracted once.
 failed`. Only `ready` sources are retrieved, so a half-ingested file cannot be
 cited. A process that died mid-flight leaves `processing`; `app.Service.Start`
 sweeps those to `failed` at boot so the UI can offer a retry.
+
+A **chat** is one conversation inside a notebook; a **message** is one turn of it.
+Only `user` and `assistant` messages are ever listed — the research model's tool calls
+are a trace, stored in `trace_json` on the assistant row and never selected by a list
+query, because a transcript of tool calls is not something a user should read.
+
+```go
+Chat{ID, NotebookID, Title, CreatedAt}
+Message{ID, ChatID, Role, Content, Status, Citations, CreatedAt}
+Citation{Chunk, Segment, DocID, SourceID, SourceName, Kind, Ordinal, Quote, Asset, Span}
+```
+
+`Message.Status` is the reader's vocabulary, not the loop's: `answered`, `no-info`,
+`ungrounded`, `canceled`, `interrupted`. They are different claims about the sentence in
+front of the reader, so a UI that renders them identically is lying. A `no-info` turn is
+excluded from later history: an earlier "I could not find that" reads, to the next turn,
+as evidence that the fact is absent from the world rather than absent from the library.
+
+A `Citation` is **copied out** of the segment, never referenced — `CitationFrom` clones
+the asset and drops its `Path`. Re-ingest deletes and rewrites a source's segment rows,
+and an answer written before that must not have its evidence rewritten along with them.
+That is also why a stored message never relies on a segment id as its only link.
 
 **Data directory** (`-data`), created on demand:
 
@@ -369,6 +397,10 @@ POST   /api/sources/{id}/reingest         rebuild from the original, any state �
 GET    /api/sources/{id}/segments         chunks + provenance + assets
 GET    /api/sources/{id}/original         the kept copy
 GET    /api/assets/{id...}                derived files; id contains slashes
+POST   /api/notebooks/{id}/chats          {"title":…} → 201
+GET    /api/notebooks/{id}/chats          ·  DELETE …/chats/{chatID} → 204
+GET    /api/notebooks/{id}/chats/{chatID}/messages
+POST   /api/notebooks/{id}/chats/{chatID}/ask   SSE, see below
 GET    /                                  embedded SPA, index.html fallback
 ```
 
@@ -392,8 +424,20 @@ Both file endpoints stream through `http.ServeContent`, so Range works — that 
 what lets the browser seek inside an audio slice and a PDF viewer page without
 downloading the file.
 
-Planned: SSE progress instead of polling, `POST /api/notebooks/{id}/ask`
-(SSE: status → citations → tokens), `/mcp`.
+**A question streams.** `POST …/ask` answers `text/event-stream` with `status`, then
+`citations`, then `delta`s, then `done` — in that order, because the order is the
+contract: the citations arrive before the prose that rests on them, so the UI can show
+what an answer is grounded in while it is still being written. A `status` frame and the
+reasoning half of a `delta` carry `{"text":…}`; a `delta` is
+`{"text":…,"reasoning":…}`, and reasoning is never appended to the answer. `citations`
+carries frozen `domain.Citation` values and `done` the stored `domain.Message`, so the
+client reconciles with the server rather than with its own accumulation. Once the stream
+has opened there is no status code left to set, so a failure arrives as an `error`
+frame; before it opens, the `fail` mapping applies as everywhere else. The request
+context is the cancellation — hang up and the turn ends, which is why there is no stop
+endpoint to fall out of sync with.
+
+Planned: SSE progress for ingest instead of polling, and `/mcp`.
 
 ---
 
@@ -428,6 +472,19 @@ Planned: SSE progress instead of polling, `POST /api/notebooks/{id}/ask`
   `processing` (an effect that destroys itself when idle).
 - `NotebookView` and `SettingsView` define no labels, defaults or ranges for
   settings, and no fixtures for anything else.
+- `ChatPanel.svelte` holds no model of a turn: when the stream ends it re-reads the
+  thread, so the server's rows are what is on screen. The one thing it adds itself is
+  the question at the moment it is sent — a half-minute turn that shows only a spinner
+  reads as a hang.
+- `lib/chunks.ts` is the only place that knows the `[[Chunk N]]` grammar. A label with
+  no citation behind it is dropped rather than rendered as a dead button: the registry
+  holds exactly what the model was shown, so an invented `[[Chunk 99]]` means a model
+  made one up and the honest response is to remove it and let the sentence stand. A
+  *malformed* label is left as the text it is, because silently deleting it would hide a
+  prompt bug. `trimPartialLabel` holds back a label that is still arriving.
+- `citationLocator` (in `format.ts`) is the whole rule for what a citation chip says:
+  a time range for audio, a page for everything else. The character range a text chunk
+  cites is what the viewer highlights when the chip is opened, not what a label claims.
 
 ---
 
@@ -442,8 +499,8 @@ Planned: SSE progress instead of polling, `POST /api/notebooks/{id}/ask`
   every termination path, the gate, malformed arguments and the transcript invariant
   are asserted with no model in the room. The scripted fake fails the test if the loop
   asks for a reply it was not given, which is what pins the iteration budget.
-- Coverage today: `domain` 100%, `llm` 100%, `index` 95%, `config` 97%, `ingest` 98%,
-  `chat` 92%, `httpapi` 89%, `app` 88%, `retrieve` 88%, `store/sqlite` 81%.
+- Coverage today: `domain` 100%, `llm` 99%, `ingest` 98%, `config` 97%, `index` 94%,
+  `chat` 92%, `retrieve` 88%, `httpapi` 88%, `app` 85%, `store/sqlite` 81%; 89% overall.
   The gaps are DB-error guards
   and unreachable IO/reflect branches; do not contort production code to reach them.
 - `make e2e` (`scripts/e2e-embed.mjs`) runs the **real binary** against a fake
@@ -464,13 +521,23 @@ Planned: SSE progress instead of polling, `POST /api/notebooks/{id}/ask`
   sampling parameters creeping back into requests.
 - No sleeps for synchronisation, no network in unit tests.
 - **Browser checks**: `make ui` builds, starts the binary against a throwaway
-  data directory, and runs `scripts/ui-upload.mjs` and `scripts/ui-drop.mjs`
-  over CDP (`scripts/cdp.mjs`, no dependencies). They assert on DOM state —
-  computed text and counts — not screenshots. 51 checks cover create-notebook,
-  file-picker upload, `processing → ready` polling, dedupe, drag-and-drop,
-  unsupported files, filtering, detach, and console/page errors. They skip
-  successfully when Chrome is missing. They caught a 10× byte-formatting bug
+  data directory, and runs `scripts/ui-upload.mjs`, `scripts/ui-drop.mjs` and
+  `scripts/ui-ask.mjs` over CDP (`scripts/cdp.mjs`, no dependencies). They assert on
+  DOM state — computed text and counts — not screenshots. 100 checks cover
+  create-notebook, file-picker upload, `processing → ready` polling, dedupe,
+  drag-and-drop, unsupported files, filtering, detach, and a whole question: streaming,
+  citations arriving before the answer, a chip opening the source on the cited chunk,
+  a reload, the model refusing, the model answering in prose, a dead server, and Stop.
+  They skip successfully when Chrome is missing. They caught a 10× byte-formatting bug
   that no amount of staring at the component would have found.
+- `scripts/fake-embed.mjs` is one port standing in for llama.cpp: `/v1/embeddings`,
+  `/v1/rerank` and `/v1/chat/completions` (non-streaming for the research turn, SSE for
+  synthesis, with the answer split into 9-character pieces so the client has to
+  reassemble frames — including one that splits a `[[Chunk 1]]` label in half). The
+  research reply is derived from the request rather than scripted, so one fake answers a
+  question about any corpus; `/control {"script":…,"hold":…}` pins an exact sequence
+  when a check needs a specific way to end. Assert against it through `/stats`, which
+  reports what the *server* saw, not what the client intended.
 
 ---
 
@@ -654,3 +721,31 @@ Planned: SSE progress instead of polling, `POST /api/notebooks/{id}/ask`
 - Stripping a chunk label out of an answer is not a regex replace: the space a label
   stood in has to go with it *when a full stop follows* (`1990 [[Chunk 2]].` →
   `1990.`) and survive when a word does (`a [[Chunk 1]] b` → `a b`, never `ab`).
+- Page code inside a `ui.eval` template literal cannot contain a **nested** template
+  literal: the inner backtick ends the outer one, and the syntax error surfaces dozens
+  of lines later as "missing ) after argument list" at an innocent `if`. Build those
+  strings with `+`.
+- `until("the last assistant turn")` returns the turn from the *previous* question the
+  first time it runs, because that turn is also a finished row. Take the count before
+  the click and wait for the count to grow — and give the poll longer than the thing
+  takes: an answer streamed a few characters at a time outran a 6-second wait and
+  reported a working Stop button as broken.
+- A live bubble shows its status in the same slot as the answer (`p.answer.pulse`), so
+  "`.answer` has more than ten characters" measures *"Searching library for …"* and lets
+  a check click Stop on a turn that has written nothing yet. Select
+  `.answer:not(.pulse)` when what is being asserted is prose.
+- `button[title="Stop"]` does not match `title="Stop this question"`. Match the prefix
+  (`title^=`), or select by the label a person would read, and have the failure message
+  print the titles that were there instead.
+- A browser check that never calls `checks.report()` prints its FAIL lines and exits 0,
+  so `make ui` goes green around a broken suite. The failure count is the exit status.
+- In the fake server, `/control` applies `reset` **first**: a caller that says "start
+  over, and say this" means the script it named, and a reset processed afterwards
+  deleted the script, the hold flag and the dead-server flag in the same request — which
+  showed up as four unrelated checks failing with the previous answer.
+- The editor's svelte language service keeps the old shape of a `.ts` module after it
+  is rewritten and reports real exports as missing. `make web-check` is the gate; the
+  inline findings are not.
+- A citation chip must be built from the frozen `Citation`, not from a segment id
+  looked up at render time: the store's citation carries the quote, the span and the
+  asset, and re-ingest can have replaced every segment row since the answer was written.
