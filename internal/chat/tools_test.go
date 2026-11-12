@@ -18,7 +18,10 @@ import (
 // both of those change if a layer in between is mocked out.
 
 type stubCorpus struct {
-	hits     []domain.Hit
+	hits []domain.Hit
+	// batches answers each search in turn, for a turn whose searches find different
+	// things; the last batch repeats once they run out.
+	batches  [][]domain.Hit
 	calls    int
 	gotLimit int
 	err      error
@@ -32,6 +35,13 @@ func (s *stubCorpus) SearchSegments(_ context.Context, notebookID string, _ []fl
 	}
 	if notebookID != "nb1" {
 		return nil, errors.New("search escaped the notebook: " + notebookID)
+	}
+	if len(s.batches) > 0 {
+		i := s.calls - 1
+		if i >= len(s.batches) {
+			i = len(s.batches) - 1
+		}
+		return s.batches[i], nil
 	}
 	return s.hits, nil
 }
@@ -203,7 +213,7 @@ func TestEverythingIsRefusedBeforeTheFirstSearch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reply.Kind != NoInfo {
+	if reply.Kind != GaveUp {
 		t.Errorf("after searching, no_info_found gave %v", reply.Kind)
 	}
 }
@@ -372,8 +382,8 @@ func TestFinalizeEndsTheTurnWithIndicesOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reply.Kind != Synthesize {
-		t.Errorf("Kind = %v, want Synthesize", reply.Kind)
+	if reply.Kind != Finalized {
+		t.Errorf("Kind = %v, want Finalized", reply.Kind)
 	}
 	if reply.Content != "" {
 		t.Errorf("finalize returned content (%q): the answer is written by the synthesiser", reply.Content)
@@ -420,8 +430,8 @@ func TestFinalizeAcceptsWhatModelsSend(t *testing.T) {
 			t.Errorf("%s raised: %v", c.args, err)
 			continue
 		}
-		if reply.Kind != Synthesize {
-			t.Errorf("%s → %v, want Synthesize", c.args, reply.Kind)
+		if reply.Kind != Finalized {
+			t.Errorf("%s → %v, want Finalized", c.args, reply.Kind)
 		}
 		if len(reply.Indices) != len(c.want) {
 			t.Errorf("%s → %v, want %v", c.args, reply.Indices, c.want)
@@ -450,8 +460,8 @@ func TestNoInfoCarriesTheModelReasonVerbatim(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reply.Kind != NoInfo {
-		t.Errorf("Kind = %v, want NoInfo", reply.Kind)
+	if reply.Kind != GaveUp {
+		t.Errorf("Kind = %v, want GaveUp", reply.Kind)
 	}
 	if reply.Reason != reason {
 		t.Errorf("reason was rewritten: %q", reply.Reason)
@@ -474,8 +484,8 @@ func TestNoInfoWithoutAReasonStillAnswers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reply.Kind != NoInfo || strings.TrimSpace(reply.Reason) == "" {
-		t.Errorf("%v %q, want NoInfo with something to show the user", reply.Kind, reply.Reason)
+	if reply.Kind != GaveUp || strings.TrimSpace(reply.Reason) == "" {
+		t.Errorf("%v %q, want GaveUp with something to show the user", reply.Kind, reply.Reason)
 	}
 }
 

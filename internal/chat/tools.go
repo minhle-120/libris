@@ -22,6 +22,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -46,10 +47,10 @@ type Kind int
 const (
 	// Continue means: append the tool message and ask the model again.
 	Continue Kind = iota
-	// Synthesize means: the turn is over and the answer comes from these indices.
-	Synthesize
-	// NoInfo means: the turn is over and the answer is Reason.
-	NoInfo
+	// Finalized means: the turn is over and the answer comes from these indices.
+	Finalized
+	// GaveUp means: the turn is over and the answer is Reason.
+	GaveUp
 )
 
 // Call is one tool call exactly as the model emitted it: name plus the raw argument
@@ -78,6 +79,11 @@ type Reply struct {
 	// Reason is the model's own account of why the library cannot answer. It is
 	// the user-visible answer for that turn, so it is carried verbatim.
 	Reason string
+
+	// Status is what the user should be told this call did, in the caller's own
+	// words — progress text for a turn that takes a minute of CPU inference. Empty
+	// for calls that say nothing worth reporting.
+	Status string
 }
 
 // Tools are the three calls bound to one turn: one registry to mint labels in, one
@@ -190,11 +196,11 @@ func (t *Tools) Execute(ctx context.Context, call Call) (Reply, error) {
 		// that found nothing is still a search. The evaluation note is what turns a
 		// one-shot retriever into a loop.
 		t.searched = true
-		body, err := t.search(ctx, call.Arguments)
+		body, running, err := t.search(ctx, call.Arguments)
 		if err != nil {
 			return Reply{}, err
 		}
-		return Reply{Content: body}, nil
+		return Reply{Content: body, Status: running}, nil
 
 	case ToolFinalize:
 		var a finalizeArgs
@@ -203,7 +209,7 @@ func (t *Tools) Execute(ctx context.Context, call Call) (Reply, error) {
 		// out of the resolved chunks. Returning text here would collapse the
 		// two-call design into a one-call one, with the research model's prose as the
 		// answer it was never asked to write.
-		return Reply{Kind: Synthesize, Indices: []int(a.Indices)}, nil
+		return Reply{Kind: Finalized, Indices: []int(a.Indices)}, nil
 
 	case ToolNoInfo:
 		var a noInfoArgs
@@ -215,7 +221,7 @@ func (t *Tools) Execute(ctx context.Context, call Call) (Reply, error) {
 			// message in the UI is not an outcome worth preserving.
 			reason = noInfoFallback
 		}
-		return Reply{Kind: NoInfo, Reason: reason}, nil
+		return Reply{Kind: GaveUp, Reason: reason}, nil
 	}
 
 	// An unknown tool is a model-shaped problem: report it, keep the turn. This is
@@ -225,31 +231,34 @@ func (t *Tools) Execute(ctx context.Context, call Call) (Reply, error) {
 }
 
 // search is recall → rerank → registration, then the tool message the model reads.
-func (t *Tools) search(ctx context.Context, rawArgs string) (string, error) {
+func (t *Tools) search(ctx context.Context, rawArgs string) (body string, running string, err error) {
 	var a searchArgs
 	toolArguments(rawArgs, &a)
 
 	if strings.TrimSpace(a.Keywords) == "" {
 		// The reference returns a bare "No keywords provided."; the nudge is
 		// attached because the model otherwise tends to repeat the call unchanged.
-		return noKeywords, nil
+		return noKeywords, "", nil
 	}
+	// Echoed back to the user, so it says which words are being looked for rather
+	// than that something is happening.
+	running = fmt.Sprintf("Searching library for %q…", a.Keywords)
 
 	evidence, err := t.retrieve.Search(ctx, t.registry, t.notebookID, a.Keywords, a.Query, t.opts)
 	if err != nil {
 		if errors.Is(err, retrieve.ErrNoKeywords) {
-			return noKeywords, nil
+			return noKeywords, running, nil
 		}
-		return "", err
+		return "", running, err
 	}
 	if len(evidence) == 0 {
-		return nothingFound, nil
+		return nothingFound, running, nil
 	}
 
 	// Registration order is relevance; the body is in document order, which is what
 	// retrieve.Search already did — the model reads a passage, and the ids still
 	// record what the search thought was most useful.
-	return retrieve.PlainText(evidence) + "\n\n" + evaluationNote(t.question), nil
+	return retrieve.PlainText(evidence) + "\n\n" + evaluationNote(t.question), running, nil
 }
 
 // ── the text half of the contract ────────────────────────────────

@@ -96,8 +96,8 @@ internal/
   store/sqlite/        migrations + every query (sources, segments, notebooks)
   ingest/              bytes → segments (+ pdf, audio, sink, chunker, detect)
   index/               embed (text/image/audio → vectors via llm); lexical not built
-  retrieve/            not built: recall → rerank → evidence registry
-  chat/                not built: research loop, prompts, synthesis
+  retrieve/            recall → rerank → evidence registry ([[Chunk N]] ids)
+  chat/                research loop, its three tools, both prompts, synthesis call
   app/                 use cases shared by httpapi and mcpserver (+ ingest queue)
   events/              not built: status/token/job events
   httpapi/             browser transport: JSON, files, embedded SPA (SSE later)
@@ -117,6 +117,32 @@ mcpserver┘                 └────────────> store
 
 `chat` takes evidence as *input*; it must not call `retrieve` itself. Orchestration
 lives in `app` so both transports share one implementation.
+
+**The research turn** (`references/research-loop-spec.md` is the behaviour spec, ported
+in `internal/chat`). Two model calls, never one: a tool-calling *research* turn that
+plans retrieval and is never read by a user, then a *synthesis* call that writes the
+answer and is the only prose that survives.
+
+- The research model has exactly three tools, named as the spec names them because the
+  gate message and the evaluation note quote them: `query_knowledge_base`,
+  `finalize_research_response`, `no_info_found`. Their JSON Schema is *generated* from
+  the structs their arguments decode into — rule 2 applies to tool arguments too.
+- `keywords` is the embedding probe, `query` the reranking objective. Never swapped.
+- `tool_choice: "required"` on every research call, plus the mandatory-first-search
+  gate (a refusal-shaped tool message that does not unlock the gate), plus a prose
+  fallback for models that ignore it: the reference insists on all three, and a
+  `raw-answer` is reported as ungrounded rather than dressed up as a cited answer.
+- Six ways a turn ends: `finalize`, `no_info_found`, budget-exhausted-with-evidence
+  (salvage — answer from everything found), budget-exhausted-with-nothing, prose, cancel.
+- Chunk ids are per turn and dense, and the registry holds exactly what the model was
+  shown, so salvage cannot cite a chunk nobody read. A hallucinated `[[Chunk 99]]` is
+  dropped rather than fatal.
+- The synthesis prompt is system + real chat history + knowledge block + `### User
+  Query:`. The research trace is never in it.
+- The two histories are built differently on purpose: flattened text for the research
+  model, so prior tool-shaped turns cannot influence it, and real role messages for the
+  synthesiser. `[[Chunk N]]` is stripped from history; a no-info turn is excluded
+  entirely, user message included.
 
 Two rules that the layout exists to enforce:
 
@@ -412,8 +438,13 @@ Planned: SSE progress instead of polling, `POST /api/notebooks/{id}/ask`
 - Hermetic by default: `httptest` for HTTP, `fakeRunner` for external processes,
   `t.TempDir()` for files, `fstest.MapFS` for assets. Tests that need real poppler
   skip themselves when the binaries are missing.
-- Coverage today: `domain` 100%, `llm` 100%, `index` 95%, `config` 97%, `ingest`
-  98%, `httpapi` 89%, `app` 88%, `store/sqlite` 81%. The gaps are DB-error guards
+- The research loop is driven by a scripted model — a slice of canned completions — so
+  every termination path, the gate, malformed arguments and the transcript invariant
+  are asserted with no model in the room. The scripted fake fails the test if the loop
+  asks for a reply it was not given, which is what pins the iteration budget.
+- Coverage today: `domain` 100%, `llm` 100%, `index` 95%, `config` 97%, `ingest` 98%,
+  `chat` 92%, `httpapi` 89%, `app` 88%, `retrieve` 88%, `store/sqlite` 81%.
+  The gaps are DB-error guards
   and unreachable IO/reflect branches; do not contort production code to reach them.
 - `make e2e` (`scripts/e2e-embed.mjs`) runs the **real binary** against a fake
   embeddings server speaking llama.cpp's shape, and reads the database with
@@ -485,9 +516,13 @@ Planned: SSE progress instead of polling, `POST /api/notebooks/{id}/ask`
 4. **Multimodal retrieval strategy.** Native audio/image embeddings, text
    renditions (captions/transcripts), or both. `Segment.Text` currently stays
    empty for images.
-5. **Whether the research/synthesis split survives**, and whether `tool_choice:
-   "required"` behaves on real local models (verified in llama.cpp's parser, not
-   yet against a live model under load).
+5. **Whether the research/synthesis split survives.** Built as the spec has it, with
+   `tool_choice: "required"` and the prose fallback, so the split can be re-litigated
+   against real transcripts rather than in the abstract. Still unverified: whether
+   local models obey `tool_choice: "required"` under load, and whether the reference's
+   iteration budget and prompt phrasing suit the models actually installed here —
+   `maxIterations` and `historyMessages` are settings, so both are measurable without a
+   rebuild.
 6. ~~Storage schema~~ — built: SQLite via `ncruces/go-sqlite3`, embedded
    migrations, `embedding BLOB` reserved and NULL. Still open: brute-force
    cosine in Go versus `sqlite-vec` once the corpus is big enough to care.
@@ -609,4 +644,13 @@ Planned: SSE progress instead of polling, `POST /api/notebooks/{id}/ask`
 - Degenerate fixtures hide logic bugs. A fixture of 20 identical lines has a
   period-10 word sequence, so *every* 100-word window is identical and full-chunk
   shading is correct — assert the overlap on unique words, where 50 words is a
-  number that can be wrong.
+  number that can be wrong. Same trap from the other side: ten `domain.Hit`s all
+  reading `"chunk"` are **one** chunk to a content-keyed registry, so a "takes
+  FinalTopK" test written with them proves only that dedupe works.
+- `Render` returns one content part per text chunk and **two** for a raster — label,
+  then pixels. A blank line inserted between *parts* detaches a page's label from its
+  image, and llama.cpp pairs images with prompt markers by position, so an answer
+  cites one page while the model read another's picture. Separate chunks, never parts.
+- Stripping a chunk label out of an answer is not a regex replace: the space a label
+  stood in has to go with it *when a full stop follows* (`1990 [[Chunk 2]].` →
+  `1990.`) and survive when a word does (`a [[Chunk 1]] b` → `a b`, never `ab`).

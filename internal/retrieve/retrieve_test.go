@@ -523,3 +523,34 @@ func TestRenderNothing(t *testing.T) {
 		t.Errorf("rendering nothing gave %v, %v", parts, err)
 	}
 }
+
+// A tool result is a string, so media is named; the synthesis prompt is a message
+// with content parts, so there it is shown. Both use one label, so the model cannot
+// see two different names for the same page.
+func TestPlainTextNamesMediaAndKeepsTheSameLabels(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(textHit("doc1", 0, "the coast retreats 3mm a year"))
+	reg.Register(imageHit("doc1#pages", 3, 4))
+
+	body := PlainText(reg.All())
+	if !strings.Contains(body, "[[Chunk 1]]\nthe coast retreats 3mm a year") {
+		t.Errorf("text chunk rendered as:\n%s", body)
+	}
+	if !strings.Contains(body, "[[Chunk 2]] doc1.pdf page 4 — image") {
+		t.Errorf("media chunk not labelled:\n%s", body)
+	}
+	if strings.Contains(body, "data:image") {
+		t.Error("PlainText inlined pixels")
+	}
+
+	// One label per chunk, in both renderings.
+	parts, err := newRetriever(&fakeCorpus{}, &fakeEmbed{}, nil, &fakeAssets{
+		files: map[string][]byte{imageHit("doc1#pages", 3, 4).Segment.Asset.Path: []byte("PNG")},
+	}).Render(reg.All())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := partsText(parts); !strings.Contains(got, "[[Chunk 2]] doc1.pdf page 4 — image") {
+		t.Errorf("Render disagrees with PlainText:\n%s", got)
+	}
+}
