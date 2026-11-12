@@ -15,6 +15,16 @@ const stats = async () => {
   if (!embed) return { requests: 0, lastPrompt: null };
   return (await fetch(`${embed}/stats`)).json();
 };
+
+/** The Node-side twin of `ui.until`: poll something that is not in the page. */
+async function poll(tries, every, step) {
+  for (let i = 0; i < tries; i++) {
+    const value = await step();
+    if (value) return value;
+    await new Promise((r) => setTimeout(r, every));
+  }
+  return null;
+}
 const control = (down) =>
   fetch(`${embed}/control`, {
     method: 'POST',
@@ -284,6 +294,16 @@ const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ui-pr
       row.querySelector('button[title^="Run this file"]').click();
       return true;
     `);
+    // Wait on the socket, not the badge. The row is already `ready` when the rebuild
+    // is clicked, so a poll that returns as soon as it sees `ready` returns before the
+    // pipeline has run — and then reports a working rebuild as one that asked the
+    // embedding server nothing.
+    const after =
+      (await poll(150, 100, async () => {
+        const s = await stats();
+        return s.requests > before.requests ? s : null;
+      })) ?? (await stats());
+
     const again = await ui.until(`
       const row = [...document.querySelectorAll('.source')].find((r) =>
         r.textContent.includes('libris-retry-fixture'));
@@ -292,13 +312,12 @@ const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ui-pr
         ? { badge, facts: row?.querySelector('.facts')?.textContent.replace(/\s+/g, ' ').trim() ?? null }
         : null;
     `);
-    const after = await stats();
-    checks.check('rebuilding brings the row back to ready', again?.badge === 'ready', () => `badge=${again?.badge}`);
     checks.check(
       'a rebuild actually asked the embedding server again',
       after.requests > before.requests,
       () => `requests ${before.requests} → ${after.requests}`
     );
+    checks.check('rebuilding brings the row back to ready', again?.badge === 'ready', () => `badge=${again?.badge}`);
     checks.check(
       'the rebuilt row is the same source, not a new one',
       !!again?.facts && again.facts === offered.facts,
