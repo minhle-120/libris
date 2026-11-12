@@ -109,6 +109,12 @@ func main() {
 		Embedder: func(cfg config.Config) (app.Embedder, error) {
 			return embedders.For(cfg)
 		},
+		// The answer path. Chats and Search are the same database the sources live
+		// in — one process owns the directory — and the models are resolved per
+		// question for the same reason the embedder is.
+		Chats:     db,
+		Search:    db,
+		Models:    modelSource(&clients, embedders),
 		Originals: filepath.Join(*dataDir, "originals"),
 		Assets:    filepath.Join(*dataDir, "assets"),
 		Logger:    log,

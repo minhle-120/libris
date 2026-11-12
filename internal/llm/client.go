@@ -149,13 +149,18 @@ func (c *Client) Rerank(ctx context.Context, req RerankRequest) (*RerankResponse
 // RerankScores is Rerank for a caller that wants the scores, not the wire shape:
 // one score per document, in the order the documents were sent.
 //
+// model is the caller's, not the client's. A reranker name is a setting, and a
+// setting that is saved but never sent is worse than one that does not exist: the
+// UI says the reranker is bge-reranker-v2-m3 while the server answers as whatever
+// it happens to have loaded, and nothing in the response would ever say so.
+//
 // The mapping is done here because the response reports positions in *its* order,
 // not ours — a Jina-style server sorts descending and may return fewer rows than it
 // was given. A caller that assumed positional responses would silently score the
 // wrong chunks, which is the failure this pipeline is built not to have. Missing
 // rows score zero, so an unranked document sorts last rather than anywhere plausible.
-func (c *Client) RerankScores(ctx context.Context, question string, docs []RerankDoc) ([]float64, error) {
-	resp, err := c.Rerank(ctx, RerankRequest{Query: question, Documents: docs})
+func (c *Client) RerankScores(ctx context.Context, model, question string, docs []RerankDoc) ([]float64, error) {
+	resp, err := c.Rerank(ctx, RerankRequest{Model: model, Query: question, Documents: docs})
 	if err != nil {
 		return nil, err
 	}

@@ -85,12 +85,12 @@ func TestRerankDocumentWithImage(t *testing.T) {
 // caller that read scores positionally would attach them to the wrong chunks —
 // citations pointing at passages that were merely nearby.
 func TestRerankScoresAlignToTheDocumentsSent(t *testing.T) {
-	srv, _ := server(t, 200, `{"results":[
+	srv, rec := server(t, 200, `{"results":[
 		{"index":2,"relevance_score":0.9},
 		{"index":0,"relevance_score":0.4}]}`, nil)
 	c := newClient(t, llm.Config{ChatURL: "http://unused", RerankURL: srv.URL})
 
-	scores, err := c.RerankScores(context.Background(), "q", textDocs("a", "b", "c"))
+	scores, err := c.RerankScores(context.Background(), "rerank-model", "q", textDocs("a", "b", "c"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,6 +102,18 @@ func TestRerankScoresAlignToTheDocumentsSent(t *testing.T) {
 	}
 	if scores[1] != 0 {
 		t.Errorf("the omitted document scored %v, want the zero that ranks it last", scores[1])
+	}
+
+	// The name the user typed reaches the server. Sent without it, a reranker
+	// setting is decoration.
+	var sent struct {
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal(rec.body, &sent); err != nil {
+		t.Fatal(err)
+	}
+	if sent.Model != "rerank-model" {
+		t.Errorf("request model = %q, want the configured reranker name", sent.Model)
 	}
 }
 
@@ -117,7 +129,7 @@ func TestRerankScoresRejectsImpossibleAnswers(t *testing.T) {
 		srv, _ := server(t, 200, body, nil)
 		c := newClient(t, llm.Config{ChatURL: "http://unused", RerankURL: srv.URL})
 
-		if _, err := c.RerankScores(context.Background(), "q", textDocs("a", "b")); err == nil {
+		if _, err := c.RerankScores(context.Background(), "m", "q", textDocs("a", "b")); err == nil {
 			t.Errorf("%s: accepted without error", name)
 		}
 	}
@@ -127,7 +139,7 @@ func TestRerankScoresRefusesNoDocuments(t *testing.T) {
 	srv, _ := server(t, 200, `{"results":[]}`, nil)
 	c := newClient(t, llm.Config{ChatURL: "http://unused", RerankURL: srv.URL})
 
-	_, err := c.RerankScores(context.Background(), "q", nil)
+	_, err := c.RerankScores(context.Background(), "m", "q", nil)
 	if err == nil || !strings.Contains(err.Error(), "no documents") {
 		t.Errorf("err = %v, want the no-documents guard", err)
 	}

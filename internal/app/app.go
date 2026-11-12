@@ -15,6 +15,7 @@ import (
 	"libris/internal/config"
 	"libris/internal/domain"
 	"libris/internal/ingest"
+	"libris/internal/retrieve"
 )
 
 // Store is what the use cases need from persistence. Declared by the consumer
@@ -40,6 +41,26 @@ type Store interface {
 	GetAsset(context.Context, string) (domain.Asset, error)
 
 	FailStaleSources(context.Context) (int64, error)
+}
+
+// Chats is the persistence a conversation needs, kept off Store because ingest
+// should not have to carry it: a build that only files sources away has no use for
+// a message row, and a fake built to test ingest should not grow methods it never
+// calls.
+type Chats interface {
+	CreateChat(context.Context, string, string) (domain.Chat, error)
+	GetChat(context.Context, string) (domain.Chat, error)
+	ListChats(context.Context, string) ([]domain.Chat, error)
+	DeleteChat(context.Context, string) error
+
+	AppendMessage(context.Context, domain.Message) (domain.Message, error)
+	UpdateMessage(context.Context, int64, domain.MessageUpdate) error
+	// ExcludeMessages marks whole turns — a question and its answer together — as not
+	// knowledge, so they reach no later turn's history.
+	ExcludeMessages(context.Context, ...int64) error
+	GetMessage(context.Context, int64) (domain.Message, error)
+	ListMessages(context.Context, string) ([]domain.Message, error)
+	RecentMessages(context.Context, string, int) ([]domain.Message, error)
 }
 
 // Settings is the live configuration. Ingest reads it per job, so changing the
@@ -104,6 +125,17 @@ type Options struct {
 	Settings  Settings
 	Processor ProcessorFor
 	Embedder  EmbedderFor
+
+	// Chats, Models and Search are the answer path. All three are optional: a
+	// Service wired for ingest alone is a legitimate build, and Ask says plainly
+	// that this build cannot answer rather than failing somewhere underneath.
+	//
+	// Search is retrieve's own interface rather than a copy of it here. The store
+	// satisfies it, retrieve declared it, and a second declaration of the same shape
+	// in app would be two definitions of one thing.
+	Chats     Chats
+	Models    ModelsFor
+	Search    retrieve.Corpus
 	Originals string // where kept originals live; created if absent
 	Assets    string // where derived files live; created if absent
 	Logger    *slog.Logger
@@ -115,6 +147,9 @@ type Service struct {
 	settings  Settings
 	processor ProcessorFor
 	embedder  EmbedderFor
+	chats     Chats
+	models    ModelsFor
+	search    retrieve.Corpus
 	originals Originals
 	assetsDir string
 	log       *slog.Logger
@@ -154,6 +189,9 @@ func New(opts Options) (*Service, error) {
 		settings:  opts.Settings,
 		processor: opts.Processor,
 		embedder:  opts.Embedder,
+		chats:     opts.Chats,
+		models:    opts.Models,
+		search:    opts.Search,
 		originals: Originals{Dir: opts.Originals},
 		assetsDir: opts.Assets,
 		log:       log,
