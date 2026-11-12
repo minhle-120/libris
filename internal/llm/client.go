@@ -146,6 +146,33 @@ func (c *Client) Rerank(ctx context.Context, req RerankRequest) (*RerankResponse
 	return &out, nil
 }
 
+// RerankScores is Rerank for a caller that wants the scores, not the wire shape:
+// one score per document, in the order the documents were sent.
+//
+// The mapping is done here because the response reports positions in *its* order,
+// not ours — a Jina-style server sorts descending and may return fewer rows than it
+// was given. A caller that assumed positional responses would silently score the
+// wrong chunks, which is the failure this pipeline is built not to have. Missing
+// rows score zero, so an unranked document sorts last rather than anywhere plausible.
+func (c *Client) RerankScores(ctx context.Context, question string, docs []RerankDoc) ([]float64, error) {
+	resp, err := c.Rerank(ctx, RerankRequest{Query: question, Documents: docs})
+	if err != nil {
+		return nil, err
+	}
+	if len(resp.Results) > len(docs) || len(resp.Data) > len(docs) {
+		return nil, fmt.Errorf("llm: rerank: %d results for %d documents", len(resp.Results), len(docs))
+	}
+
+	scores := make([]float64, len(docs))
+	for _, r := range resp.Ranked() {
+		if r.Index < 0 || r.Index >= len(docs) {
+			return nil, fmt.Errorf("llm: rerank: result index %d is outside the %d documents sent", r.Index, len(docs))
+		}
+		scores[r.Index] = r.RelevanceScore
+	}
+	return scores, nil
+}
+
 // ── transport ─────────────────────────────────────────────────────
 
 func (c *Client) doJSON(ctx context.Context, base, suffix string, in, out any) error {

@@ -18,6 +18,7 @@ package index
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -32,9 +33,11 @@ import (
 // making a request that a busy server must refuse outright.
 const batchLimit = 8
 
-// maxAssetBytes refuses to inline a media file this large. It is not a tuning
-// knob: past this the request is the problem, not the model.
-const maxAssetBytes = 32 << 20
+// MaxAssetBytes refuses to inline a media file this large. It is not a tuning
+// knob: past this the request is the problem, not the model. It is exported
+// because retrieval inlines rasters too — a page image sent to a reranker or to
+// the answer model is the same hazard and deserves the same one limit.
+const MaxAssetBytes = 32 << 20
 
 // Embedder produces a vector for every segment it is given, or returns an error.
 // It never returns fewer vectors than it was asked for: a source with some
@@ -130,6 +133,44 @@ func (e *Embedder) Embed(ctx context.Context, title string, segments []domain.Se
 	return out, nil
 }
 
+// EmbedQuery vectors one retrieval string and returns the vector without storing
+// it anywhere. It takes the query-side prefix so the two halves of the pair cannot
+// drift: the document side is always DocumentPrompt, and nothing that goes through
+// this function may reach the store, because a query prefix in a stored vector
+// quietly moves that vector into a space the documents were never in.
+//
+// prefix is index.QuerySearch or index.QueryAnswer — the choice is retrieval
+// policy, not this package's, so it is a parameter. An empty prefix embeds the
+// bare text, which is legal and worse.
+func (e *Embedder) EmbedQuery(ctx context.Context, prefix, text string) ([]float32, error) {
+	if strings.TrimSpace(text) == "" {
+		return nil, errors.New("index: refusing to embed an empty query")
+	}
+
+	resp, err := e.client.Embed(ctx, llm.EmbedRequest{
+		Model:          e.model,
+		Input:          []llm.EmbedInput{llm.TextInput(SteerQuery(prefix, text))},
+		EncodingFormat: "float",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("index: embedding query through %s: %w", e.baseURL, err)
+	}
+	if len(resp.Data) != 1 {
+		return nil, fmt.Errorf("index: %s returned %d vectors for 1 query", e.baseURL, len(resp.Data))
+	}
+	vec := resp.Data[0].Embedding
+	if err := e.checkDim("query", vec); err != nil {
+		return nil, err
+	}
+	return vec, nil
+}
+
+// Identity is what this embedder writes into the store's model column. The search
+// side has to ask the same question the write side answered, so the value is read
+// from here rather than rebuilt from settings next door — two places holding a
+// model name is how a search starts filtering for a space nothing was written in.
+func (e *Embedder) Identity() string { return ModelIdentity(e.model) }
+
 // checkDim rejects a response that cannot be stored next to the others. Mixing
 // dimensions is silent corruption: cosine over ragged vectors still computes,
 // it just computes something meaningless.
@@ -193,9 +234,9 @@ func (e *Embedder) inputFor(title string, seg domain.Segment) (llm.EmbedInput, e
 		if err != nil {
 			return llm.EmbedInput{}, fmt.Errorf("read asset %s: %w", seg.Asset.ID, err)
 		}
-		if len(raw) > maxAssetBytes {
+		if len(raw) > MaxAssetBytes {
 			return llm.EmbedInput{}, fmt.Errorf("asset %s is %d bytes, over the %d byte inline limit",
-				seg.Asset.ID, len(raw), maxAssetBytes)
+				seg.Asset.ID, len(raw), MaxAssetBytes)
 		}
 		encoded := base64.StdEncoding.EncodeToString(raw)
 

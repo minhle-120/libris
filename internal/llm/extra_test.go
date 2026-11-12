@@ -107,7 +107,7 @@ func TestRerankServerError(t *testing.T) {
 	srv, _ := server(t, 500, `{"error":{"message":"reranker down"}}`, nil)
 	c := newClient(t, llm.Config{ChatURL: "http://unused", RerankURL: srv.URL})
 
-	if _, err := c.Rerank(context.Background(), llm.RerankRequest{Documents: []string{"a"}}); err == nil {
+	if _, err := c.Rerank(context.Background(), llm.RerankRequest{Documents: []llm.RerankDoc{llm.TextDoc("a")}}); err == nil {
 		t.Fatal("expected error")
 	}
 }

@@ -396,6 +396,16 @@ func TestEmbedNotConfigured(t *testing.T) {
 
 // ── reranking ────────────────────────────────────────────────────
 
+// textDocs is the common case spelled briefly: a document with no image marshals
+// as a bare string, so these tests read as they did before the media form existed.
+func textDocs(docs ...string) []llm.RerankDoc {
+	out := make([]llm.RerankDoc, len(docs))
+	for i, d := range docs {
+		out[i] = llm.TextDoc(d)
+	}
+	return out
+}
+
 func TestRerankResultsKey(t *testing.T) {
 	srv, rec := server(t, 200, `{"results":[
 		{"index":2,"relevance_score":0.9},{"index":0,"relevance_score":0.2}]}`, nil)
@@ -403,7 +413,7 @@ func TestRerankResultsKey(t *testing.T) {
 	c := newClient(t, llm.Config{ChatURL: "http://unused", RerankURL: srv.URL})
 	res, err := c.Rerank(context.Background(), llm.RerankRequest{
 		Query:     "what is it",
-		Documents: []string{"a", "b", "c"},
+		Documents: textDocs("a", "b", "c"),
 	})
 	if err != nil {
 		t.Fatalf("Rerank: %v", err)
@@ -421,7 +431,7 @@ func TestRerankDataKey(t *testing.T) {
 	srv, _ := server(t, 200, `{"data":[{"index":1,"relevance_score":0.5}]}`, nil)
 	c := newClient(t, llm.Config{ChatURL: "http://unused", RerankURL: srv.URL})
 
-	res, err := c.Rerank(context.Background(), llm.RerankRequest{Documents: []string{"a", "b"}})
+	res, err := c.Rerank(context.Background(), llm.RerankRequest{Documents: textDocs("a", "b")})
 	if err != nil {
 		t.Fatalf("Rerank: %v", err)
 	}
@@ -432,7 +442,7 @@ func TestRerankDataKey(t *testing.T) {
 
 func TestRerankNotConfigured(t *testing.T) {
 	c := newClient(t, llm.Config{ChatURL: "http://unused"})
-	_, err := c.Rerank(context.Background(), llm.RerankRequest{Documents: []string{"a"}})
+	_, err := c.Rerank(context.Background(), llm.RerankRequest{Documents: textDocs("a")})
 	if !errors.Is(err, llm.ErrNoReranker) {
 		t.Fatalf("err = %v", err)
 	}

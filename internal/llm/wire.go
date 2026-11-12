@@ -264,10 +264,43 @@ type Embedding struct {
 // RerankRequest always uses the "documents" key, which selects llama.cpp's
 // Jina response format (the "texts" key would select TEI's bare array).
 type RerankRequest struct {
-	Model     string   `json:"model,omitempty"`
-	Query     string   `json:"query"`
-	Documents []string `json:"documents"`
-	TopN      *int     `json:"top_n,omitempty"`
+	Model     string      `json:"model,omitempty"`
+	Query     string      `json:"query"`
+	Documents []RerankDoc `json:"documents"`
+	TopN      *int        `json:"top_n,omitempty"`
+}
+
+// RerankDoc is one document for the reranker.
+//
+// A text-only document marshals as a bare string, which is the form every rerank
+// server reads. A document with an image marshals as {"text":…,"image":…}, the
+// form llama.cpp parses when the reranker was started with an mmproj and a rerank
+// chat template. Image is a data: URI or an http(s) URL, never a path — a file://
+// path would demand --media-path on that server too.
+//
+// Both shapes exist so a search result can hold text chunks and page rasters and
+// be scored on one scale. Scoring the text and ranking the images by a different
+// measure would produce a merged list whose order means nothing.
+type RerankDoc struct {
+	Text  string
+	Image string
+}
+
+// TextDoc is a passage to score.
+func TextDoc(text string) RerankDoc { return RerankDoc{Text: text} }
+
+// ImageDoc is a raster to score, inlined as a data: URI.
+func ImageDoc(dataURL string) RerankDoc { return RerankDoc{Image: dataURL} }
+
+func (d RerankDoc) MarshalJSON() ([]byte, error) {
+	switch {
+	case d.Image == "":
+		return json.Marshal(d.Text)
+	case d.Text == "":
+		return json.Marshal(map[string]string{"image": d.Image})
+	default:
+		return json.Marshal(map[string]string{"text": d.Text, "image": d.Image})
+	}
 }
 
 type RerankResult struct {
