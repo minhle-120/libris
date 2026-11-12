@@ -33,6 +33,12 @@ type API interface {
 	ListSegments(context.Context, string) ([]domain.Segment, error)
 	ReingestSource(context.Context, string) (domain.Source, error)
 	GetAsset(context.Context, string) (domain.Asset, error)
+
+	Chats(context.Context, string) ([]domain.Chat, error)
+	NewChat(context.Context, string, string) (domain.Chat, error)
+	DeleteChat(context.Context, string, string) error
+	ChatMessages(context.Context, string, string) ([]domain.Message, error)
+	Ask(context.Context, string, string, string, app.AskEvents) (domain.Message, error)
 }
 
 // uploadHeadroom is how much of a multipart body is kept in memory before Go
@@ -66,6 +72,8 @@ func (s *Server) addAppRoutes(a API) {
 	// one wildcard route. The id is looked up in the database and never
 	// resolved as a filesystem path.
 	s.mux.HandleFunc("GET /api/assets/{id...}", s.handleAsset)
+
+	s.addChatRoutes()
 }
 
 // ── notebooks ────────────────────────────────────────────────────

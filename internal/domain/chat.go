@@ -131,6 +131,11 @@ func CitationFrom(chunk int, sourceName string, seg Segment) Citation {
 	}
 	if seg.Asset != nil {
 		a := *seg.Asset
+		// The path is dropped as well as the pointer shared. `json:"-"` already keeps
+		// it off the wire, and a citation is a record of what was cited rather than a
+		// handle for opening files off disk — anything that needs the bytes looks the
+		// asset up by id, which is also how the browser gets them.
+		a.Path = ""
 		c.Asset = &a
 	}
 	return c

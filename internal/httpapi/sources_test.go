@@ -32,6 +32,15 @@ type fakeAPI struct {
 	upload     string // filename passed to AddUpload
 	body       string // contents passed to AddUpload
 	reingested string // id passed to ReingestSource
+
+	// The chat half, scripted and recorded by chat_test.go.
+	chats      []domain.Chat
+	messages   []domain.Message
+	script     askScript
+	chatTitle  string
+	chatID     string
+	question   string
+	notebookOf string // notebook id the last chat call was scoped to
 }
 
 func (f *fakeAPI) CreateNotebook(_ context.Context, name string) (domain.Notebook, error) {
