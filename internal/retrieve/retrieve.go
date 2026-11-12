@@ -355,3 +355,33 @@ func compareFloats(a, b float64) int {
 		return 0
 	}
 }
+
+// PlainText is what a *tool result* looks like: the same labels and the same text,
+// with media named instead of shown.
+//
+// The split exists because a tool message is a string. A page raster can be handed
+// to the model that writes the answer, because that prompt is a user message with
+// content parts, but not inside a tool result — so the research model reads a line
+// saying which page is an image, and cites it on that. Passing pixels through a
+// tool message would either drop them silently or make the transcript unparseable,
+// and the trace has to stay a valid OpenAI transcript.
+func PlainText(evidence []Evidence) string {
+	if len(evidence) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for i, e := range evidence {
+		if i > 0 {
+			b.WriteString("\n\n")
+		}
+		if e.Segment.Kind == domain.KindText || e.Segment.Asset == nil {
+			b.WriteString(label(e))
+			b.WriteString("\n")
+			b.WriteString(e.Segment.Text)
+			continue
+		}
+		b.WriteString(label(e))
+		b.WriteString("\n(the image itself is not shown in search results; the model that writes the answer will see it)")
+	}
+	return b.String()
+}

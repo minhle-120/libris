@@ -140,3 +140,32 @@ func TestEvidenceCarriesItsSourceName(t *testing.T) {
 		t.Errorf("label = %q", label(ev))
 	}
 }
+
+// A model that writes [[Chunk 99]] after four searches is misremembering, not
+// inventing a chunk — and the answer it would otherwise lose was grounded.
+func TestRegistryOnlyResolvesWhatItHas(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(textHit("doc1", 5, "third found"))  // [[Chunk 1]]
+	reg.Register(textHit("doc1", 0, "second found")) // [[Chunk 2]]
+	reg.Register(textHit("doc2", 0, "first found"))  // [[Chunk 3]]
+
+	got := reg.Only([]int{3, 1, 2, 99, 3, 0, -1})
+	if len(got) != 3 {
+		t.Fatalf("resolved %v from [3 1 2 99 3 0 -1]: duplicates collapse, unknown labels drop", segIDs(got))
+	}
+	// Document order, not the order the model listed them in, so the synthesis
+	// prompt reads like a passage however the model shuffled.
+	want := []string{"doc1:0000", "doc1:0005", "doc2:0000"}
+	if strings.Join(segIDs(got), ",") != strings.Join(want, ",") {
+		t.Errorf("resolved %v, want %v", segIDs(got), want)
+	}
+	for _, e := range got {
+		if e.Index < 1 || e.Index > 3 {
+			t.Errorf("evidence carries label %d, which the model never saw", e.Index)
+		}
+	}
+
+	if len(reg.Only(nil)) != 0 {
+		t.Error("no indices resolved to something")
+	}
+}

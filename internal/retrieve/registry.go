@@ -103,3 +103,30 @@ func key(hit domain.Hit) string {
 	}
 	return "s:" + hit.Segment.ID
 }
+
+// Only turns the indices a model wrote into evidence.
+//
+// Duplicates collapse and an index outside the registry is dropped rather than
+// failing the turn: a model that writes [[Chunk 99]] after four searches is
+// misremembering, not inventing a chunk, and the answer it would otherwise lose was
+// grounded. The drop is not silent to a caller that counts — len(out) < len(indices)
+// is the whole signal.
+//
+// The result is in document order, not in the order the model listed them, so the
+// synthesis prompt reads like a passage no matter how the model shuffled.
+func (r *Registry) Only(indices []int) []Evidence {
+	seen := make(map[int]bool, len(indices))
+	out := make([]Evidence, 0, len(indices))
+	for _, i := range indices {
+		if seen[i] {
+			continue
+		}
+		ev, ok := r.Resolve(i)
+		if !ok {
+			continue
+		}
+		seen[i] = true
+		out = append(out, ev)
+	}
+	return Order(out)
+}
