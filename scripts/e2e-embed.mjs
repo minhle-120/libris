@@ -205,24 +205,24 @@ try {
   const segs = (await (await fetch(`${base}/api/sources/${second.id}/segments`)).json()) ?? [];
   checks.check('the chunks survive an embedding failure', segs.length > 0, `${segs.length} segments`);
 
-  // ── retry ─────────────────────────────────────────────────────
-  const retriedWhileDown = await poll(
+  // ── running the file again ────────────────────────────────────
+  const stillBroken = await poll(
     `${base}/api/sources/${second.id}`,
     (s) => s.status !== 'processing',
     { timeout: 1000 }
   );
   checks.check(
     'a failed source stays failed until something changes',
-    retriedWhileDown.status === 'failed'
+    stillBroken.status === 'failed'
   );
 
   embed.down = false;
-  const ack = await fetch(`${base}/api/sources/${second.id}/retry`, { method: 'POST' });
-  checks.check('retry answers 202', ack.status === 202, `status=${ack.status}`);
+  const ack = await fetch(`${base}/api/sources/${second.id}/reingest`, { method: 'POST' });
+  checks.check('running it again answers 202', ack.status === 202, `status=${ack.status}`);
 
   const fixed = await poll(`${base}/api/sources/${second.id}`, (s) => s.status !== 'processing');
   checks.check(
-    'retry after the server returns takes it to ready',
+    're-running the file after the server returns takes it to ready',
     fixed.status === 'ready',
     `status=${fixed.status} detail=${fixed.detail ?? ''}`
   );

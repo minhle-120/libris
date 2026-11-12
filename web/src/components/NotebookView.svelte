@@ -1,13 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import {
-    detachSource,
-    listSources,
-    originalURL,
-    reembedSource,
-    retrySource,
-    uploadSource
-  } from '../lib/api';
+  import { detachSource, listSources, originalURL, reingestSource, uploadSource } from '../lib/api';
   import { formatAge, formatBytes, errorMessage } from '../lib/format';
   import type { Notebook, Source, SourceKind, SourceStatus, Tab } from '../lib/types';
   import Tabs from '../lib/Tabs.svelte';
@@ -131,27 +124,17 @@
   }
 
   /**
-   * Re-runs ingest for a source that gave up. The answer is the row back in
-   * `processing`, and the poller already running picks it up from there.
+   * Rebuilds a source from its kept original: text, page rasters, chunks and
+   * vectors all derived again. One action for both reasons a row gets redone — it
+   * failed, or the pipeline changed under it.
+   *
+   * The answer is the row back in `processing`, and the poller already running
+   * takes it from there.
    */
-  async function retry(source: Source) {
+  async function rebuild(source: Source) {
     error = '';
     try {
-      sources = upsert(sources, await retrySource(source.id));
-    } catch (e) {
-      error = errorMessage(e);
-    }
-  }
-
-  /**
-   * Re-vectors a source from the chunks it already has, without re-reading the
-   * file. Same contract as retry: the row comes back `processing` and the poller
-   * already running takes it from there.
-   */
-  async function reembed(source: Source) {
-    error = '';
-    try {
-      sources = upsert(sources, await reembedSource(source.id));
+      sources = upsert(sources, await reingestSource(source.id));
     } catch (e) {
       error = errorMessage(e);
     }
@@ -271,12 +254,7 @@
                   </div>
 
                   {#if source.detail}
-                    <!-- Detail on a ready source means a re-embed did not take: the
-                         old vectors are still there, so it is a warning, not a failure,
-                         but it should not read as calm. -->
-                    <p class="note {source.status === 'failed' || source.status === 'ready' ? 'bad' : ''}">
-                      {source.detail}
-                    </p>
+                    <p class="note {source.status === 'failed' ? 'bad' : ''}">{source.detail}</p>
                   {/if}
                   {#if source.warnings?.length}
                     <p class="note">{source.warnings.join(' · ')}</p>
@@ -284,26 +262,15 @@
                 </div>
 
                 <div class="row-actions">
-                  {#if source.status === 'failed'}
+                  {#if source.status !== 'processing'}
                     <Button
                       variant="ghost"
                       size="sm"
                       iconOnly
-                      title="Try again — re-reads the file and re-embeds it"
-                      onclick={() => retry(source)}
+                      title="Run this file through the pipeline again — every chunk, raster and vector it has is replaced"
+                      onclick={() => rebuild(source)}
                     >
                       <Icon name="retry" size={14} />
-                    </Button>
-                  {/if}
-                  {#if source.status === 'ready'}
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      iconOnly
-                      title="Re-embed the vectors, without re-reading the file — do this after changing the embedding model"
-                      onclick={() => reembed(source)}
-                    >
-                      <Icon name="vector" size={14} />
                     </Button>
                   {/if}
                   {#if source.status === 'ready' || source.status === 'failed'}

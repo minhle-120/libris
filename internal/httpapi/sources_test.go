@@ -28,12 +28,10 @@ type fakeAPI struct {
 	asset     domain.Asset
 	err       error
 
-	created string // name passed to CreateNotebook
-	upload  string // filename passed to AddUpload
-	body    string // contents passed to AddUpload
-	retried string // id passed to RetrySource
-
-	reembedded string // id passed to ReembedSource
+	created    string // name passed to CreateNotebook
+	upload     string // filename passed to AddUpload
+	body       string // contents passed to AddUpload
+	reingested string // id passed to ReingestSource
 }
 
 func (f *fakeAPI) CreateNotebook(_ context.Context, name string) (domain.Notebook, error) {
@@ -95,16 +93,8 @@ func (f *fakeAPI) ListSegments(context.Context, string) ([]domain.Segment, error
 	return f.segments, f.err
 }
 
-func (f *fakeAPI) RetrySource(_ context.Context, id string) (domain.Source, error) {
-	f.retried = id
-	if f.err != nil {
-		return domain.Source{}, f.err
-	}
-	return domain.Source{ID: id, Name: "p.pdf", Status: domain.StatusProcessing}, nil
-}
-
-func (f *fakeAPI) ReembedSource(_ context.Context, id string) (domain.Source, error) {
-	f.reembedded = id
+func (f *fakeAPI) ReingestSource(_ context.Context, id string) (domain.Source, error) {
+	f.reingested = id
 	if f.err != nil {
 		return domain.Source{}, f.err
 	}
@@ -544,62 +534,44 @@ func TestAppEndpointsAbsentWithoutApp(t *testing.T) {
 	}
 }
 
-// A retried source answers 202 with the new state: the call starts work rather
+// A rebuilt source answers 202 with the new state: the call starts work rather
 // than reporting one that finished, and the UI re-renders the row from the body.
-func TestRetrySourceStartsTheWork(t *testing.T) {
-	srv := newAppServer(t, &fakeAPI{})
+func TestReingestStartsTheWork(t *testing.T) {
+	api := &fakeAPI{}
+	srv := newAppServer(t, api)
 
-	resp := request(t, srv, "POST", "/api/sources/abc123/retry", nil)
+	resp := request(t, srv, "POST", "/api/sources/abc123/reingest", nil)
 	if resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202: %s", resp.StatusCode, readAll(t, resp))
 	}
 
+	if api.reingested != "abc123" {
+		t.Errorf("re-ingest reached no use case (reingested=%q)", api.reingested)
+	}
 	var got domain.Source
 	if err := json.Unmarshal([]byte(readAll(t, resp)), &got); err != nil {
 		t.Fatal(err)
 	}
+	// The row the call just caused, not the one it read: the UI polls on this status.
 	if got.ID != "abc123" || got.Status != domain.StatusProcessing {
 		t.Errorf("body = %+v", got)
 	}
 }
 
-// Re-embed is a different call from retry because it does different work: it
-// should not be able to reach the code path that re-reads the file.
-func TestReembedSourceStartsTheWork(t *testing.T) {
-	api := &fakeAPI{}
-	srv := newAppServer(t, api)
+func TestReingestRefusesAProcessingSource(t *testing.T) {
+	srv := newAppServer(t, &fakeAPI{err: fmt.Errorf("%w: this source is already being rebuilt", app.ErrInvalid)})
 
-	resp := request(t, srv, "POST", "/api/sources/abc123/reembed", nil)
-	if resp.StatusCode != http.StatusAccepted {
-		t.Fatalf("status = %d, want 202: %s", resp.StatusCode, readAll(t, resp))
-	}
-	if api.reembedded != "abc123" || api.retried != "" {
-		t.Errorf("re-embed went to ReembedSource=%q and RetrySource=%q", api.reembedded, api.retried)
-	}
-
-	var got domain.Source
-	if err := json.Unmarshal([]byte(readAll(t, resp)), &got); err != nil {
-		t.Fatal(err)
-	}
-	if got.Status != domain.StatusProcessing {
-		t.Errorf("body = %+v, want the row the call just caused: the UI polls on this", got)
-	}
-}
-
-func TestReembedSourceRefusesANonReadySource(t *testing.T) {
-	srv := newAppServer(t, &fakeAPI{err: fmt.Errorf("%w: a failed source has no vectors to re-embed", app.ErrInvalid)})
-
-	resp := request(t, srv, "POST", "/api/sources/abc123/reembed", nil)
+	resp := request(t, srv, "POST", "/api/sources/abc123/reingest", nil)
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400: %s", resp.StatusCode, readAll(t, resp))
 	}
 }
 
-func TestRetrySourceMapsNotFound(t *testing.T) {
+func TestReingestMapsNotFound(t *testing.T) {
 	api := &fakeAPI{err: domain.ErrNotFound}
 	srv := newAppServer(t, api)
 
-	resp := request(t, srv, "POST", "/api/sources/nope/retry", nil)
+	resp := request(t, srv, "POST", "/api/sources/nope/reingest", nil)
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", resp.StatusCode)
 	}

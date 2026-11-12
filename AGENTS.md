@@ -200,17 +200,24 @@ means every segment has a vector** — ADR 0004, implemented: ingest ends by
 embedding, and a source whose embedding fails is `failed` with a detail naming
 the server URL, keeping its chunks so that retry has something to work with. The
 migration did not backfill, so a source some older build marked `ready` can still
-have no vectors; `RetrySource` accepts only `failed`, and `ReembedSource` only
-`ready`, so between them every row has a door.
+have no vectors; `ReingestSource` accepts every state except `processing`, so every
+row has a door.
 
-**Re-embed is for when the vector space moves underneath a corpus.** A new
-embedding model, a different `--pooling`, or a new `index.PromptScheme` all change
-what a stored vector means, and the store records the model and dimension per row,
-so a corpus can be read back and asked which sources predate the change. The
-button re-vectors the segments already in the database — the file is never read
-again, so no rasterising and no extraction. A failed re-embed leaves the source
-`ready` with the reason in `Detail`, because its previous vectors are intact and
-`failed` would exclude a still-searchable source from retrieval.
+**Every source is re-runnable from its kept original.** One action,
+`ReingestSource`, puts the file back through the pipeline: text extracted, pages rasterised, chunks split and
+vectors written again. It covers both reasons a row gets redone — it failed the
+first time, and the world under it changed (a new embedding model or `--pooling`, a
+new `index.PromptScheme`, new chunk settings). The store records the model and
+dimension per row, so a corpus can still be read back and asked which sources
+predate a change; re-running them is the fix.
+
+Only a `processing` source is refused, because a job is already writing its rows,
+and the queue cannot stop a second one interleaving. `PutSegments` deletes the
+source's old rows before inserting the new ones, which deletes their vectors with
+them — so a source is never half from one chunker and half from another, and it
+spends the whole rebuild `processing`, which is out of retrieval scope. Sources are
+content-addressed and shared, so a rebuild refreshes the one copy every notebook
+citing that file reads from.
 
 ---
 
@@ -332,8 +339,7 @@ PATCH  /api/notebooks/{id}                rename ·  DELETE → 204
 POST   /api/notebooks/{id}/sources        multipart field "file" → 202 while processing
 GET    /api/notebooks/{id}/sources        ·  DELETE …/sources/{sourceID} → 204
 GET    /api/sources/{id}                  status, for the UI to poll
-POST   /api/sources/{id}/retry            re-queue a failed source → 202
-POST   /api/sources/{id}/reembed          re-vector a ready source, file unread → 202
+POST   /api/sources/{id}/reingest         rebuild from the original, any state → 202
 GET    /api/sources/{id}/segments         chunks + provenance + assets
 GET    /api/sources/{id}/original         the kept copy
 GET    /api/assets/{id...}                derived files; id contains slashes
@@ -591,7 +597,7 @@ Planned: SSE progress instead of polling, `POST /api/notebooks/{id}/ask`
   text is genuinely `unsupported` ("PDF produced no text layer"), not `failed`.
   When a test wants to exercise the embedding path, name the file honestly.
 - A 202 body is not decoration. The UI decides whether to keep polling from the
-  status in the response, so `RetrySource` answering with the row it read *before*
+  status in the response, so `ReingestSource` answering with the row it read *before*
   flipping it to `processing` left the row saying `failed`, stopped the poll, and the
   source looked stuck until reload. Return the state you just caused.
 - `{source.status}` inside an element renders as one text node with the template's

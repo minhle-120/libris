@@ -221,9 +221,7 @@ const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ui-pr
       return {
         badge: row.querySelector('.badge')?.textContent,
         note: note?.textContent ?? '',
-        retry: !!row.querySelector('button[title^="Try again"]'),
-        // A source with no vectors has nothing to re-embed.
-        reembed: !!row.querySelector('button[title^="Re-embed"]'),
+        again: !!row.querySelector('button[title^="Run this file"]'),
         // The chunks survive, so the inspector stays useful even when embedding did not.
         chunks: !!row.querySelector('button[title^="See how"]')
       };
@@ -238,14 +236,17 @@ const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ui-pr
       /8124|embed/i.test(broken?.note ?? ''),
       broken?.note
     );
-    checks.check('a failed source offers retry', broken?.retry === true, () => JSON.stringify(broken));
-    checks.check('a failed source does not offer re-embed', broken?.reembed === false, () => JSON.stringify(broken));
+    checks.check(
+      'a failed source offers to be rebuilt',
+      broken?.again === true,
+      () => JSON.stringify(broken)
+    );
     checks.check('a failed source can still be inspected', broken?.chunks === true);
 
     await control(false);
     await ui.eval(`
-      const btn = document.querySelector('button[title^="Try again"]');
-      if (!btn) throw new Error('no retry button on the failed row');
+      const btn = document.querySelector('button[title^="Run this file"]');
+      if (!btn) throw new Error('no rebuild button on the failed row');
       btn.click();
       return true;
     `);
@@ -259,37 +260,49 @@ const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ui-pr
     `);
     checks.check('retry takes it to ready once the server returns', healed?.badge === 'ready', `badge=${healed?.badge}`);
 
-    // ── re-embedding a source that already works ─────────────────
-    // The embedding model can change identity under a corpus, so a healthy source
-    // needs its own door. The button is only for a source that has vectors.
+    // ── rebuilding a source that already works ───────────────────
+    // It is the same button. A corpus has to be re-runnable on purpose, because the
+    // embedding model, its pooling, the prompt scheme or the chunker can all change
+    // underneath it. Clicking must visibly redo the work and bring the row back: a
+    // button that quietly no-ops is worse than not having one.
     const offered = await ui.eval(`
       const row = [...document.querySelectorAll('.source')].find((r) =>
         r.textContent.includes('libris-retry-fixture'));
-      return { on: !!row?.querySelector('button[title^="Re-embed"]') };
+      return {
+        on: !!row?.querySelector('button[title^="Run this file"]'),
+        // The row's whole fact line: kind, chunk count, size, age. Rebuilding must
+        // leave it identical, which is what "as if it was just uploaded, and the
+        // same source afterwards" means from the UI's side.
+        facts: row?.querySelector('.facts')?.textContent.replace(/\s+/g, ' ').trim() ?? null
+      };
     `);
-    checks.check('a ready source offers re-embed', offered.on);
-
-    // Clicking it has to visibly redo the embedding and bring the row back — a
-    // button that quietly no-ops is worse than not having one.
+    checks.check('a ready source offers the same rebuild', offered.on);
     const before = await stats();
     await ui.eval(`
       const row = [...document.querySelectorAll('.source')].find((r) =>
         r.textContent.includes('libris-retry-fixture'));
-      row.querySelector('button[title^="Re-embed"]').click();
+      row.querySelector('button[title^="Run this file"]').click();
       return true;
     `);
     const again = await ui.until(`
       const row = [...document.querySelectorAll('.source')].find((r) =>
         r.textContent.includes('libris-retry-fixture'));
       const badge = row?.querySelector('.badge')?.textContent.trim();
-      return badge === 'ready' ? { badge } : null;
+      return badge === 'ready'
+        ? { badge, facts: row?.querySelector('.facts')?.textContent.replace(/\s+/g, ' ').trim() ?? null }
+        : null;
     `);
     const after = await stats();
-    checks.check('re-embed brings the row back to ready', again?.badge === 'ready', () => `badge=${again?.badge}`);
+    checks.check('rebuilding brings the row back to ready', again?.badge === 'ready', () => `badge=${again?.badge}`);
     checks.check(
-      're-embed actually asked the embedding server again',
+      'a rebuild actually asked the embedding server again',
       after.requests > before.requests,
       () => `requests ${before.requests} → ${after.requests}`
+    );
+    checks.check(
+      'the rebuilt row is the same source, not a new one',
+      !!again?.facts && again.facts === offered.facts,
+      () => `${offered.facts} → ${again.facts}`
     );
     checks.check(
       'the new vectors are embedded the way the pipeline embeds',

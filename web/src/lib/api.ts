@@ -95,20 +95,16 @@ export function getSource(sourceId: string): Promise<Source> {
 }
 
 /**
- * Re-runs ingest for a source that gave up — usually because the embedding
- * server was not reachable when the file arrived. Answers 202 with the source
- * back in `processing`, so the caller reloads to watch it work.
+ * Re-runs a source through the whole pipeline from its kept original: chunks,
+ * page rasters and vectors all derived again. Use it when a source failed — the
+ * embedding server was not reachable when the file arrived, say — and again when
+ * the pipeline changed underneath a source that worked.
  *
- * Only a failed source moves; asking for a ready or processing one returns it
- * unchanged rather than tearing down vectors it already has.
+ * Answers 202 with the source back in `processing`, so the caller keeps polling
+ * the row it already has. A source that is processing is refused with 400.
  */
-export function retrySource(sourceId: string): Promise<Source> {
-  return request<Source>(`/api/sources/${sourceId}/retry`, { method: 'POST' });
-}
-
-/** Re-vectors a ready source from the chunks it already has. The file is not read again. */
-export function reembedSource(sourceId: string): Promise<Source> {
-  return request<Source>(`/api/sources/${sourceId}/reembed`, { method: 'POST' });
+export function reingestSource(sourceId: string): Promise<Source> {
+  return request<Source>(`/api/sources/${sourceId}/reingest`, { method: 'POST' });
 }
 
 export async function listSegments(sourceId: string): Promise<Segment[]> {

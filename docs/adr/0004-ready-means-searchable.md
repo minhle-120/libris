@@ -48,7 +48,7 @@ retrievable.
   error when it produces fewer vectors than it was given, and ingest treats any
   embedding error as the source failing. That is not the same as choosing between
   `failed` and `degraded` below: it removes the situation, so a source is either
-  fully retrievable or explicitly broken. `POST /api/sources/{id}/retry` re-runs
+  fully retrievable or explicitly broken. `POST /api/sources/{id}/reingest` re-runs
   ingest from the start, which is what makes "the server was not up yet" recoverable
   without re-finding the file.
 - The embedding **dimension** is a property of the server, not a number to type.

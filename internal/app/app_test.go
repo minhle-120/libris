@@ -358,7 +358,7 @@ func TestEmbedderConstructionFailureIsRecorded(t *testing.T) {
 	}
 }
 
-func TestRetryRequeuesAFailedSource(t *testing.T) {
+func TestReingestRecoversAFailedSource(t *testing.T) {
 	emb := &fakeEmbedder{err: errors.New("server down")}
 	proc := &fakeProcessor{}
 	svc, db, _ := testServiceWith(t, proc, emb)
@@ -376,7 +376,7 @@ func TestRetryRequeuesAFailedSource(t *testing.T) {
 	// is written from. If it still says "failed": the row looks unchanged, the UI
 	// sees nothing in flight and stops polling, and the source only appears stuck
 	// until the user reloads. Reading the database is not enough to catch that.
-	back, err := svc.RetrySource(context.Background(), src.ID)
+	back, err := svc.ReingestSource(context.Background(), src.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -398,7 +398,7 @@ func TestRetryRequeuesAFailedSource(t *testing.T) {
 	})
 
 	emb.failWith(nil) // the server is fixed
-	if _, err := svc.RetrySource(context.Background(), src.ID); err != nil {
+	if _, err := svc.ReingestSource(context.Background(), src.ID); err != nil {
 		t.Fatal(err)
 	}
 	waitUntil(t, "the source to become ready after the fix", func() bool {
@@ -406,35 +406,6 @@ func TestRetryRequeuesAFailedSource(t *testing.T) {
 	})
 	if n := storedVectors(t, db, src.ID); n == 0 {
 		t.Error("ready without a single stored vector")
-	}
-}
-
-func TestRetryOfAWorkingSourceIsANoOp(t *testing.T) {
-	svc, db, _ := testService(t, &fakeProcessor{})
-	nb, _ := svc.CreateNotebook(context.Background(), "healthy")
-	src, err := svc.AddUpload(context.Background(), nb.ID, strings.NewReader("x"), "p.pdf")
-	if err != nil {
-		t.Fatal(err)
-	}
-	waitUntil(t, "the source to become ready", func() bool {
-		return sourceStatus(t, db, src.ID).Status == domain.StatusReady
-	})
-
-	before := sourceStatus(t, db, src.ID)
-	if _, err := svc.RetrySource(context.Background(), src.ID); err != nil {
-		t.Fatal(err)
-	}
-	// A retried ready source would drop to processing while it re-does work that
-	// succeeded, which is a lie about a source that is still searchable.
-	if got := sourceStatus(t, db, src.ID); got.Status != before.Status {
-		t.Errorf("retrying a ready source moved it to %s", got.Status)
-	}
-}
-
-func TestRetryOfAMissingSourceIsNotFound(t *testing.T) {
-	svc, _, _ := testService(t, &fakeProcessor{})
-	if _, err := svc.RetrySource(context.Background(), "nope"); !errors.Is(err, domain.ErrNotFound) {
-		t.Errorf("err = %v, want domain.ErrNotFound", err)
 	}
 }
 
@@ -1054,16 +1025,15 @@ func twoDocResult() *ingest.Result {
 	}}
 }
 
-// The reason the re-embed button exists: the embedding side of the pipeline can
-// change identity underneath a corpus — a new model, a different --pooling, a new
-// prompt scheme — and every stored vector then belongs to a space the live server
-// does not produce.
-func TestReembedMovesEveryVector(t *testing.T) {
+// A healthy source is rebuilt too, which is the point of one button: the embedding
+// model, its --pooling, the prompt scheme or the chunker can all change identity
+// underneath a corpus, and the fix is to run the file again.
+func TestReingestRebuildsAHealthySource(t *testing.T) {
 	emb := &fakeEmbedder{dim: 8}
 	proc := &fakeProcessor{res: twoDocResult()}
 	svc, db, _ := testServiceWith(t, proc, emb)
 
-	nb, _ := svc.CreateNotebook(context.Background(), "reembed")
+	nb, _ := svc.CreateNotebook(context.Background(), "reingest")
 	src, err := svc.AddUpload(context.Background(), nb.ID, strings.NewReader("x"), "p.pdf")
 	if err != nil {
 		t.Fatal(err)
@@ -1075,97 +1045,65 @@ func TestReembedMovesEveryVector(t *testing.T) {
 		t.Fatalf("a fresh source carries dims %v, want [8]", dims)
 	}
 
-	emb.setDim(4) // the server's vectors changed shape
-	back, err := svc.ReembedSource(context.Background(), src.ID)
+	emb.setDim(4) // the embedding server changed shape under the corpus
+	back, err := svc.ReingestSource(context.Background(), src.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if back.Status != domain.StatusProcessing {
-		t.Errorf("re-embed answered %s, want processing: the caller polls on this value", back.Status)
+		t.Errorf("re-ingest answered %s, want processing: the caller polls on this value", back.Status)
+	}
+	// The row moves before the job runs, on purpose: a ready source in the queue is
+	// a source about to lose its segments while retrieval still reads it as searchable.
+	if got := sourceStatus(t, db, src.ID); got.Status == domain.StatusReady {
+		t.Error("the row still says ready while a rebuild is queued")
 	}
 
 	waitUntil(t, "the source to be ready again", func() bool {
 		return sourceStatus(t, db, src.ID).Status == domain.StatusReady
 	})
+	if reads := proc.readCount(); reads != 2 {
+		t.Errorf("the file was read %d times, want twice", reads)
+	}
 	if dims := storedDims(t, db, src.ID); len(dims) != 1 || dims[0] != 4 {
-		t.Errorf("after re-embed the source carries dims %v, want [4]: a corpus in two vector spaces is worse than one that failed", dims)
+		t.Errorf("after a rebuild the source carries dims %v, want [4]: half a corpus in each space is the state nothing can detect", dims)
 	}
 	if n := storedVectors(t, db, src.ID); n != 3 {
-		t.Errorf("%d vectors after re-embed, want all 3 segments", n)
+		t.Errorf("%d vectors after a rebuild, want all 3 segments", n)
 	}
-	// Only the vectors were supposed to change. Re-rasterising and re-extracting a
-	// 400-page PDF to fix its vectors would make the button something nobody clicks.
-	if got := proc.readCount(); got != 1 {
-		t.Errorf("the file was read %d times, want 1", got)
-	}
-	// Chunks survive, so the inspector still shows the same passages.
-	if segs, err := db.ListSegments(context.Background(), src.ID); err != nil || len(segs) != 3 {
-		t.Errorf("segments after re-embed: %d, err %v", len(segs), err)
+	segs, err := db.ListSegments(context.Background(), src.ID)
+	if err != nil || len(segs) != 3 {
+		t.Errorf("segments after a rebuild: %d, err %v", len(segs), err)
 	}
 	if title := emb.title(); title != src.Name {
-		t.Errorf("re-embedded under title %q, want %q", title, src.Name)
+		t.Errorf("rebuilt under title %q, want %q", title, src.Name)
 	}
 }
 
-// A re-embed that cannot reach the server must not cost the user a source. The
-// previous vectors are still valid for the space they were made in, and a failed
-// source is excluded from retrieval — so "failed" would break a working source.
-func TestFailedReembedLeavesTheSourceSearchable(t *testing.T) {
-	emb := &fakeEmbedder{dim: 8}
-	svc, db, _ := testServiceWith(t, &fakeProcessor{res: twoDocResult()}, emb)
+// Two pipelines writing one source's rows at once is not something that can be
+// allowed, and the queue cannot stop it by itself: the first job is already
+// running when the second request arrives.
+func TestReingestRefusesAProcessingSource(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	svc, db, _ := testService(t, &gateProcessor{gate: release})
 
-	nb, _ := svc.CreateNotebook(context.Background(), "reembed-fail")
+	nb, _ := svc.CreateNotebook(context.Background(), "reingest-busy")
 	src, err := svc.AddUpload(context.Background(), nb.ID, strings.NewReader("x"), "p.pdf")
 	if err != nil {
 		t.Fatal(err)
 	}
-	waitUntil(t, "the source to become ready", func() bool {
-		return sourceStatus(t, db, src.ID).Status == domain.StatusReady
+	waitUntil(t, "the source to start processing", func() bool {
+		return sourceStatus(t, db, src.ID).Status == domain.StatusProcessing
 	})
 
-	emb.failWith(errors.New("embed server at http://127.0.0.1:8082: connection refused"))
-	if _, err := svc.ReembedSource(context.Background(), src.ID); err != nil {
-		t.Fatal(err)
+	if _, err := svc.ReingestSource(context.Background(), src.ID); !errors.Is(err, ErrInvalid) {
+		t.Errorf("re-ingesting a source mid-flight: got %v, want ErrInvalid", err)
 	}
-
-	var got domain.Source
-	waitUntil(t, "the failed re-embed to be reported", func() bool {
-		got = sourceStatus(t, db, src.ID)
-		return got.Status == domain.StatusReady && got.Detail != ""
-	})
-	if dims := storedDims(t, db, src.ID); len(dims) != 1 || dims[0] != 8 {
-		t.Errorf("a failed re-embed left the source carrying dims %v, want the original [8]", dims)
+	if got := sourceStatus(t, db, src.ID); got.Status != domain.StatusProcessing {
+		t.Errorf("a refused rebuild moved the row to %s", got.Status)
 	}
-	if n := storedVectors(t, db, src.ID); n != 3 {
-		t.Errorf("%d of 3 vectors survived a failed re-embed", n)
-	}
-	if !strings.Contains(got.Detail, "connection refused") {
-		t.Errorf("the row says %q, which does not tell the user which server to fix", got.Detail)
-	}
-}
-
-// Only a source with a complete vector set has something to replace. The others
-// have their own door, and the row must not move while it waits there.
-func TestReembedRefusesWhatIsNotReady(t *testing.T) {
-	emb := &fakeEmbedder{err: errors.New("server down")}
-	svc, db, _ := testServiceWith(t, &fakeProcessor{}, emb)
-
-	nb, _ := svc.CreateNotebook(context.Background(), "reembed-refuse")
-	src, err := svc.AddUpload(context.Background(), nb.ID, strings.NewReader("x"), "p.pdf")
-	if err != nil {
-		t.Fatal(err)
-	}
-	waitUntil(t, "the source to fail", func() bool {
-		return sourceStatus(t, db, src.ID).Status == domain.StatusFailed
-	})
-
-	if _, err := svc.ReembedSource(context.Background(), src.ID); !errors.Is(err, ErrInvalid) {
-		t.Errorf("re-embedding a failed source: got %v, want ErrInvalid so the UI says why", err)
-	}
-	if got := sourceStatus(t, db, src.ID); got.Status != domain.StatusFailed {
-		t.Errorf("a refused re-embed moved the row to %s", got.Status)
-	}
-	if _, err := svc.ReembedSource(context.Background(), "nope"); !errors.Is(err, domain.ErrNotFound) {
-		t.Errorf("re-embedding a source that does not exist: got %v, want ErrNotFound", err)
+	if _, err := svc.ReingestSource(context.Background(), "nope"); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("re-ingesting a source that does not exist: got %v, want ErrNotFound", err)
 	}
 }

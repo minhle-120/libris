@@ -146,50 +146,6 @@ func (db *DB) PutEmbeddings(ctx context.Context, embeddings []domain.Embedding) 
 	return tx.Commit()
 }
 
-// ReplaceEmbeddings swaps one source's whole set of vectors in a single
-// transaction. Re-embedding must not leave a chunk answering to the vector space
-// it came from, so the source is cleared before the new set is written; and the
-// write is scoped to that source, so a vector from a stale embed result cannot
-// land on another source's chunk. Either the new set is complete or nothing
-// changes — a half-swapped corpus is the one state retrieval cannot detect.
-//
-// The caller embeds before calling, which is what keeps the source searchable
-// throughout: the old vectors are only dropped once the new ones are in hand.
-func (db *DB) ReplaceEmbeddings(ctx context.Context, sourceID string, embeddings []domain.Embedding) error {
-	tx, err := db.sql.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
-	if _, err := tx.ExecContext(ctx,
-		`UPDATE segments SET embedding = NULL, dim = NULL, model = NULL WHERE source_id = ?`, sourceID); err != nil {
-		return fmt.Errorf("store: clear embeddings for %s: %w", sourceID, err)
-	}
-
-	stmt, err := tx.PrepareContext(ctx,
-		`UPDATE segments SET embedding = ?, dim = ?, model = ? WHERE id = ? AND source_id = ?`)
-	if err != nil {
-		return fmt.Errorf("store: prepare embedding write: %w", err)
-	}
-	defer stmt.Close()
-
-	for _, e := range embeddings {
-		res, err := stmt.ExecContext(ctx, encodeVector(e.Vector), e.Dim, e.Model, e.SegmentID, sourceID)
-		if err != nil {
-			return fmt.Errorf("store: replace embedding %s: %w", e.SegmentID, err)
-		}
-		n, err := res.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("store: replace embedding %s: %w", e.SegmentID, err)
-		}
-		if n == 0 {
-			return fmt.Errorf("%w: segment %s is not part of source %s", ErrNotFound, e.SegmentID, sourceID)
-		}
-	}
-	return tx.Commit()
-}
-
 // ListSegments returns a source's segments in reading order. Text and page
 // rasters are separate documents, so ordering by document then ordinal keeps
 // each of them contiguous.
