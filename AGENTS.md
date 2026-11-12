@@ -200,8 +200,17 @@ means every segment has a vector** — ADR 0004, implemented: ingest ends by
 embedding, and a source whose embedding fails is `failed` with a detail naming
 the server URL, keeping its chunks so that retry has something to work with. The
 migration did not backfill, so a source some older build marked `ready` can still
-have no vectors — and `RetrySource` accepts only `failed` and `unsupported`, so
-nothing in the UI can currently fix that row.
+have no vectors; `RetrySource` accepts only `failed`, and `ReembedSource` only
+`ready`, so between them every row has a door.
+
+**Re-embed is for when the vector space moves underneath a corpus.** A new
+embedding model, a different `--pooling`, or a new `index.PromptScheme` all change
+what a stored vector means, and the store records the model and dimension per row,
+so a corpus can be read back and asked which sources predate the change. The
+button re-vectors the segments already in the database — the file is never read
+again, so no rasterising and no extraction. A failed re-embed leaves the source
+`ready` with the reason in `Detail`, because its previous vectors are intact and
+`failed` would exclude a still-searchable source from retrieval.
 
 ---
 
@@ -324,6 +333,7 @@ POST   /api/notebooks/{id}/sources        multipart field "file" → 202 while p
 GET    /api/notebooks/{id}/sources        ·  DELETE …/sources/{sourceID} → 204
 GET    /api/sources/{id}                  status, for the UI to poll
 POST   /api/sources/{id}/retry            re-queue a failed source → 202
+POST   /api/sources/{id}/reembed          re-vector a ready source, file unread → 202
 GET    /api/sources/{id}/segments         chunks + provenance + assets
 GET    /api/sources/{id}/original         the kept copy
 GET    /api/assets/{id...}                derived files; id contains slashes
