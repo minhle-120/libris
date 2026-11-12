@@ -1,14 +1,29 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { detachSource, listSources, originalURL, reingestSource, uploadSource } from '../lib/api';
+  import {
+    detachSource,
+    getSource,
+    listSources,
+    originalURL,
+    reingestSource,
+    uploadSource
+  } from '../lib/api';
   import { formatAge, formatBytes, errorMessage } from '../lib/format';
-  import type { Notebook, Source, SourceKind, SourceStatus, Tab } from '../lib/types';
+  import type {
+    Citation,
+    Notebook,
+    Source,
+    SourceKind,
+    SourceStatus,
+    Tab
+  } from '../lib/types';
   import Tabs from '../lib/Tabs.svelte';
   import Badge from '../lib/Badge.svelte';
   import Button from '../lib/Button.svelte';
   import Icon from '../lib/Icon.svelte';
   import EmptyState from '../lib/EmptyState.svelte';
   import ChunkViewer from './ChunkViewer.svelte';
+  import ChatPanel from './ChatPanel.svelte';
 
   let {
     notebook,
@@ -26,6 +41,9 @@
   let dragging = $state(false);
   let tab = $state('sources');
   let inspecting: Source | null = $state(null);
+  // The chunk an answer cited, carried into the viewer so it opens on the place the
+  // answer came from rather than at the top of a 400-page raster run.
+  let focus: { segment_id: string; chunk?: number } | null = $state(null);
 
   let fileInput: HTMLInputElement | undefined = $state();
 
@@ -105,6 +123,24 @@
 
     if (failures.length) error = failures.join(' · ');
     onchange?.(); // the sidebar's counts come from the notebook list
+  }
+
+  /**
+   * Open a citation's source on the chunk the answer came from.
+   *
+   * The source is looked up rather than taken on trust from the answer: it may have
+   * been detached from this notebook since the question was asked, and segments are
+   * served by source id, so an old citation still opens.
+   */
+  async function openCitation(c: Citation) {
+    error = '';
+    try {
+      const source = sources.find((s) => s.id === c.source_id) ?? (await getSource(c.source_id));
+      focus = { segment_id: c.segment_id, chunk: c.chunk };
+      inspecting = source;
+    } catch (e) {
+      error = errorMessage(e);
+    }
   }
 
   function upsert(list: Source[], next: Source): Source[] {
@@ -315,13 +351,7 @@
         {/if}
       </div>
     {:else if tab === 'ask'}
-      <EmptyState
-        icon="chat"
-        title="Ask across the sources"
-        description="Questions run a research loop over the notebook, then answer with citations back to the page or timestamp."
-      >
-        <Button size="sm" disabled title="Retrieval and the model layer are not built yet">Ask</Button>
-      </EmptyState>
+      <ChatPanel notebook={notebook} {sources} oncite={openCitation} />
     {:else}
       <EmptyState
         icon="pulse"
@@ -333,7 +363,14 @@
 </div>
 
 {#if inspecting}
-  <ChunkViewer source={inspecting} onclose={() => (inspecting = null)} />
+  <ChunkViewer
+    source={inspecting}
+    focus={focus ?? undefined}
+    onclose={() => {
+      inspecting = null;
+      focus = null;
+    }}
+  />
 {/if}
 
 <style>

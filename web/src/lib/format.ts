@@ -1,3 +1,5 @@
+import type { Citation } from './types';
+
 /** Display formatting. Kept out of components so the same rules apply everywhere. */
 
 export function formatBytes(bytes: number): string {
@@ -36,6 +38,18 @@ export function formatSpan(t0: number, t1?: number): string {
 export function formatPages(page?: number, pageEnd?: number): string {
   if (!page) return '';
   return pageEnd && pageEnd !== page ? `pages ${page}–${pageEnd}` : `page ${page}`;
+}
+
+/**
+ * Where inside a source a citation points, in the shortest form that is still
+ * honest: audio cites a time range, a page raster and a text chunk both cite a page.
+ *
+ * The character range a text chunk cites is left out on purpose — it is what the
+ * viewer highlights when the citation is opened, not what a label says about it.
+ */
+export function citationLocator(c: Pick<Citation, 'kind' | 'span'>): string {
+  if (c.kind === 'audio' && (c.span.t0 || c.span.t1)) return formatSpan(c.span.t0, c.span.t1);
+  return formatPages(c.span.page, c.span.page_end);
 }
 
 export function errorMessage(e: unknown): string {

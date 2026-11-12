@@ -1,4 +1,4 @@
-import type { Asset, Notebook, Segment, Source } from './types';
+import type { Asset, Chat, Citation, Message, Notebook, Segment, Source } from './types';
 import type { Settings } from './config.gen';
 
 /** The one place in the frontend that talks to /api. */
@@ -122,4 +122,133 @@ export function originalURL(sourceId: string): string {
  * are the path here, so only each segment is escaped. */
 export function assetURL(asset: Pick<Asset, 'id'>): string {
   return `/api/assets/${asset.id.split('/').map(encodeURIComponent).join('/')}`;
+}
+
+// ── the conversation ───────────────────────────────────────────────
+
+export async function listChats(notebookId: string): Promise<Chat[]> {
+  return list(await request<Chat[] | null>(`/api/notebooks/${notebookId}/chats`));
+}
+
+export function createChat(notebookId: string, title: string): Promise<Chat> {
+  return request<Chat>(`/api/notebooks/${notebookId}/chats`, {
+    method: 'POST',
+    body: JSON.stringify({ title })
+  });
+}
+
+export function deleteChat(notebookId: string, chatId: string): Promise<void> {
+  return request<void>(`/api/notebooks/${notebookId}/chats/${chatId}`, { method: 'DELETE' });
+}
+
+export async function listMessages(notebookId: string, chatId: string): Promise<Message[]> {
+  return list(
+    await request<Message[] | null>(`/api/notebooks/${notebookId}/chats/${chatId}/messages`)
+  );
+}
+
+/** What a running question reports. Every callback is optional. */
+export type AskEvents = {
+  /** A sentence for the status line. Never part of the answer, never stored. */
+  onStatus?: (text: string) => void;
+  /** Fires once, before the answer streams, so the sources can be shown while it is written. */
+  onCitations?: (citations: Citation[]) => void;
+  /** The answer arriving. `reasoning` is a model thinking out loud: show it as
+   * progress, never append it to the answer. */
+  onDelta?: (text: string, reasoning: string) => void;
+  /** The finished message, exactly as the server stored it. */
+  onDone?: (message: Message) => void;
+};
+
+/**
+ * Ask one question and stream what happens, resolving when the turn ends.
+ *
+ * `fetch` rather than `EventSource` because the request is a POST with a body. The
+ * `signal` is the stop button: the backend treats the client hanging up as the
+ * cancellation, which is why there is no stop endpoint to fall out of sync with.
+ */
+export async function ask(
+  notebookId: string,
+  chatId: string,
+  question: string,
+  events: AskEvents,
+  signal?: AbortSignal
+): Promise<void> {
+  const res = await fetch(`/api/notebooks/${notebookId}/chats/${chatId}/ask`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ question }),
+    signal
+  });
+
+  // A refusal happens before the stream opens, so it is a normal JSON error and
+  // deserves the same message the rest of the API produces.
+  if (!res.ok) {
+    const body = await res.text();
+    let message = `${res.status} ${res.statusText}`;
+    try {
+      message = (JSON.parse(body) as { error?: string }).error ?? message;
+    } catch {
+      if (body) message = `${message}: ${body.slice(0, 200)}`;
+    }
+    throw new Error(message);
+  }
+  if (!res.body) throw new Error('the answer stream is empty');
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    // A frame is a block terminated by a blank line. Only complete blocks are
+    // parsed, because the network can split one anywhere — including mid-JSON.
+    let cut = buffer.indexOf(FRAME_END);
+    while (cut >= 0) {
+      dispatch(buffer.slice(0, cut), events);
+      buffer = buffer.slice(cut + FRAME_END.length);
+      cut = buffer.indexOf(FRAME_END);
+    }
+  }
+}
+
+const FRAME_END = '\n\n';
+
+function dispatch(frame: string, events: AskEvents) {
+  let name = 'message';
+  const data: string[] = [];
+  for (const line of frame.split('\n')) {
+    if (line.startsWith('event: ')) name = line.slice(7).trim();
+    else if (line.startsWith('data: ')) data.push(line.slice(6));
+  }
+  if (!data.length) return;
+
+  let payload: unknown;
+  try {
+    payload = JSON.parse(data.join('\n'));
+  } catch {
+    return; // a frame we cannot read is not worth losing the rest of the answer over
+  }
+
+  switch (name) {
+    case 'status':
+      events.onStatus?.((payload as { text?: string }).text ?? '');
+      break;
+    case 'citations':
+      events.onCitations?.(payload as Citation[]);
+      break;
+    case 'delta': {
+      const d = payload as { text?: string; reasoning?: string };
+      events.onDelta?.(d.text ?? '', d.reasoning ?? '');
+      break;
+    }
+    case 'done':
+      events.onDone?.(payload as Message);
+      break;
+    case 'error':
+      throw new Error((payload as { error?: string }).error ?? 'the question failed');
+  }
 }

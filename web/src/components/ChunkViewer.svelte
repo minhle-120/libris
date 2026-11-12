@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { assetURL, listSegments } from '../lib/api';
   import { formatBytes } from '../lib/format';
   import type { Segment, Source } from '../lib/types';
@@ -7,7 +7,16 @@
   import Badge from '../lib/Badge.svelte';
   import Button from '../lib/Button.svelte';
 
-  let { source, onclose }: { source: Source; onclose: () => void } = $props();
+  let {
+    source,
+    focus = undefined,
+    onclose
+  }: {
+    source: Source;
+    /** A chunk a citation points at: scrolled to and ringed once the chunks load. */
+    focus?: { segment_id: string; chunk?: number };
+    onclose: () => void;
+  } = $props();
 
   let segments = $state<Segment[]>([]);
   let loading = $state(true);
@@ -18,6 +27,9 @@
   let open = $state<Record<string, boolean>>({});
   let dlg: HTMLDialogElement | undefined = $state();
 
+  /** The segment a citation pointed at, if one did. */
+  let highlighted = $state('');
+
   // A chunk longer than this collapses, so a 100-word default stays scannable.
   const PREVIEW = 420;
 
@@ -25,8 +37,27 @@
     // showModal() gives Esc-to-close, focus trapping and the top layer for free,
     // which is why this is a native dialog rather than a positioned div.
     dlg?.showModal();
-    load();
+    load().then(() => {
+      if (focus) reveal(focus);
+    });
   });
+
+  /**
+   * Scroll to the chunk an answer cited, and say which one it was.
+   *
+   * Absent is a normal outcome, not a bug: the segment ids are `doc:ordinal`, so a
+   * re-ingested source keeps them only while its chunking produces the same number of
+   * chunks. If a source has been rebuilt with different settings since the answer was
+   * written, the citation still quotes what was cited — it just cannot point at a
+   * chunk that no longer exists.
+   */
+  async function reveal(where: { segment_id: string; chunk?: number }) {
+    highlighted = where.segment_id;
+    await tick(); // the chunks render after `segments` lands
+    dlg?.querySelector<HTMLElement>(`[data-seg="${where.segment_id}"]`)?.scrollIntoView({
+      block: 'center'
+    });
+  }
 
   /** Esc closes the dialog itself, so the parent is told here rather than in a key handler. */
   function onDialogClose() {
@@ -170,6 +201,8 @@
               {#each group.chunks as chunk (chunk.seg.id)}
                 <a
                   class="tile"
+                  class:highlighted={chunk.seg.id === highlighted}
+                  data-seg={chunk.seg.id}
                   href={assetURL(chunk.seg.asset!)}
                   target="_blank"
                   rel="noreferrer"
@@ -196,7 +229,12 @@
           {:else}
             <ul class="chunks">
               {#each group.chunks as chunk (chunk.seg.id)}
-                <li class="chunk" title={chunk.seg.id}>
+                <li
+                  class="chunk"
+                  class:highlighted={chunk.seg.id === highlighted}
+                  data-seg={chunk.seg.id}
+                  title={chunk.seg.id}
+                >
                   <div class="chip">
                     <div class="ord">{String(chunk.seg.ordinal).padStart(4, '0')}</div>
                     <div class="prov">
@@ -343,6 +381,14 @@
   }
   .chunk:last-child {
     border-bottom: none;
+  }
+  /* The chunk an answer pointed at. The rule is a ring rather than a background so it
+     still reads against both themes and does not fight the overlap shading. */
+  .chunk.highlighted,
+  .tile.highlighted {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
   }
   .chip {
     display: flex;
