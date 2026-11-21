@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -164,5 +165,46 @@ func TestFileStoreInMemoryOnly(t *testing.T) {
 	}
 	if store.Get().PDFDPI != 111 {
 		t.Fatalf("PDFDPI = %d", store.Get().PDFDPI)
+	}
+}
+
+// What an actual upgrade looks like: the file on disk was written when the app had a
+// context-window and a GPU-layer setting. It loads, the stale keys are reported for
+// the log, and the first save rewrites the file without them.
+func TestFileStoreSurvivesRetiredSettings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	raw := []byte(`{"contextSize":16384,"gpuLayers":-1,"pdfDPI":120}`)
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := NewFileStore(path, Default())
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	if want := []string{"contextSize", "gpuLayers"}; !reflect.DeepEqual(store.Dropped(), want) {
+		t.Fatalf("Dropped() = %v, want %v", store.Dropped(), want)
+	}
+	if got := store.Get().PDFDPI; got != 120 {
+		t.Fatalf("the settings that survived were not applied: pdfDPI = %d", got)
+	}
+
+	next := store.Get()
+	next.PDFMode = PDFModeFallback
+	if err := store.Save(next); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if len(store.Dropped()) != 0 {
+		t.Fatalf("Dropped() after a save = %v, want none", store.Dropped())
+	}
+	written, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(written), "contextSize") {
+		t.Fatal("a retired key survived the rewrite")
+	}
+	if !strings.Contains(string(written), `"pdfDPI": 120`) {
+		t.Fatalf("the value the user set was lost: %s", written)
 	}
 }

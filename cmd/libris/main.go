@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -60,6 +61,13 @@ func main() {
 	settings, err := config.NewFileStore(filepath.Join(*dataDir, "settings.json"), base)
 	if err != nil {
 		fail(log, "open settings", err)
+	}
+	// A file written by an older build may name settings this one no longer has —
+	// they were ignored, not fatal. Say which, so the user is not hunting for a
+	// setting that quietly stopped existing.
+	if dropped := settings.Dropped(); len(dropped) > 0 {
+		log.Warn("settings.json holds settings this version does not use; they will be dropped on the next save",
+			"keys", strings.Join(dropped, ", "))
 	}
 
 	db, err := sqlite.Open(filepath.Join(*dataDir, "libris.db"))

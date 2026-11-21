@@ -96,3 +96,30 @@ func TestUnmarshalStartsFromDefaults(t *testing.T) {
 		t.Fatalf("PDFDPI = %d", c.PDFDPI)
 	}
 }
+
+// The context-window and GPU-layer settings were retired (ADR 0011), but a
+// settings.json written by that build still names them. Starting up is not allowed
+// to depend on what an older version happened to persist.
+func TestApplyStoredJSONDropsRetiredKeys(t *testing.T) {
+	c := Default()
+	dropped, err := c.ApplyStoredJSON([]byte(`{"contextSize": 16384, "gpuLayers": -1, "pdfDPI": 96}`))
+	if err != nil {
+		t.Fatalf("ApplyStoredJSON: %v", err)
+	}
+	if want := []string{"contextSize", "gpuLayers"}; !reflect.DeepEqual(dropped, want) {
+		t.Fatalf("dropped = %v, want %v", dropped, want)
+	}
+	if c.PDFDPI != 96 {
+		t.Fatalf("the known key next to the retired ones was not applied: PDFDPI = %d", c.PDFDPI)
+	}
+}
+
+// Lenient about names, not about values: a retired key must not become a licence to
+// ignore that the rest of the file is unusable.
+func TestApplyStoredJSONStillValidatesKnownKeys(t *testing.T) {
+	c := Default()
+	_, err := c.ApplyStoredJSON([]byte(`{"contextSize": 16384, "pdfDPI": 9999}`))
+	if err == nil || !strings.Contains(err.Error(), "pdfDPI") {
+		t.Fatalf("err = %v", err)
+	}
+}

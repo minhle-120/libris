@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"slices"
 )
 
 // Config marshals to the same keys the frontend uses, so the API and the
@@ -45,9 +46,23 @@ func (c *Config) UnmarshalJSON(b []byte) error {
 // ApplyJSON overlays the provided keys onto c and validates the result. Unknown
 // keys are rejected rather than ignored, so a frontend typo fails loudly.
 func (c *Config) ApplyJSON(b []byte) error {
+	_, err := c.applyJSON(b, true)
+	return err
+}
+
+// ApplyStoredJSON is ApplyJSON for the settings file on disk, which may have been
+// written by an older Libris. A key the current struct no longer has is dropped and
+// reported instead of fatal: a request carries a live bug, a file only records an
+// older vocabulary, and refusing to boot over a retired setting punishes the user
+// for upgrading. Keys that are still known are validated exactly as strictly.
+func (c *Config) ApplyStoredJSON(b []byte) (dropped []string, err error) {
+	return c.applyJSON(b, false)
+}
+
+func (c *Config) applyJSON(b []byte, strict bool) ([]string, error) {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(b, &raw); err != nil {
-		return fmt.Errorf("config: %w", err)
+		return nil, fmt.Errorf("config: %w", err)
 	}
 
 	val := reflect.ValueOf(c).Elem()
@@ -58,17 +73,23 @@ func (c *Config) ApplyJSON(b []byte) error {
 		byKey[typ.Field(i).Tag.Get("key")] = i
 	}
 
+	var dropped []string
 	for key, payload := range raw {
 		i, ok := byKey[key]
 		if !ok {
-			return fmt.Errorf("config: unknown setting %q", key)
+			if strict {
+				return nil, fmt.Errorf("config: unknown setting %q", key)
+			}
+			dropped = append(dropped, key)
+			continue
 		}
 		field := val.Field(i)
 		target := reflect.New(field.Type())
 		if err := json.Unmarshal(payload, target.Interface()); err != nil {
-			return fmt.Errorf("config: %s: %w", key, err)
+			return nil, fmt.Errorf("config: %s: %w", key, err)
 		}
 		field.Set(target.Elem())
 	}
-	return c.Validate()
+	slices.Sort(dropped)
+	return dropped, c.Validate()
 }

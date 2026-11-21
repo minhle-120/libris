@@ -62,12 +62,14 @@ type Config struct {
 	TimeoutSeconds int    `key:"timeoutSeconds" group:"connection" label:"Request timeout" help:"Local CPU inference is slow. Lower it for GPU." min:"5" max:"3600" unit:"s"`
 
 	// ── models ───────────────────────────────────────────────────
-	ChatModel     string `key:"chatModel" group:"models" label:"Chat model" help:"Must support tool calls for the research loop."`
-	ContextSize   int    `key:"contextSize" group:"models" label:"Context window" help:"n_ctx per slot: the KV cache budget." min:"512" max:"1048576" unit:"tokens"`
-	GPULayers     int    `key:"gpuLayers" group:"models" label:"GPU layers" help:"-1 for all, 0 for CPU only." min:"-1" max:"999"`
-	EmbedModel    string `key:"embedModel" group:"models" label:"Embedding model" help:"EmbeddingGemma 2: text, image and audio in one space."`
+	// Model names are what the user's own llama-server answers to. Libris ships no
+	// guesses: a default that names a model nobody downloaded is a field that looks
+	// correct and fails anyway. Capacity is not here either — n_ctx and the GPU
+	// layer count belong to the server's command line (ADR 0011).
+	ChatModel     string `key:"chatModel" group:"models" label:"Chat model" help:"The name your chat server answers to. Must support tool calls for the research loop."`
+	EmbedModel    string `key:"embedModel" group:"models" label:"Embedding model" help:"The name your embedding server answers to."`
 	EmbedDim      string `key:"embedDimensions" group:"models" label:"Embedding dimensions" help:"Probed once at startup and recorded with every segment." readonly:"true"`
-	RerankModel   string `key:"rerankModel" group:"models" label:"Reranker" help:"bge-reranker-v2-m3, or a VL reranker for images."`
+	RerankModel   string `key:"rerankModel" group:"models" label:"Reranker" help:"The name your rerank server answers to; blank when reranking is off."`
 	RerankEnabled bool   `key:"rerankEnabled" group:"models" label:"Enable reranking" help:"Off means pure vector order."`
 
 	// ── retrieval ────────────────────────────────────────────────
@@ -104,12 +106,10 @@ func Default() Config {
 		APIKey:         "",
 		TimeoutSeconds: 300,
 
-		ChatModel:     "qwen3-vl-8b-instruct-q4_k_m",
-		ContextSize:   16384,
-		GPULayers:     -1,
-		EmbedModel:    "embeddinggemma-2-q8_0",
+		ChatModel:     "",
+		EmbedModel:    "",
 		EmbedDim:      "",
-		RerankModel:   "bge-reranker-v2-m3-q8_0",
+		RerankModel:   "",
 		RerankEnabled: true,
 
 		RecallTopK:      10,

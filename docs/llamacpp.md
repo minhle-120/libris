@@ -10,6 +10,11 @@ The rule this file exists under: **sampling and inference config never travel pe
 request** (`AGENTS.md`, non-negotiable 1). Those belong to the `llama-server` command line; what
 follows is what the wire actually accepts, and what it does when we get it wrong.
 
+Capacity is the same rule one step earlier, and it is not in `internal/config` either:
+no `n_ctx`, no GPU layer count, no batch size (ADR 0011). A setting implies Libris can
+apply it; it can only ask. What Libris does send is a model *name*, and the defaults are
+blank — see the embeddings section for what a blank name costs.
+
 ## Endpoints and auth
 
 - `POST /v1/chat/completions`, `POST /v1/embeddings`, `POST /v1/rerank` (alias of
@@ -67,6 +72,17 @@ is a jailed read — it cannot escape `--media-path`. Asset names we generate (h
   `index` inlines the raster it just wrote (`ImageBase64`, `AudioBase64`) rather than
   sending a path: one less flag for the user to get right, at the cost of re-reading
   and re-encoding each asset once per batch (`maxAssetBytes` bounds it).
+- A model *name* is a label, not a selector, in this clone: the completion path never
+  routes by the request's `model` — the only name lookups in `tools/server/` are the
+  `/models` management handlers and the multi-model scheduler, both keyed by index. So a
+  blank `embedModel` still gets vectors. Libris nonetheless refuses a blank
+  `chatModel` before sending anything (`app.usable`, ADR 0011) rather than let a
+  half-configured app blame the server. What a blank embedding name costs is on our
+  side: every stored vector is stamped
+  with `index.ModelIdentity` = `<model>+tp1`, and that stamp is how `SearchSegments`
+  filters and `ReembedNotebook` decides a corpus came from a different model. A blank
+  name collapses every identity to `tp1`, so changing the embedding model stops
+  invalidating the old vectors. Name it once, then it is free.
 - `--embd-normalize` defaults to **2 (Euclidean)**, so the server returns unit
   vectors — do not re-normalise. A per-request `embd_normalize` override exists; we
   never send it.

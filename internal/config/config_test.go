@@ -88,7 +88,6 @@ func TestValidate(t *testing.T) {
 		{"bad url scheme", func(c *Config) { c.EmbedURL = "127.0.0.1:8082" }, "http(s) URL"},
 		{"bad enum", func(c *Config) { c.PDFMode = "sometimes" }, "pdfModes"},
 		{"timeout too low", func(c *Config) { c.TimeoutSeconds = 1 }, "timeoutSeconds"},
-		{"context too small", func(c *Config) { c.ContextSize = 1 }, "contextSize"},
 	}
 
 	for _, tc := range tests {

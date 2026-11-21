@@ -23,8 +23,6 @@ export type Settings = {
 	apiKey: string;
 	timeoutSeconds: number;
 	chatModel: string;
-	contextSize: number;
-	gpuLayers: number;
 	embedModel: string;
 	embedDimensions: string;
 	rerankModel: string;
@@ -91,30 +89,13 @@ export const settingGroups: SettingGroup[] = [
 			{
 				"key": "chatModel",
 				"label": "Chat model",
-				"help": "Must support tool calls for the research loop.",
+				"help": "The name your chat server answers to. Must support tool calls for the research loop.",
 				"kind": "text"
-			},
-			{
-				"key": "contextSize",
-				"label": "Context window",
-				"help": "n_ctx per slot: the KV cache budget.",
-				"kind": "number",
-				"unit": "tokens",
-				"min": 512,
-				"max": 1048576
-			},
-			{
-				"key": "gpuLayers",
-				"label": "GPU layers",
-				"help": "-1 for all, 0 for CPU only.",
-				"kind": "number",
-				"min": -1,
-				"max": 999
 			},
 			{
 				"key": "embedModel",
 				"label": "Embedding model",
-				"help": "EmbeddingGemma 2: text, image and audio in one space.",
+				"help": "The name your embedding server answers to.",
 				"kind": "text"
 			},
 			{
@@ -127,7 +108,7 @@ export const settingGroups: SettingGroup[] = [
 			{
 				"key": "rerankModel",
 				"label": "Reranker",
-				"help": "bge-reranker-v2-m3, or a VL reranker for images.",
+				"help": "The name your rerank server answers to; blank when reranking is off.",
 				"kind": "text"
 			},
 			{
@@ -264,12 +245,10 @@ export function defaultSettings(): Settings {
 		rerankURL: "http://127.0.0.1:8083",
 		apiKey: "",
 		timeoutSeconds: 300,
-		chatModel: "qwen3-vl-8b-instruct-q4_k_m",
-		contextSize: 16384,
-		gpuLayers: -1,
-		embedModel: "embeddinggemma-2-q8_0",
+		chatModel: "",
+		embedModel: "",
 		embedDimensions: "",
-		rerankModel: "bge-reranker-v2-m3-q8_0",
+		rerankModel: "",
 		rerankEnabled: true,
 		recallTopK: 10,
 		finalTopK: 5,

@@ -78,12 +78,28 @@ func TestGetSettings(t *testing.T) {
 	}
 
 	body := decodeSettings(t, w)
-	if len(body) != 23 {
-		t.Fatalf("got %d settings, want 23", len(body))
+	// Counted off the config rather than written out, so retiring a setting cannot
+	// leave this test asserting a number that no longer exists anywhere.
+	want := countSettings(t)
+	if len(body) != want {
+		t.Fatalf("got %d settings, want the whole config (%d)", len(body), want)
 	}
 	if body["pdfDPI"] != float64(store.Get().PDFDPI) {
 		t.Fatalf("pdfDPI = %v", body["pdfDPI"])
 	}
+}
+
+func countSettings(t *testing.T) int {
+	t.Helper()
+	raw, err := json.Marshal(config.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var all map[string]any
+	if err := json.Unmarshal(raw, &all); err != nil {
+		t.Fatal(err)
+	}
+	return len(all)
 }
 
 func TestPutSettingsPartial(t *testing.T) {

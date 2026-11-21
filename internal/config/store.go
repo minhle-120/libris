@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 )
 
@@ -17,6 +18,9 @@ type FileStore struct {
 	mu      sync.RWMutex
 	path    string
 	current Config
+	// dropped names keys the file on disk carried and this build no longer has.
+	// Reported once at startup and cleared by the next save.
+	dropped []string
 }
 
 // NewFileStore starts from base and overlays the file at path, if it exists.
@@ -39,11 +43,22 @@ func NewFileStore(path string, base Config) (*FileStore, error) {
 	}
 
 	merged := base
-	if err := merged.ApplyJSON(raw); err != nil {
+	dropped, err := merged.ApplyStoredJSON(raw)
+	if err != nil {
 		return nil, fmt.Errorf("config: %s: %w", path, err)
 	}
 	s.current = merged
+	s.dropped = dropped
 	return s, nil
+}
+
+// Dropped lists the settings the file on disk held and this build retired, sorted.
+// They are ignored rather than fatal (see ApplyStoredJSON); the next Save rewrites
+// the file without them.
+func (s *FileStore) Dropped() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return slices.Clone(s.dropped)
 }
 
 func (s *FileStore) Get() Config {
@@ -65,6 +80,9 @@ func (s *FileStore) Save(next Config) error {
 	if err := s.write(next); err != nil {
 		return err
 	}
+	// The rewrite carried only current keys, so whatever the older build left
+	// behind is gone from disk now. Save already holds the lock.
+	s.dropped = nil
 	s.current = next
 	return nil
 }
