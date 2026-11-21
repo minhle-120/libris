@@ -57,7 +57,10 @@ counts — not screenshots. 100 checks cover create-notebook, file-picker upload
 `processing → ready` polling, dedupe, drag-and-drop, unsupported files, filtering,
 detach, and a whole question: streaming, citations arriving before the answer, a chip
 opening the source on the cited chunk, a reload, the model refusing, the model answering
-in prose, a dead server, and Stop. They skip successfully when Chrome is missing. They
+in prose, a dead server, and Stop. They skip successfully when Chrome is missing. One
+harness runs alone with `make ui-upload`, `make ui-drop` or `make ui-ask` — same fake
+and same fixture, so a frontend tweak does not require reading three suites — and a
+harness name that does not exist is an error rather than an empty pass. They
 caught a 10× byte-formatting bug that no amount of staring at the component would have
 found — and two bugs in the answer path that only appeared once a real browser drove it.
 

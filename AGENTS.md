@@ -317,6 +317,26 @@ against the real UI and a fake that answers all three llama.cpp endpoints). Cove
 89% overall; the gaps are DB-error guards and unreachable IO branches, and production
 code should not be contorted to reach them.
 
+### Run the smallest gate that implies the rest
+
+Pick the test that *entails* the change, not the whole matrix. The cost of running a
+level nobody needed is not the seconds, it is the ten-minute habit that makes an agent
+stop testing small.
+
+| the change is | gate | ≈ |
+|---|---|---|
+| one package's logic | `go test ./internal/<pkg>/` | 1 s |
+| `internal/config`, migrations, `app`, `store` | `make check`, then `make e2e` if a stored row or the pipeline is affected | 4 s + 1 min |
+| `web/`, `scripts/`, the `ui` target | `make ui-upload` / `ui-drop` / `ui-ask` while iterating, `make ui` once before committing | 40 s → 1 min |
+| a wire shape, an endpoint, the SSE frame contract | `make check` + `make e2e`, and re-check the claim against `docs/llamacpp.md` | 1 min |
+
+`make check` (4 s) always runs before a commit — that is cheap enough to be a rule and
+not a judgement call. Everything above it is a judgement: `TestGeneratedSchemaIsCurrent`
+already proves the generated TypeScript cannot disagree with the struct, so a new
+setting does not need a browser to know the field exists — only to learn it renders
+wrong. Three browser harnesses running because three exist is noise, and a failure in
+the two you did not need costs the same reading time as one you did.
+
 `docs/testing.md` has the detail — the fixture traps, what each level proves, and the
 CDP harness's many ways of reporting a working feature as broken.
 
