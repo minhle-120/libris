@@ -92,7 +92,7 @@ const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ui-pr
       document.querySelector('.source') && {
       status: document.querySelector('.source .badge')?.textContent.trim(),
       facts: document.querySelector('.source .facts')?.textContent.replace(/\\s+/g, ' ').trim(),
-      count: document.querySelector('.sidebar .count')?.textContent.trim(),
+      count: document.querySelector('.sidebar .row.active .count')?.textContent.trim(),
       open: document.querySelector('.iconlink')?.getAttribute('href')
     }
   `, 200, 100);
@@ -203,7 +203,7 @@ const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ui-pr
   const removed = await ui.until(`
     return document.querySelectorAll('.source').length === 0 && {
       empty: document.querySelector('.empty h2')?.textContent,
-      count: document.querySelector('.sidebar .count')?.textContent ?? null
+      count: document.querySelector('.sidebar .row.active .count')?.textContent ?? null
     };
   `);
   checks.check('remove detaches the source', !!removed, () => 'rows never reached 0');

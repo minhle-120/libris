@@ -32,9 +32,6 @@
     text-align: center;
     gap: 6px;
     padding: 48px 24px;
-    border: 1px dashed var(--border);
-    border-radius: var(--radius);
-    background: var(--canvas-subtle);
   }
   .icon {
     display: grid;

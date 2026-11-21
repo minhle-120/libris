@@ -264,6 +264,9 @@ PDFDPI int `key:"pdfDPI" group:"ingest" label:"PDF raster DPI" help:"…"
 - Primer/GitHub design language: 6px radii, `#1f883d` primary, `#d1d9e0` borders,
   `#fd8c73` active-tab underline, 56px header, 288px default sidebar; dark mode `#0d1117` /
   `#3d444d` / `#4493f8`. Tokens live in `web/src/app.css`.
+- No dashed frames. Empty states are icon + sentence + button on the open canvas; a
+  dotted box around "nothing here" is two boxes competing with the message. The one
+  dashed affordance that earned its keep was drag-over, now a solid 2px accent outline.
 - `#app` is exactly viewport height with `overflow:hidden`, so `<main>` is the only
   scroller. Do not go back to `min-height:100%` — it scrolls the sidebar away.
 - Overlays are native `<dialog>` + `showModal()`, not positioned divs: Esc, focus

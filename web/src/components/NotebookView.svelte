@@ -419,8 +419,10 @@
     flex-direction: column;
     gap: 8px;
   }
+  /* Solid, not dashed: the drag affordance has to survive the death of the dotted
+     box, and 2px of accent plus the hint underneath says "drop here" on its own. */
   .dropzone.dragging {
-    outline: 2px dashed var(--accent);
+    outline: 2px solid var(--accent);
     outline-offset: 6px;
   }
   .drop-hint {
