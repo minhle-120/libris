@@ -93,6 +93,17 @@
     }
   }
 
+  /**
+   * A drop the page does not handle is a file the browser opens for you, and that
+   * default fires even when an upload succeeded, because the `drop` event reaches
+   * `document` uncancelled. So the shell swallows file drops wherever they land —
+   * the sidebar, the header, the chat tab — as long as they carry files: a text
+   * drop into an input must keep doing what the browser does with it.
+   */
+  const fileDrop = (e: DragEvent) => {
+    if (Array.from(e.dataTransfer?.types ?? []).includes('Files')) e.preventDefault();
+  };
+
   function renamed(id: string, name: string) {
     notebooks = notebooks.map((nb) => (nb.id === id ? { ...nb, name } : nb));
   }
@@ -177,6 +188,8 @@
     {/if}
   </main>
 </div>
+
+<svelte:window on:dragover={fileDrop} on:drop={fileDrop} />
 
 <dialog
   class="new-notebook"

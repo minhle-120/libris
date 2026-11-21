@@ -78,6 +78,27 @@ await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ui-profile-drop' }
   checks.check('a dropped file uploads', dropped.name === 'dropped.md', `name=${dropped.name}`);
   checks.check('a dropped text file reaches ready', dropped.status === 'ready', `status=${dropped.status}`);
   checks.check('text reports chunks', /chunks/.test(dropped.facts ?? ''), dropped.facts);
+
+  // ── a drop the app does not handle ─────────────────────────────
+  // The bug this section exists for: an upload that worked *and* opened the PDF in
+  // the same tab, because the drop event reached the document uncancelled. A
+  // cancelable event that ends up defaultPrevented is the browser being told no.
+  const inert = await ui.eval(`
+    const fire = (type, target) => {
+      const dt = new DataTransfer();
+      dt.items.add(new File(['%PDF-1.4'], 'ghost.pdf', { type: 'application/pdf' }));
+      const ev = new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: dt });
+      target.dispatchEvent(ev);
+      return ev.defaultPrevented;
+    };
+    const before = document.querySelectorAll('.source').length;
+    const dropOnBody = fire('drop', document.body);
+    const overHeader = fire('dragover', document.querySelector('.header'));
+    return { before, after: document.querySelectorAll('.source').length, dropOnBody, overHeader };
+  `);
+  checks.check('a file drop elsewhere on the page is not a navigation', inert.dropOnBody === true, `prevented=${inert.dropOnBody}`);
+  checks.check('dragging a file over the chrome is allowed but inert', inert.overHeader === true, `prevented=${inert.overHeader}`);
+  checks.check('a drop outside the panel uploads nothing', inert.after === inert.before, `${inert.before} -> ${inert.after}`);
   checks.check('sizes use binary units', /1\.2 KB/.test(dropped.facts ?? ''), dropped.facts);
 
   // ── an unsupported file keeps its reason visible ───────────────

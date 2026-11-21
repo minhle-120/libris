@@ -184,6 +184,9 @@
   }
 
   function onDrop(e: DragEvent) {
+    // Not just for the shell's sake: without this the upload happens and Chrome
+    // then opens the file it was given, in the same tab, over the app.
+    e.preventDefault();
     dragging = false;
     const files = Array.from(e.dataTransfer?.files ?? []);
     if (files.length) upload(files);
