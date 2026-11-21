@@ -1,6 +1,7 @@
 # 0002 — Settings are served and saved over HTTP
 
-Status: accepted
+Date: 2026-11-09
+Status: accepted, implemented (`internal/config` FileStore, `GET`/`PUT /api/settings`)
 
 ## Context
 
@@ -28,7 +29,9 @@ every request path.
 - Settings never drift between UI and backend: both are projections of the same
   struct, and a typo in a key is a 400 rather than a silent default.
 - A failed write leaves the previous configuration in force.
-- No database dependency for configuration; when the document store arrives it
-  will not own settings.
+- Configuration has no database dependency, and kept none when SQLite arrived three
+  days later (ADR 0003). That was not inertia: settings are read before the store is
+  opened, they can hold an API key, and a corrupt database must not take away the
+  settings that tell libris where the embedding server is.
 - Single-user assumption: no locking across processes, which matches one binary
   owning the data directory.

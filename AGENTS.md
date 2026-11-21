@@ -214,7 +214,8 @@ prose that survives.
   cannot disagree with the database about what was said.
 
 `docs/api.md` has the stream contract; `GLOSSARY.md` has the five turn statuses and why
-rendering them alike is a lie.
+rendering them alike is a lie; ADR 0007 records why the split is two calls and what it
+costs, and ADR 0008 why an answer keeps its evidence when the corpus moves.
 
 ---
 
@@ -327,9 +328,13 @@ CDP harness's many ways of reporting a working feature as broken.
 - Comments explain *why*, especially where the choice looks odd — no `Client.Timeout`
   because it would cap streams; no base64 auto-detection because `path/to/file` is
   ambiguous.
-- One ADR per accepted decision in `docs/adr/`: 0001 config single source, 0002 settings
-  API, 0003 notebooks and content-addressed sources, 0004 `ready` means searchable, 0005
-  the data directory defaults to `Documents/libris`.
+- One ADR per accepted decision, one file in `docs/adr/`: `# 000N — Title`, then `Date:`,
+  `Status:` (naming where it is implemented), then Context, Decision, Consequences. Numbers
+  are allocated as they are written, so a backfilled ADR can predate its neighbours; the
+  index is `ls docs/adr/`, not this file. A reversal is a new ADR that names the old one —
+  an ADR's Context is never rewritten to match today, because it describes the world the
+  decision was made in. Cross-references from anywhere into this file name the rule
+  ("*originals are always kept*"), never a section number.
 - Commit messages describe behaviour and rationale, and `make check` runs first.
 
 ---

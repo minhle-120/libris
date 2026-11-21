@@ -1,6 +1,7 @@
 # 0001 — Configuration is defined once, in Go
 
-Status: accepted
+Date: 2026-11-09
+Status: accepted, implemented (`internal/config`, `web/src/lib/config.gen.ts`)
 
 ## Context
 
@@ -37,6 +38,5 @@ the generated file is stale, so drift is impossible rather than discouraged.
 - Enum options (currently only PDF mode) live in `config.Enums()`.
 - Environment variable names are derived from the key: `pdfDPI` →
   `LIBRIS_PDF_DPI`. Renaming a key renames its env var.
-- Values in the UI are placeholders until `GET /api/settings` exists; when it
-  does, the schema still comes from the generated file and only the values
-  move to the network.
+- Values came from the generated file until ADR 0002 put them on the network. The
+  schema came from the generated file either way, which is the part this ADR is about.

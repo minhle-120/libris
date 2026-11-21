@@ -1,4 +1,4 @@
-# 5. The data directory defaults to Documents/libris
+# 0005 — The data directory defaults to Documents/libris
 
 Date: 2026-11-11
 Status: accepted, implemented (`cmd/libris/datadir*.go`)
@@ -7,8 +7,9 @@ Status: accepted, implemented (`cmd/libris/datadir*.go`)
 
 The first default was `os.UserConfigDir()/libris` — `~/.config/libris` on Linux,
 `%APPDATA%\libris` on Windows. That is where application *state* goes, and it is
-wrong for what this directory actually holds: the user's kept originals (§2 rule
-3), their page rasters, and the database that cites them. It is the only copy of
+wrong for what this directory actually holds: the user's kept originals (the
+non-negotiable *originals are always kept*), their page rasters, and the database
+that cites them. It is the only copy of
 their corpus. It sits beside caches and settings, in a tree file managers hide by
 default, so a person who wants to back it up, email a source to someone, or just
 look at what the app has eaten cannot find it.
@@ -37,7 +38,8 @@ Two of those look like ceremony and are not:
 - **The registry, not `%USERPROFILE%\Documents`,** because Known Folder
   redirection really moves the folder — into OneDrive, or onto another disk — and
   the corpus has to be findable again in whichever place it is. Read through
-  `syscall` rather than a dependency (§3 keeps the dependency list at one).
+  `syscall` rather than a dependency (the toolchain notes keep the dependency list at
+  one).
 - **`user-dirs.dirs`, not `~/Documents`,** because on a non-English desktop the
   folder is `~/Dokumente` or `~/文档`, and hardcoding the English name would
   silently create a second, empty folder beside it.
@@ -54,7 +56,7 @@ nor the home directory itself. Broken desktop configurations do write
   The binary logs the previous directory at startup when it still holds a
   `libris.db`, and does nothing else. Moving a corpus is a person's decision, not
   a side effect of an upgrade — and a wrong guess here deletes originals, which
-  §2 rule 3 forbids.
+  *originals are always kept* forbids.
 - Documents is often iCloud- or OneDrive-synced. For a local-first app whose
   originals are the point, a synced folder is arguably the right default, but it
   means a corpus can leave the machine. `-data` is the answer, and the log line

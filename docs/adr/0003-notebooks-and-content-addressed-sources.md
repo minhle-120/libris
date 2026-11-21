@@ -1,6 +1,7 @@
 # 0003 — Notebooks own memberships; sources are content-addressed and shared
 
-Status: accepted
+Date: 2026-11-10
+Status: accepted, implemented (`internal/store/sqlite`, `internal/app`)
 
 ## Context
 
@@ -29,8 +30,8 @@ if it is shared, deleting B must not remove anything A can still cite.
   the stored original: `<data>/originals/<sha256><ext>`. Same bytes means the
   same row, the same file, the same rasters, the same segments.
 - **The original is never rewritten or deleted.** Dedupe relies on the path being
-  stable, and rule 3 of the working notes says a citation must be able to open
-  its source.
+  stable, and the non-negotiable *originals are always kept* (`AGENTS.md` §2) says a
+  citation must be able to open its source.
 - **Re-offering a ready file costs one row insert.** `AddSource` reports whether
   it added anything; if the source is already `ready` nothing is re-run. A source
   that `failed` is re-queued — re-offering the file is the retry affordance.

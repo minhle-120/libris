@@ -1,4 +1,4 @@
-# 4. `ready` means searchable
+# 0004 — `ready` means searchable
 
 Date: 2026-11-11
 Status: accepted, implemented (`internal/index`, `internal/app`); verified end to
@@ -68,6 +68,10 @@ retrievable.
    multimodal embeddings are recent and need the model loaded with `--mmproj`, so
    a server that embeds a PDF's text but refuses its page rasters is a normal
    configuration. Today that fails the whole source.
-2. Whether re-embedding is automatic on model change or an explicit user action.
+2. ~~Whether re-embedding is automatic on model change or an explicit user action.~~
+   Decided 2026-11-12, and built: explicit. `POST /api/sources/{id}/reingest`, one button
+   in the source row, and `segments.model`/`segments.dim` so a corpus can be asked which
+   sources predate a change. Automatic re-embedding was refused — one edited setting
+   should not rewrite a user's whole corpus while they are not looking.
 3. Whether `ready` should also require the *lexical* index once one exists, or
    whether vectors are sufficient on their own.
