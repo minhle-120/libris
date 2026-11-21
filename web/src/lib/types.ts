@@ -67,11 +67,9 @@ export type Segment = {
   span: Provenance;
 };
 
-export type Tab = { id: string; label: string; count?: number };
-
-/** The three panels a notebook opens onto. Named here so the header breadcrumb and
- * the panel tabs cannot drift into different vocabularies. */
-export type Panel = 'sources' | 'chat' | 'activity';
+/** The two views the right-hand panel offers. Chat is not one of them: the chat is
+ * the page the panel sits beside, not a place you navigate to from it. */
+export type Panel = 'sources' | 'activity';
 
 /** One level of the header breadcrumb. No `onclick` means "this is the page you are
  * on", which is the only honest reason a crumb is not a link. */

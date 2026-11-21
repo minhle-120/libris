@@ -53,16 +53,20 @@ text, and that `ready` is backed by rows.
 Builds, starts the binary against a throwaway data directory, and runs
 `scripts/ui-upload.mjs`, `ui-drop.mjs`, `ui-ask.mjs` and `ui-nav.mjs` over CDP
 (`scripts/cdp.mjs`, no dependencies). They assert on DOM state — computed text and
-counts — not screenshots. 133 checks across four harnesses cover create-notebook (with
-a name) from both the sidebar and the landing state, rename, resize and collapse, the
-breadcrumb and its chat-level crumb, file-picker upload,
+counts — not screenshots. 142 checks across four harnesses (43 upload, 23 drop, 39 ask,
+37 nav) cover create-notebook (with
+a name) from both the sidebar and the landing state, rename, resize and collapse of both
+columns, the breadcrumb and what it refuses to name, file-picker upload,
 `processing → ready` polling, dedupe, drag-and-drop, unsupported files, filtering,
 detach, and a whole question: streaming, citations arriving before the answer, a chip
 opening the source on the cited chunk, a reload, the model refusing, the model answering
 in prose, a dead server, and Stop. They skip successfully when Chrome is missing. One
-harness runs alone with `make ui-upload`, `make ui-drop` or `make ui-ask` — same fake
-and same fixture, so a frontend tweak does not require reading three suites — and a
-harness name that does not exist is an error rather than an empty pass. They
+harness runs alone with `make ui-upload`, `make ui-drop`, `make ui-ask` or `make ui-nav`
+— same fake and same fixture, so a frontend tweak does not require reading three suites —
+and a harness name that does not exist is an error rather than an empty pass. That knob
+earns its keep: `UI_HARNESS=ui-upload ui-drop` checked an empty-state change in half the
+time, and the order-independence it exposes caught a check that had quietly assumed
+uploading always owned the first row of the sidebar. They
 caught a 10× byte-formatting bug that no amount of staring at the component would have
 found — and two bugs in the answer path that only appeared once a real browser drove it.
 
@@ -101,7 +105,16 @@ saw, not what the client intended.
   working Stop button as broken.
 - Truthiness in a poll must mean "rendered", not "present": a dialog that is open while
   its fetch is in flight satisfies `dialog && dialog.open`, and the first measurement
-  reads the loading text.
+  reads the loading text. The same trap came back when the chunk inspector stopped being a
+  dialog: a `.viewer && .viewer.open` guard was quietly true for nothing at all.
+- A modal leaves the thing behind it in the document, and an inline view does not. The
+  drop harness opened the inspector and then looked up the source row to find its chunks;
+  the row is gone, because the inspector *replaced* the list. A check that reads a row
+  beside a view asserts the view's container, not the row that opened it.
+- Two columns that mirror each other must not be tested by copying the other's drag. The
+  panel's handle is its **inner** edge, so a pointer move to the right makes it narrower —
+  the check that said "drags wider" moved right, got 263 where it wanted 420, and was
+  right to fail: the copy was wrong before the test was.
 - A live bubble shows its status in the same slot as the answer (`p.answer.pulse`), so
   "`.answer` has more than ten characters" measures *"Searching library for …"* and lets
   a check click Stop on a turn that has written nothing yet. Select `.answer:not(.pulse)`

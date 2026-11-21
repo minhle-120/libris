@@ -3,7 +3,7 @@
 //
 // Requires a running server: `make ui`. Standalone:
 //   APP=http://127.0.0.1:8080 node scripts/ui-drop.mjs
-import { Checks, withBrowser } from './cdp.mjs';
+import { Checks, CRUMB_NOTEBOOK, withBrowser } from './cdp.mjs';
 
 const app = process.env.APP ?? 'http://127.0.0.1:8080/';
 // Unique per run: make ui shares one server between both scripts, and a
@@ -33,13 +33,13 @@ await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ui-profile-drop' }
     if (!item) throw new Error('the notebook is not in the sidebar');
     item.click();
     for (let i = 0; i < 100; i++) {
-      if (document.querySelector('.title h1')?.textContent === ${JSON.stringify(notebook)}) return true;
+      if (${CRUMB_NOTEBOOK} === ${JSON.stringify(notebook)}) return true;
       await new Promise((r) => setTimeout(r, 50));
     }
     return false;
   `);
   checks.check('the empty notebook under test is the open one',
-    await ui.eval(`return document.querySelector('.title h1')?.textContent === ${JSON.stringify(notebook)}`));
+    (await ui.crumbs())[1] === notebook, (await ui.crumbs()).join(' / '));
 
   // ── a real drop of a markdown file ─────────────────────────────
   const dropped = await ui.eval(`
@@ -154,21 +154,20 @@ await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ui-profile-drop' }
       .find((r) => r.querySelector('.name')?.textContent === 'overlap.txt');
     row.querySelector('button[title="See how this source was chunked"]').click();
     for (let i = 0; i < 60; i++) {
-      if (document.querySelector('dialog')?.open) break;
+      if (document.querySelector('.viewer .chunk')) break;
       await new Promise((r) => setTimeout(r, 50));
     }
-    document.querySelectorAll('dialog .more').forEach((b) => b.click());
+    document.querySelectorAll('.viewer .more').forEach((b) => b.click());
     await new Promise((r) => setTimeout(r, 60));
     return true;
   `);
 
   const overlap = await ui.until(`
-    const row = [...document.querySelectorAll('.source')]
-      .find((r) => r.querySelector('.name')?.textContent === 'overlap.txt');
-    if (!row) return null;
-    // Opened above; the step function is sync, so expansion happens there too.
-    const d = document.querySelector('dialog');
-    if (!d || !d.open) return null;
+    // No row lookup here, and that is the point: the viewer replaced the list in the
+    // panel rather than floating over it, so the source row is not in the document
+    // while its chunks are being read.
+    const d = document.querySelector('.viewer');
+    if (!d || !d.querySelector('.chunk')) return null;
 
     const texts = [...d.querySelectorAll('.chunk .text')].map((t) => {
       const mark = t.querySelector('mark');
@@ -204,7 +203,7 @@ await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ui-profile-drop' }
     () => 'shading does not match the text around it');
   checks.check('the legend explains the shading', /shaded text repeats/.test(overlap?.legend ?? ''), overlap?.legend);
 
-  await ui.eval(`document.querySelector('dialog').close(); return true;`);
+  await ui.eval(`document.querySelector('.viewer [aria-label="Back to sources"]').click(); return true;`);
 
   // ── layout, at the widths that have bitten this repo before ──────
   for (const width of [640, 1180]) {
@@ -214,22 +213,26 @@ await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ui-profile-drop' }
         .find((r) => r.querySelector('.name')?.textContent === 'overlap.txt');
       row.querySelector('button[title="See how this source was chunked"]').click();
       for (let i = 0; i < 60; i++) {
-        if (document.querySelector('dialog')?.open && document.querySelector('.chunk')) break;
+        if (document.querySelector('.viewer .chunk')) break;
         await new Promise((r) => setTimeout(r, 50));
       }
       return true;
     `);
+    // The viewer used to be a centred dialog whose job was to fit the viewport. It is
+    // a column now, so the same test asks the narrower question: does the window still
+    // hold it, and does anything force the page sideways.
     const fit = await ui.eval(`
-      const box = document.querySelector('dialog').getBoundingClientRect();
+      const box = document.querySelector('.sidepanel').getBoundingClientRect();
+      const body = document.querySelector('.viewer .body');
       return {
         width: Math.round(box.width),
-        fits: box.left >= 0 && box.right <= window.innerWidth + 0.5 &&
-              box.height <= window.innerHeight,
+        fits: box.left >= 0 && box.right <= window.innerWidth + 0.5 && box.height <= window.innerHeight,
+        scrollsInside: body ? body.scrollHeight > body.clientHeight : false,
         pageScrollsX: document.documentElement.scrollWidth > window.innerWidth
       };
     `);
-    checks.check(`the dialog fits at ${width}px`, fit?.fits && !fit?.pageScrollsX, JSON.stringify(fit));
-    await ui.press('Escape');
+    checks.check(`the panel holds the viewer at ${width}px`, fit?.fits && !fit?.pageScrollsX, JSON.stringify(fit));
+    await ui.eval(`document.querySelector('.viewer [aria-label="Back to sources"]').click(); return true;`);
     await ui.settle(150);
   }
   await ui.clearViewport();

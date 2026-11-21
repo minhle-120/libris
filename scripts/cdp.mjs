@@ -20,6 +20,10 @@ export function findChrome() {
   return CANDIDATES.find((path) => existsSync(path));
 }
 
+/** Page-side expression: the breadcrumb's second label, i.e. the open notebook. */
+export const CRUMB_NOTEBOOK =
+  `[...document.querySelectorAll('.crumbs .crumb')][1]?.textContent?.trim() ?? ''`;
+
 export class Checks {
   constructor() {
     this.results = [];
@@ -219,6 +223,17 @@ class UI {
       btn.click();
       return true;
     `);
+  }
+
+  /**
+   * The breadcrumb's labels, left to right. The notebook's name is the second one,
+   * and the open chunk viewer's source is the last — which is where the app puts it,
+   * so a test that asks the header what is open asks the same thing a user does.
+   */
+  crumbs() {
+    return this.eval(
+      `return [...document.querySelectorAll('.crumbs .crumb')].map((c) => c.textContent.trim());`
+    );
   }
 
   /**

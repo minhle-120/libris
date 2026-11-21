@@ -99,6 +99,26 @@ row, because those are deleted and rewritten on re-ingest.
 `canceled` (the user stopped it), `interrupted` (it started and did not finish). Five
 different claims about the sentence in front of the reader.
 
+## Interface
+
+Words the chrome is built from, so that "open the panel" means one thing.
+
+**Panel** — the right-hand column of a notebook, holding **Sources** and **Activity** as
+a segmented view. Both answer a question about the corpus *while* an answer is being
+read, so they share a place with the chat rather than replacing it. Collapses to a rail,
+resizes, and keeps its width per browser.
+
+**Rail** — what either column becomes when collapsed: 44px, one button, no content. A
+collapsed column is still a column, and clicking the rail opens it at its width.
+
+**Breadcrumb** — `libris / <notebook> / <panel view>` in the header: the app's location,
+named by the levels that can be climbed to. It does not name the open chat, which is the
+ground under the feet rather than a step up.
+
+**Inspector** — the panel's third view, reached from a source row or a citation: what
+that source was cut into and why. It replaces the list rather than floating over it, so
+the answer that cited it stays on screen beside it.
+
 ## Library
 
 **Notebook** — a workspace: it owns its chats and its source memberships. Sources are

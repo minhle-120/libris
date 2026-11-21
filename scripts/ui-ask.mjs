@@ -4,7 +4,7 @@
 // Requires a running server and the fake llama.cpp (both started by `make ui`).
 // Standalone:
 //   APP=http://127.0.0.1:8099/ EMBED=http://127.0.0.1:8124 node scripts/ui-ask.mjs
-import { Checks, withBrowser, UPLOAD_FIXTURE } from './cdp.mjs';
+import { Checks, withBrowser, UPLOAD_FIXTURE, CRUMB_NOTEBOOK } from './cdp.mjs';
 
 const llama = process.env.EMBED;
 if (!llama) {
@@ -69,18 +69,12 @@ const refused = (reason) => ({
   ]
 });
 
-/** Opens one of the notebook tabs, waiting for the view to exist at all. */
-function openTab(ui, label) {
-  return ui.until(`
-    const tab = [...document.querySelectorAll('nav.tabs .tab')]
-      .find((t) => t.textContent.trim() === ${JSON.stringify(label)});
-    if (!tab) return null;
-    tab.click();
-    return true;
-  `);
-}
-
-const openAskTab = (ui) => openTab(ui, 'Chat');
+/**
+ * Waits for the chat to be on screen. It used to be a tab that had to be opened
+ * first; the chat is the page now, so there is nothing to click and this is only
+ * the "has it rendered yet" half of what it was.
+ */
+const openAskTab = (ui) => ui.until(`return document.querySelector('.chat') ? true : null`);
 
 /**
  * Selects a notebook in the sidebar by name and confirms the view switched to it.
@@ -98,7 +92,7 @@ async function openNotebook(ui, name) {
   if (!clicked) return { ok: false, seen: 'no such row in the sidebar' };
 
   const seen = await ui.until(`
-    const title = (document.querySelector('.title h1')?.textContent ?? '').trim();
+    const title = ${CRUMB_NOTEBOOK};
     // Empty means the view has not rendered yet, so keep waiting; any other name is
     // a real answer and an immediate failure.
     return title === ${JSON.stringify(name)} ? true : (title || null);
@@ -229,11 +223,11 @@ const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ask-p
     document.querySelector('.turn.assistant:last-of-type .chips .cite').click();
     return true;
   `);
-  // The dialog is on screen before its chunks are — the heading renders from the
+  // The viewer is on screen before its chunks are — the heading renders from the
   // source, the list arrives a fetch later. Measuring the ring any earlier reports a
   // working feature as broken.
   const viewer = await ui.until(`
-    const dlg = document.querySelector('dialog.modal[open]');
+    const dlg = document.querySelector('.viewer');
     if (!dlg || !dlg.querySelector('.chunk, .tile')) return null;
     return {
       heading: dlg.querySelector('h2')?.textContent,
@@ -243,9 +237,20 @@ const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ask-p
   checks.check('a citation opens the source it cites', /two-page\.pdf/.test(viewer?.heading ?? ''), () => `heading=${viewer?.heading}`);
   checks.check('it opens on the cited chunk, ringed', viewer?.highlighted === 1, () => `highlighted=${viewer?.highlighted}`);
 
-  await ui.press('Escape');
-  const closed = await ui.until(`return !document.querySelector('dialog.modal[open]')`);
-  checks.check('Escape closes it again', !!closed, () => `open=${!closed}`);
+  // No Escape any more: the viewer is a step off Sources, not a top layer, so it is
+  // left the way the breadcrumb says — and the answer that cited it never left.
+  await ui.eval(`document.querySelector('.viewer [aria-label="Back to sources"]').click(); return true;`);
+  const closed = await ui.until(`
+    const c = [...document.querySelectorAll('.crumbs .crumb')].map((x) => x.textContent.trim());
+    return !document.querySelector('.viewer') && document.querySelector('.chat .turn.assistant')
+      ? c
+      : null;
+  `);
+  checks.check(
+    'the chat is still there, answer and all, when the source closes',
+    closed !== null && closed[closed.length - 1] === 'Sources',
+    JSON.stringify(closed)
+  );
 
   // ── the turn is the server's, not the page's ───────────────────
   await ui.reload(app);

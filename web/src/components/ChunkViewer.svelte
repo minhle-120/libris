@@ -10,12 +10,14 @@
   let {
     source,
     focus = undefined,
-    onclose
+    onback
   }: {
     source: Source;
     /** A chunk a citation points at: scrolled to and ringed once the chunks load. */
     focus?: { segment_id: string; chunk?: number };
-    onclose: () => void;
+    /** Back to the source list. The viewer is a step off Sources, not a modal over
+     * the whole app, so it leaves the answer behind it readable. */
+    onback: () => void;
   } = $props();
 
   let segments = $state<Segment[]>([]);
@@ -25,7 +27,7 @@
   /** Natural sizes, learned as page rasters load. Keyed by asset id. */
   let dims = $state<Record<string, string>>({});
   let open = $state<Record<string, boolean>>({});
-  let dlg: HTMLDialogElement | undefined = $state();
+  let root: HTMLElement | undefined = $state();
 
   /** The segment a citation pointed at, if one did. */
   let highlighted = $state('');
@@ -34,9 +36,6 @@
   const PREVIEW = 420;
 
   onMount(() => {
-    // showModal() gives Esc-to-close, focus trapping and the top layer for free,
-    // which is why this is a native dialog rather than a positioned div.
-    dlg?.showModal();
     load().then(() => {
       if (focus) reveal(focus);
     });
@@ -54,23 +53,9 @@
   async function reveal(where: { segment_id: string; chunk?: number }) {
     highlighted = where.segment_id;
     await tick(); // the chunks render after `segments` lands
-    dlg?.querySelector<HTMLElement>(`[data-seg="${where.segment_id}"]`)?.scrollIntoView({
+    root?.querySelector<HTMLElement>(`[data-seg="${where.segment_id}"]`)?.scrollIntoView({
       block: 'center'
     });
-  }
-
-  /** Esc closes the dialog itself, so the parent is told here rather than in a key handler. */
-  function onDialogClose() {
-    onclose();
-  }
-
-  function close() {
-    dlg?.close();
-  }
-
-  /** A click on the backdrop lands on the dialog element itself. */
-  function onBackdrop(e: MouseEvent) {
-    if (e.target === dlg) close();
   }
 
   async function load() {
@@ -167,7 +152,11 @@
   }
 </script>
 
-<dialog class="modal" aria-label="Chunks of {source.name}" bind:this={dlg} onclick={onBackdrop} onclose={onDialogClose}>
+<!-- No Escape handler, which the dialog version did not need written because
+     showModal() gave it one. This is a view with a way back — the button here and the
+     Sources crumb above it — not a top layer, so Escape would be a key with no claim
+     on it: the composer keeps Escape while a chunk viewer is open beside it. -->
+<section class="viewer" aria-label="Chunks of {source.name}" bind:this={root}>
     <header>
       <div class="head-text">
         <h2>How “{source.name}” is chunked</h2>
@@ -175,7 +164,7 @@
           {#if loading}loading…{:else if error}{error}{:else}{summary} · {source.kind} · {formatBytes(source.bytes)}{/if}
         </p>
       </div>
-      <button type="button" class="close" aria-label="Close" onclick={close}>
+      <button type="button" class="close" aria-label="Back to sources" onclick={onback}>
         <Icon name="x" size={16} />
       </button>
     </header>
@@ -283,23 +272,18 @@
       </span>
       <Badge tone="neutral">{source.segment_count} segments</Badge>
     </footer>
-</dialog>
+</section>
 
 <style>
-  .modal {
+  /* Panel content, not a top layer: it fills the column it was opened in and scrolls
+     inside itself, so the answer that cited it stays on screen behind the edge. */
+  .viewer {
     display: flex;
     flex-direction: column;
-    width: min(920px, calc(100vw - 48px));
-    max-height: min(860px, calc(100vh - 48px));
+    flex: 1;
+    min-height: 0;
     padding: 0;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    background: var(--canvas-overlay);
-    box-shadow: var(--shadow-md);
     overflow: hidden;
-  }
-  .modal::backdrop {
-    background: rgba(1, 4, 9, 0.55);
   }
   header {
     display: flex;

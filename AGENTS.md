@@ -14,6 +14,7 @@ the one you need before you start:
 | routes, status codes, SSE frames, file endpoints | `docs/api.md` |
 | `internal/llm`, any llama.cpp flag, endpoint or claim | `docs/llamacpp.md` |
 | tests, `make e2e`, `make ui`, the CDP harness | `docs/testing.md` |
+| the notebook's three columns, the panel, the breadcrumb | `docs/adr/0012-panel-navigation.md` |
 | a decision someone says was already made | `docs/adr/` |
 
 ---
@@ -98,6 +99,24 @@ Argued through. Breaking one needs a conversation, not a commit.
 9. **Loopback only by default.** `127.0.0.1`; anything else must be deliberate.
 10. **No `utils`, `common`, `models` packages.** That is where modularity dies.
 11. **Interfaces are declared by the consumer**, not the producer, and kept narrow.
+
+Every one of those, and several things this file does not repeat, has an ADR behind it.
+Twelve exist, they are short, and "the index is `ls docs/adr/`" is true but useless
+mid-sentence — so what each one settles, in the order an agent is likely to need it:
+
+| Deciding | Read | It says |
+|---|---|---|
+| a setting, or a field in the UI | 0001, 0011 | config is defined once in Go and the frontend is generated from it; a setting is an ability libris can apply, never capacity or a model name |
+| a request to a model server | 0006 | sampling and inference config never travel per request |
+| the shape of an answer | 0007 | a question is two model calls: research, then synthesis |
+| citations, re-ingest, what a chunk points at | 0008 | a citation is copied out of the segment, not referenced |
+| `Source.Status`, embeddings, "done" | 0004 | `ready` means searchable, so embedding is part of ingest |
+| cancellation, Stop, a dropped client | 0009 | one POST, one stream, and hanging up *is* the cancellation |
+| retrieval at scale, a vector index | 0010 | vectors are BLOBs in SQLite, scanned in Go — for now |
+| notebooks, dedupe, a shared file | 0003 | notebooks own memberships; sources are content-addressed and shared |
+| where files go on disk | 0005 | the data directory defaults to Documents/libris, resolved per platform |
+| the notebook's columns, the panel, the breadcrumb | 0012 | Sources and Activity are a panel beside the chat, not pages instead of it |
+| how settings reach the browser | 0002 | settings are served and saved over HTTP |
 
 ---
 
@@ -262,13 +281,31 @@ PDFDPI int `key:"pdfDPI" group:"ingest" label:"PDF raster DPI" help:"…"
 ## 7. Frontend
 
 - Primer/GitHub design language: 6px radii, `#1f883d` primary, `#d1d9e0` borders,
-  `#fd8c73` active-tab underline, 56px header, 288px default sidebar; dark mode `#0d1117` /
+  `#fd8c73` accent underline, 56px header, 288px default sidebar; dark mode `#0d1117` /
   `#3d444d` / `#4493f8`. Tokens live in `web/src/app.css`.
 - No dashed frames. Empty states are icon + sentence + button on the open canvas; a
   dotted box around "nothing here" is two boxes competing with the message. The one
   dashed affordance that earned its keep was drag-over, now a solid 2px accent outline.
-- `#app` is exactly viewport height with `overflow:hidden`, so `<main>` is the only
-  scroller. Do not go back to `min-height:100%` — it scrolls the sidebar away.
+- `#app` is exactly viewport height with `overflow:hidden`, so `<main>` is the page
+  scroller for anything that wants one. A notebook takes `height:100%` and scrolls its
+  two columns itself — the chat and the panel — because a transcript that grows the page
+  scrolls the composer off the bottom. Do not go back to `min-height:100%`: it scrolls
+  the sidebar away.
+- A notebook is three columns, not three pages: the notebook list on the left, the chat
+  in the middle, and one **panel** on the right holding Sources and Activity as a
+  segmented view (ADR 0012). The panel repeats the left column's geometry on purpose —
+  260..640 drag from its inner edge, 44px rail, its width in `localStorage` — and
+  `lib/panel.ts` is the single rule that keeps them clamped, persisted and shortening
+  the breadcrumb by exactly the level they name. Do not split it into two components and
+  do not make the sizes equal: mirrored geometry, independent numbers.
+- The breadcrumb is the app's location, and it names levels the user can climb to:
+  `libris / <notebook> / <panel view>`. A chat is not in it — a chat is the ground under
+  the feet, not a step up, and it has a picker of its own.
+- Overlays are native `<dialog>` + `showModal()`, not positioned divs: Esc, focus
+  trapping and the top layer come from the browser, and a hand-rolled scrim fails the
+  accessibility checks honestly. Backdrop-click-to-close is the `onclick` on the dialog
+  comparing `e.target === dlg`. The chunk inspector is *not* one: it is a step inside the
+  panel, because an inspector that dims the screen takes the answer with it.
 - Overlays are native `<dialog>` + `showModal()`, not positioned divs: Esc, focus
   trapping and the top layer come from the browser, and a hand-rolled scrim fails the
   accessibility checks honestly. Backdrop-click-to-close is the `onclick` on the dialog
@@ -333,7 +370,7 @@ scripted model so all six termination paths are asserted with no model in the ro
 fake `API` and assert only the HTTP mapping.
 
 Three levels: `make check` (unit), `make e2e` (real binary against a fake embedding
-server, database read back with `sqlite3`), `make ui` (100 browser checks over CDP
+server, database read back with `sqlite3`), `make ui` (142 browser checks over CDP
 against the real UI and a fake that answers all three llama.cpp endpoints). Coverage is
 89% overall; the gaps are DB-error guards and unreachable IO branches, and production
 code should not be contorted to reach them.
@@ -483,6 +520,9 @@ Found the hard way. Browser-harness and fixture traps are in `docs/testing.md`.
 - `formatBytes` said 12 KB for a 1.2 KB file: `bytes / 10 ** (2 * i)` is decimal,
   `bytes / 1024 ** i` is binary, and the index was chosen by log₂₀₄₈. Write the divisor to
   match the base and assert an exact value, not `/KB/`.
+- Two fixed columns either side of one flexible middle means the middle dies first: at
+  the default 288 + 340 the chat is 272 px at a 900 px window and 12 px at 640, with no
+  horizontal scroll to show for it. Measure the columns, do not eyeball them (ADR 0012).
 - Grid items with `align-items: start` do not stretch, so a sticky sub-nav needs its
   containing row to be tall. Check layout at 640 / 900 / 1180 px before declaring a
   settings-style page done.

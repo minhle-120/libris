@@ -11,15 +11,12 @@
   let {
     notebook,
     sources,
-    oncite = undefined,
-    onchat = undefined
+    oncite = undefined
   }: {
     notebook: Notebook;
     sources: Source[];
     /** Opens the source at the cited page, character range or timestamp. */
     oncite?: (citation: Citation) => void;
-    /** The chat that is open, for the breadcrumb. Reported on change only. */
-    onchat?: (title: string) => void;
   } = $props();
 
   let chats = $state<Chat[]>([]);
@@ -45,15 +42,6 @@
 
   const chat = $derived(chats.find((c) => c.id === chatId) ?? null);
 
-  // A chat's title is written by the server when the first question arrives, so the
-  // breadcrumb has to follow it rather than be told once at open.
-  let reported = '';
-  $effect(() => {
-    const title = chat?.title ?? '';
-    if (title === reported) return;
-    reported = title;
-    onchat?.(title);
-  });
   const searchable = $derived(sources.filter((s) => s.status === 'ready').length);
   const canSend = $derived(draft.trim().length > 0 && searchable > 0 && !running);
 

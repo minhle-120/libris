@@ -4,7 +4,7 @@
 // Requires a running server: `make ui` starts one against a throwaway data
 // directory. Standalone: APP=http://127.0.0.1:8080 node scripts/ui-upload.mjs
 import { writeFileSync } from 'node:fs';
-import { Checks, withBrowser, UPLOAD_FIXTURE } from './cdp.mjs';
+import { Checks, withBrowser, UPLOAD_FIXTURE, CRUMB_NOTEBOOK } from './cdp.mjs';
 
 // The fake embeddings server `make ui` starts alongside the app; /control makes
 // it refuse, which is how a source ends up in the state the retry button is for.
@@ -62,15 +62,19 @@ const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ui-pr
   );
   checks.check('New creates a notebook on the server', created === before + 1, `rows=${created}`);
 
-  const opened = await ui.eval(`
+  // Polled, not measured once: the panel mounts before its list fetch resolves, so on
+  // a cold profile the empty state — and with it the only proof the panel rendered — is
+  // not there yet on the first read.
+  const opened = await ui.until(`
+    const empty = document.querySelector('.sidepanel .empty h2')?.textContent;
+    if (!empty) return null;
     return {
-      title: document.querySelector('.title h1')?.textContent,
-      addEnabled: [...document.querySelectorAll('button')]
-        .some((b) => b.textContent.includes('Add sources') && !b.disabled),
-      empty: document.querySelector('.empty h2')?.textContent
+      crumb: ${CRUMB_NOTEBOOK},
+      addEnabled: [...document.querySelectorAll('button[title="Add sources"]')].some((b) => !b.disabled),
+      empty
     };
   `);
-  checks.check('notebook view opens', opened.title === 'Upload Lab', `title=${opened.title}`);
+  checks.check('notebook view opens', opened.crumb === 'Upload Lab', `crumb=${opened.crumb}`);
   checks.check('Add sources is a working control', opened.addEnabled === true);
   checks.check('empty state invites an upload', /Nothing in this notebook yet/.test(opened.empty ?? ''), opened.empty);
 
@@ -110,10 +114,11 @@ const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ui-pr
   // ── the chunk inspector ────────────────────────────────────────
   await ui.click('See how this source was chunked');
   const view = await ui.until(`
-    const d = document.querySelector('dialog');
-    // Truthiness must mean "rendered", not merely "open": the first poll lands
-    // while listSegments is still in flight and would read the loading text.
-    if (!d || !d.open || !d.querySelector('.chunk, .tile')) return null;
+    const d = document.querySelector('.viewer');
+    // Truthiness must mean "rendered": the first poll lands while listSegments is
+    // still in flight and would read the loading text. The viewer used to be a
+    // dialog, where its open flag was a second signal that it had replaced the list.
+    if (!d || !d.querySelector('.chunk, .tile')) return null;
     return {
       heading: d.querySelector('h2')?.textContent,
       summary: d.querySelector('header p')?.textContent.replace(/\\s+/g, ' ').trim(),
@@ -140,10 +145,10 @@ const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ui-pr
   checks.check('a lone chunk reports no overlap', /no chunk repeats/.test(view?.legend ?? ''), view?.legend);
 
   const imgs = await ui.until(`
-    const list = [...document.querySelectorAll('dialog img')];
+    const list = [...document.querySelectorAll('.viewer img')];
     return list.length === 2 && list.every((i) => i.complete && i.naturalWidth > 0) && {
       sizes: list.map((i) => i.naturalWidth + '\u00d7' + i.naturalHeight).join(' '),
-      caps: [...document.querySelectorAll('dialog .cap')].map((c) => c.textContent.replace(/\\s+/g, ' ').trim())
+      caps: [...document.querySelectorAll('.viewer .cap')].map((c) => c.textContent.replace(/\\s+/g, ' ').trim())
     }
   `, 100, 100);
   checks.check('page rasters are served and rendered', imgs?.sizes === '459\u00d7459 459\u00d7459', imgs?.sizes);
@@ -151,18 +156,32 @@ const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ui-pr
     /0000 p1 459/.test(imgs?.caps?.[0] ?? '') && /0001 p2 459/.test(imgs?.caps?.[1] ?? ''),
     JSON.stringify(imgs?.caps));
 
-  // A real Escape press: a synthetic KeyboardEvent is untrusted, and Chrome only
-  // closes a <dialog> on trusted input.
-  await ui.press('Escape');
-  await ui.settle(300);
-  const closed = await ui.eval(`
-    const open = [...document.querySelectorAll('dialog')].filter((d) => d.open);
-    return { total: document.querySelectorAll('dialog').length,
-             open: open.map((d) => d.getAttribute('aria-label')) };
+  // Back out the way the breadcrumb says to. The inspector is a step off Sources
+  // now, so 'Sources' is a link again, and clicking it is the app's own way home —
+  // Escape belonged to showModal(), which no longer owns this view.
+  const crumbLinks = await ui.eval(`
+    return [...document.querySelectorAll('.crumbs .crumb.link')].map((b) => b.textContent.trim());
   `);
-  // Counting dialogs would now include the new-notebook dialog, which lives in the
-  // shell whether or not it is open: what matters is that none of them is.
-  checks.check('the dialog closes', closed.open.length === 0, JSON.stringify(closed));
+  checks.check(
+    'an open inspector makes Sources a way back',
+    crumbLinks.includes('Sources'),
+    crumbLinks.join(', ')
+  );
+  await ui.eval(`
+    [...document.querySelectorAll('.crumbs .crumb.link')]
+      .find((b) => b.textContent === 'Sources')?.click();
+    return true;
+  `);
+  const back = await ui.until(`
+    const c = [...document.querySelectorAll('.crumbs .crumb')].map((x) => x.textContent.trim());
+    return c.join('/') === 'libris/Upload Lab/Sources' && document.querySelector('.sidepanel .list')
+      ? c : null;
+  `);
+  checks.check('the inspector gives the panel back to the list', back !== null, JSON.stringify(back));
+  checks.check(
+    'nothing is left open over the app',
+    (await ui.eval(`return [...document.querySelectorAll('dialog')].filter((d) => d.open).length`)) === 0
+  );
 
   // ── the same bytes again must not create a second row ──────────
   await ui.setFiles('input[type=file]', [UPLOAD_FIXTURE]);
@@ -202,7 +221,7 @@ const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ui-pr
   `);
   const removed = await ui.until(`
     return document.querySelectorAll('.source').length === 0 && {
-      empty: document.querySelector('.empty h2')?.textContent,
+      empty: document.querySelector('.sidepanel .empty h2')?.textContent,
       count: document.querySelector('.sidebar .row.active .count')?.textContent ?? null
     };
   `);

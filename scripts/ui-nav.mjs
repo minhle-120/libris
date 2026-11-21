@@ -59,11 +59,12 @@ const code = await withBrowser(
     const created = await ui.until(`
       const row = [...document.querySelectorAll('.sidebar .list .item')]
         .find((b) => b.textContent.includes('Nav Notes'));
-      return row ? { row: true, title: document.querySelector('.title h1')?.textContent } : null;
+      const crumb = [...document.querySelectorAll('.crumbs .crumb')][1]?.textContent;
+      return row && crumb === 'Nav Notes' ? { row: true, crumb } : null;
     `);
     checks.check(
       'the typed name is the notebook name',
-      created?.row === true && created?.title === 'Nav Notes',
+      created?.crumb === 'Nav Notes',
       JSON.stringify(created)
     );
     checks.check('the dialog closed', await ui.eval(`return document.querySelector('dialog.new-notebook')?.open !== true`));
@@ -92,12 +93,14 @@ const code = await withBrowser(
     const committed = await ui.until(`
       const row = [...document.querySelectorAll('.sidebar .list .item')]
         .find((b) => b.textContent.includes('Renamed Notes'));
-      return row ? { row: true, editing: !!document.querySelector('.sidebar input.rename'),
-                     title: document.querySelector('.title h1')?.textContent } : null;
+      const crumb = [...document.querySelectorAll('.crumbs .crumb')][1]?.textContent;
+      return row && crumb === 'Renamed Notes'
+        ? { row: true, editing: !!document.querySelector('.sidebar input.rename'), crumb }
+        : null;
     `);
     checks.check(
       'Enter commits the new name',
-      committed?.row === true && committed?.editing === false && committed?.title === 'Renamed Notes',
+      committed?.editing === false && committed?.crumb === 'Renamed Notes',
       JSON.stringify(committed)
     );
 
@@ -239,70 +242,112 @@ const code = await withBrowser(
       (await ui.eval(`return [...document.querySelectorAll('.header button')].some((b) => b.textContent.trim() === 'New')`)) === false
     );
 
-    await ui.click('Chat');
-    const crumbsChat = await ui.until(`
-      const c = [...document.querySelectorAll('.crumbs .crumb')].map((x) => x.textContent.trim());
-      return c.join('/') === 'libris/Renamed Notes/Chat' ? c : null;
-    `);
-    checks.check('switching to Chat moves the breadcrumb', (crumbsChat ?? []).join('/') === 'libris/Renamed Notes/Chat', JSON.stringify(crumbsChat));
-
-    // Two chats exist on the server only: the breadcrumb has to follow whichever one
-    // the panel opens, and Chat only becomes a level once something sits below it.
-    const notebook = (await fetch(`${app}api/notebooks`).then((r) => r.json())).find((n) => n.name === 'Renamed Notes');
-    for (const title of ['About the corpus', 'Second question']) {
-      await fetch(`${app}api/notebooks/${notebook.id}/chats`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ title })
-      });
-    }
-    // The panel opens the last chat it is given, so that is the title to expect —
-    // asserted off the server's list rather than a guess about its order.
-    const openTitle = await fetch(`${app}api/notebooks/${notebook.id}/chats`)
-      .then((r) => r.json())
-      .then((c) => c.at(-1).title);
-    await ui.reload(app);
-    await ui.settle();
-    await ui.click('Chat');
-    const crumbsNamed = await ui.until(`
-      const c = [...document.querySelectorAll('.crumbs .crumb')].map((x) => x.textContent.trim());
-      return c[c.length - 1] === ${JSON.stringify(openTitle)} ? c : null;
-    `);
-    checks.check(
-      'the open chat is the last crumb, with Chat above it',
-      (crumbsNamed ?? []).join('/') === `libris/Renamed Notes/Chat/${openTitle}`,
-      (crumbsNamed ?? []).join(' / ')
-    );
-    checks.check(
-      'Chat is clickable because something sits below it',
-      (await ui.eval(`return [...document.querySelectorAll('.crumbs .crumb.link')].map((b) => b.textContent.trim())`)).includes('Chat')
-    );
-
-    await ui.eval(`
-      const s = document.querySelector('select.picker');
-      const want = [...s.options].find((o) => o.textContent !== ${JSON.stringify(openTitle)});
-      s.value = want.value;
-      s.dispatchEvent(new Event('change', { bubbles: true }));
+    // ── the panel: Sources and Activity share one place ──────────
+    const segment = (label) => ui.eval(`
+      const b = [...document.querySelectorAll('.sidepanel .seg-btn')]
+        .find((x) => x.textContent.trim().startsWith(${JSON.stringify(label)}));
+      if (!b) throw new Error('no ' + ${JSON.stringify(label)} + ' segment');
+      b.click();
       return true;
     `);
-    const switched = await ui.until(`
-      const c = [...document.querySelectorAll('.crumbs .crumb')].map((x) => x.textContent.trim());
-      return c.join('/').includes('/Chat/') && c[c.length - 1] !== ${JSON.stringify(openTitle)}
-        ? c.join('/')
+    const crumbs = () => ui.eval(`
+      return [...document.querySelectorAll('.crumbs .crumb')].map((x) => x.textContent.trim());
+    `);
+
+    await segment('Activity');
+    checks.check(
+      'Activity is a view inside the panel, and the breadcrumb follows',
+      (await ui.until(`const c = [...document.querySelectorAll('.crumbs .crumb')].map((x) => x.textContent.trim());
+        return c.join('/') === 'libris/Renamed Notes/Activity' ? true : null;`)) === true
+    );
+    checks.check(
+      'Activity says what is missing rather than showing a stub',
+      (await ui.eval(`return document.querySelector('.sidepanel .empty h2')?.textContent`)) === 'Nothing recorded yet'
+    );
+
+    await segment('Sources');
+    checks.check(
+      'Sources comes back with its list',
+      (await ui.until(`
+        const c = [...document.querySelectorAll('.crumbs .crumb')].map((x) => x.textContent.trim());
+        return c.join('/') === 'libris/Renamed Notes/Sources' && document.querySelector('.sidepanel .dropzone')
+          ? true
+          : null;
+      `)) === true
+    );
+
+    // The panel is the second resizable column, so it drags, stores and shrinks the
+    // breadcrumb exactly the way the notebook list on the left does.
+    const panelWidth = () => ui.eval(`return Math.round(document.querySelector('.sidepanel').getBoundingClientRect().width)`);
+
+    const saved = await ui.eval(`
+      const el = document.querySelector('.sidepanel .resizer');
+      const r = el.getBoundingClientRect();
+      const at = (x) => ({ bubbles: true, cancelable: true, clientX: x, clientY: r.top + 60,
+                           pointerId: 1, isPrimary: true, button: 0, buttons: 1 });
+      el.dispatchEvent(new PointerEvent('pointerdown', at(r.left + 3)));
+      // Left is wider on this side: the handle is the panel's inner edge, which is
+      // the whole point of mirroring the left-hand column rather than copying it.
+      window.dispatchEvent(new PointerEvent('pointermove', at(r.left - 77)));
+      window.dispatchEvent(new PointerEvent('pointerup', at(r.left - 77)));
+      return localStorage.getItem('libris.sidepanel.width');
+    `);
+    const widened = await panelWidth();
+    checks.check('the panel drags wider from its inner edge', widened === 420, `width=${widened}`);
+    checks.check('and remembers it', saved === '420', `saved=${saved}`);
+
+    await ui.click('Hide panel');
+    const closedPanel = await ui.until(`
+      return document.querySelector('.sidepanel.closed')
+        ? { width: Math.round(document.querySelector('.sidepanel').getBoundingClientRect().width) }
         : null;
     `);
-    checks.check('the breadcrumb follows the chat picker', switched !== null, String(switched));
+    const shutCrumbs = await crumbs();
+    checks.check(
+      'a collapsed panel leaves a rail and shortens the breadcrumb',
+      closedPanel?.width === 44 && shutCrumbs.join('/') === 'libris/Renamed Notes',
+      `${closedPanel?.width} · ${shutCrumbs.join(' / ')}`
+    );
 
-    await ui.eval(`
-      [...document.querySelectorAll('.crumbs .crumb.link')]
-        .find((b) => b.textContent === 'Renamed Notes')?.click();
-      return true;
-    `);
-    const upOne = await ui.until(`
-      const c = [...document.querySelectorAll('.crumbs .crumb')].map((x) => x.textContent.trim());
-      return c.join('/') === 'libris/Renamed Notes/Sources' && document.querySelector('.dropzone') ? c : null;
-    `);
-    checks.check('the notebook crumb goes up to its Sources', upOne !== null, JSON.stringify(upOne));
+    await ui.click('Show sources');
+    const reopenedPanel = await ui.until(
+      `return document.querySelector('.sidepanel .seg') ? Math.round(document.querySelector('.sidepanel').getBoundingClientRect().width) : null`
+    );
+    checks.check('the panel opens back at the width it closed at', reopenedPanel === 420, `width=${reopenedPanel}`);
+
+    // ── what the breadcrumb deliberately does not name ───────────
+    // The chat is the page, and a breadcrumb names where you are by climbing out of.
+    // A chat has a title and a picker of its own; putting it in the header would put
+    // the ground you stand on in the list of places you could go back to.
+    const notebook = (await fetch(`${app}api/notebooks`).then((r) => r.json())).find((n) => n.name === 'Renamed Notes');
+    const madeChat = await fetch(`${app}api/notebooks/${notebook.id}/chats`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ title: 'A named chat' })
+    }).then((r) => r.json());
+
+    await ui.reload(app);
+    await ui.settle();
+    await segment('Activity');
+    await segment('Sources');
+    await ui.settle(200);
+    checks.check(
+      'the open chat is named where it is switched',
+      ['A named chat'].includes(
+        await ui.eval(`
+          const picker = document.querySelector('.chat select.picker');
+          return picker
+            ? picker.options[picker.selectedIndex]?.textContent?.trim()
+            : document.querySelector('.chat .thread .title')?.textContent?.trim();
+        `)
+      ),
+      JSON.stringify(madeChat)
+    );
+    checks.check(
+      'and nowhere in the breadcrumb',
+      (await crumbs()).join('/') === 'libris/Renamed Notes/Sources',
+      (await crumbs()).join(' / ')
+    );
 
     await ui.eval(`
       [...document.querySelectorAll('.crumbs .crumb.link')]

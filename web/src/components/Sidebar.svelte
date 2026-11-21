@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Notebook } from '../lib/types';
+  import { dragHandle, NOTEBOOKS, readOpen, readW, writeOpen } from '../lib/panel';
   import { renameNotebook } from '../lib/api';
   import { errorMessage } from '../lib/format';
   import Icon from '../lib/Icon.svelte';
@@ -22,59 +23,19 @@
     onerror: (message: string) => void;
   } = $props();
 
-  // Width lives here rather than in a stylesheet because it is the one layout number
-  // the user is allowed to set, and it must survive a reload. The rail is a fixed
-  // 44px: wide enough for the book icon, narrow enough to read as closed.
-  const MIN_W = 200;
-  const MAX_W = 480;
-  const DEFAULT_W = 288;
-  const RAIL_W = 44;
-  const KEY_W = 'libris.sidebar.width';
-  const KEY_OPEN = 'libris.sidebar.open';
-
-  const clamp = (n: number) => Math.min(MAX_W, Math.max(MIN_W, Math.round(n)));
-
-  let width = $state(clamp(Number(localStorage.getItem(KEY_W)) || DEFAULT_W));
-  let open = $state(localStorage.getItem(KEY_OPEN) !== '0');
+  // Width and open state are the user's, not the stylesheet's, so they live in
+  // localStorage and are shared with the right-hand panel through lib/panel.ts.
+  let width = $state(readW(NOTEBOOKS));
+  let open = $state(readOpen(NOTEBOOKS));
   let editingId = $state<string | null>(null);
   let draft = $state('');
 
-  function persist() {
-    localStorage.setItem(KEY_W, String(width));
-    localStorage.setItem(KEY_OPEN, open ? '1' : '0');
-  }
+  const handle = (node: HTMLElement) =>
+    dragHandle(node, { spec: NOTEBOOKS, get: () => width, set: (n) => (width = n) });
 
   function toggle() {
-    // Only a drag that produced a real width is worth storing, so a collapse keeps
-    // the width the sidebar will open back to.
     open = !open;
-    persist();
-  }
-
-  function dragStart(e: PointerEvent) {
-    const fromX = e.clientX;
-    const fromW = width;
-    const move = (ev: PointerEvent) => (width = clamp(fromW + ev.clientX - fromX));
-    const stop = () => {
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', stop);
-      document.documentElement.classList.remove('resizing');
-      persist();
-    };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', stop);
-    document.documentElement.classList.add('resizing');
-    e.preventDefault();
-  }
-
-  /** The separator is focusable, so the width is reachable without a mouse. */
-  function nudge(e: KeyboardEvent) {
-    if (e.key === 'ArrowLeft') width = clamp(width - 16);
-    else if (e.key === 'ArrowRight') width = clamp(width + 16);
-    else if (e.key === 'Home') width = DEFAULT_W;
-    else return;
-    e.preventDefault();
-    persist();
+    writeOpen(NOTEBOOKS, open);
   }
 
   function beginRename(nb: Notebook) {
@@ -107,7 +68,7 @@
   }
 </script>
 
-<aside class="sidebar" class:closed={!open} style:width={open ? `${width}px` : `${RAIL_W}px`}>
+<aside class="sidebar" class:closed={!open} style:width={open ? `${width}px` : `${NOTEBOOKS.rail}px`}>
   {#if !open}
     <button
       type="button"
@@ -210,12 +171,7 @@
       class="resizer"
       title="Drag to resize · double-click to reset"
       aria-label="Notebook list width. Drag, or use arrow keys."
-      onpointerdown={dragStart}
-      ondblclick={() => {
-        width = DEFAULT_W;
-        persist();
-      }}
-      onkeydown={nudge}
+      use:handle
     ></button>
   {/if}
 </aside>

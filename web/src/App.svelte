@@ -1,8 +1,9 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { createNotebook, listNotebooks } from './lib/api';
+  import { readOpen, SIDE, writeOpen } from './lib/panel';
   import { errorMessage } from './lib/format';
-  import type { Crumb, Notebook, Panel } from './lib/types';
+  import type { Crumb, Notebook, Panel, Source } from './lib/types';
   import Header from './components/Header.svelte';
   import Sidebar from './components/Sidebar.svelte';
   import NotebookView from './components/NotebookView.svelte';
@@ -22,33 +23,29 @@
   let dlg = $state<HTMLDialogElement | null>(null);
   let nameInput = $state<HTMLInputElement | null>(null);
   let newName = $state('');
-  let tab = $state<Panel>('sources');
-  let chatTitle = $state('');
+  let panel = $state<Panel>('sources');
+  let panelOpen = $state(readOpen(SIDE));
+  let inspecting = $state<Source | null>(null);
   // The breadcrumb's first level means "no notebook picked", and load() must not
   // undo that by re-selecting the newest one the next time a source changes.
   let atHome = $state(false);
 
   const active = $derived(notebooks.find((nb) => nb.id === activeId) ?? null);
 
-  const panelLabel: Record<Panel, string> = {
-    sources: 'Sources',
-    chat: 'Chat',
-    activity: 'Activity'
-  };
+  const panelLabel: Record<Panel, string> = { sources: 'Sources', activity: 'Activity' };
 
+  // The chat is not in here. It is the page, and a breadcrumb names where you are
+  // by climbing out of, not the ground you are standing on.
   const crumbs = $derived.by((): Crumb[] => {
     const out: Crumb[] = [{ label: 'libris', onclick: goHome }];
     if (view === 'settings') return [...out, { label: 'settings' }];
     if (!active) return out;
-    out.push({ label: active.name, onclick: () => openPanel('sources') });
-    // The page you are on is not a link. A chat title is one level below Chat, so
-    // Chat becomes clickable only when there is something below it to go back up to.
-    out.push(
-      tab === 'chat' && chatTitle
-        ? { label: 'Chat', onclick: () => openPanel('chat') }
-        : { label: panelLabel[tab] }
-    );
-    if (tab === 'chat' && chatTitle) out.push({ label: chatTitle });
+    out.push({ label: active.name });
+    if (!panelOpen) return out;
+    // The page you are on is not a link, and Sources is one level above an open
+    // chunk viewer — which is the only time it becomes a way back.
+    out.push(inspecting ? { label: 'Sources', onclick: () => (inspecting = null) } : { label: panelLabel[panel] });
+    if (inspecting) out.push({ label: inspecting.name });
     return out;
   });
 
@@ -109,23 +106,40 @@
   }
 
   function openNotebook(id: string) {
+    if (id !== activeId) inspecting = null;
     activeId = id;
     atHome = false;
     view = 'notebook';
-    tab = 'sources';
-    chatTitle = '';
   }
 
   function goHome() {
     view = 'notebook';
     activeId = null;
     atHome = true;
-    chatTitle = '';
+    inspecting = null;
   }
 
-  function openPanel(next: Panel) {
+  function setPanel(next: Panel) {
     view = 'notebook';
-    tab = next;
+    panel = next;
+    panelOpen = true;
+    writeOpen(SIDE, true);
+  }
+
+  function setPanelOpen(next: boolean) {
+    panelOpen = next;
+    writeOpen(SIDE, next);
+    if (!next) inspecting = null;
+  }
+
+  /** A citation is an instruction to look: the panel opens even if it was shut. */
+  function inspect(source: Source | null) {
+    inspecting = source;
+    if (source) {
+      panel = 'sources';
+      panelOpen = true;
+      writeOpen(SIDE, true);
+    }
   }
 
   function toggleTheme() {
@@ -167,9 +181,12 @@
       {#key active.id}
         <NotebookView
           notebook={active}
-          {tab}
-          ontab={(next) => (tab = next)}
-          onchat={(title) => (chatTitle = title)}
+          {panel}
+          open={panelOpen}
+          {inspecting}
+          onpanel={setPanel}
+          onopen={setPanelOpen}
+          oninspect={inspect}
           onchange={load}
         />
       {/key}
