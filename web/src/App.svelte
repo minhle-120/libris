@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { createNotebook, listNotebooks } from './lib/api';
   import { errorMessage } from './lib/format';
-  import type { Notebook } from './lib/types';
+  import type { Crumb, Notebook, Panel } from './lib/types';
   import Header from './components/Header.svelte';
   import Sidebar from './components/Sidebar.svelte';
   import NotebookView from './components/NotebookView.svelte';
@@ -22,16 +22,44 @@
   let dlg = $state<HTMLDialogElement | null>(null);
   let nameInput = $state<HTMLInputElement | null>(null);
   let newName = $state('');
+  let tab = $state<Panel>('sources');
+  let chatTitle = $state('');
+  // The breadcrumb's first level means "no notebook picked", and load() must not
+  // undo that by re-selecting the newest one the next time a source changes.
+  let atHome = $state(false);
 
   const active = $derived(notebooks.find((nb) => nb.id === activeId) ?? null);
+
+  const panelLabel: Record<Panel, string> = {
+    sources: 'Sources',
+    chat: 'Chat',
+    activity: 'Activity'
+  };
+
+  const crumbs = $derived.by((): Crumb[] => {
+    const out: Crumb[] = [{ label: 'libris', onclick: goHome }];
+    if (view === 'settings') return [...out, { label: 'settings' }];
+    if (!active) return out;
+    out.push({ label: active.name, onclick: () => openPanel('sources') });
+    // The page you are on is not a link. A chat title is one level below Chat, so
+    // Chat becomes clickable only when there is something below it to go back up to.
+    out.push(
+      tab === 'chat' && chatTitle
+        ? { label: 'Chat', onclick: () => openPanel('chat') }
+        : { label: panelLabel[tab] }
+    );
+    if (tab === 'chat' && chatTitle) out.push({ label: chatTitle });
+    return out;
+  });
 
   onMount(load);
 
   async function load() {
     try {
       notebooks = await listNotebooks();
-      // Keep the selection if it still exists, otherwise open the newest.
-      if (!notebooks.some((nb) => nb.id === activeId)) {
+      // Keep the selection if it still exists, otherwise open the newest — unless
+      // the user asked for the notebook list itself by clicking up to libris.
+      if (!atHome && !notebooks.some((nb) => nb.id === activeId)) {
         activeId = notebooks.at(-1)?.id ?? null;
       }
       error = '';
@@ -71,7 +99,22 @@
 
   function openNotebook(id: string) {
     activeId = id;
+    atHome = false;
     view = 'notebook';
+    tab = 'sources';
+    chatTitle = '';
+  }
+
+  function goHome() {
+    view = 'notebook';
+    activeId = null;
+    atHome = true;
+    chatTitle = '';
+  }
+
+  function openPanel(next: Panel) {
+    view = 'notebook';
+    tab = next;
   }
 
   function toggleTheme() {
@@ -84,10 +127,10 @@
 <Header
   {theme}
   {view}
+  {crumbs}
   ontoggle={toggleTheme}
-  onnew={openNew}
   onsettings={() => (view = 'settings')}
-  onhome={() => (view = 'notebook')}
+  onhome={goHome}
 />
 
 <div class="shell">
@@ -111,7 +154,13 @@
       <SettingsView />
     {:else if active}
       {#key active.id}
-        <NotebookView notebook={active} onchange={load} />
+        <NotebookView
+          notebook={active}
+          {tab}
+          ontab={(next) => (tab = next)}
+          onchat={(title) => (chatTitle = title)}
+          onchange={load}
+        />
       {/key}
     {:else if loading}
       <p class="center muted">Loading notebooks…</p>
@@ -122,7 +171,7 @@
           title="No notebook selected"
           description="A notebook holds a set of sources. Create one to start adding PDFs, images, or audio. Nothing leaves this machine."
         >
-          <Button variant="primary" onclick={create}>New notebook</Button>
+          <Button variant="primary" onclick={openNew}>New notebook</Button>
         </EmptyState>
       </div>
     {/if}

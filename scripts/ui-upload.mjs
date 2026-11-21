@@ -48,7 +48,7 @@ const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ui-pr
 
   // ── create a notebook ──────────────────────────────────────────
   const before = boot.notebooks;
-  await ui.click('New');
+  await ui.click('New notebook'); // the sidebar's + — the header has no New button
   await ui.eval(`
     const el = document.querySelector('dialog.new-notebook input');
     el.value = 'Upload Lab';

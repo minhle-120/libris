@@ -80,7 +80,7 @@ function openTab(ui, label) {
   `);
 }
 
-const openAskTab = (ui) => openTab(ui, 'Ask');
+const openAskTab = (ui) => openTab(ui, 'Chat');
 
 /**
  * Selects a notebook in the sidebar by name and confirms the view switched to it.

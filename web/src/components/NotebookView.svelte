@@ -12,6 +12,7 @@
   import type {
     Citation,
     Notebook,
+    Panel,
     Source,
     SourceKind,
     SourceStatus,
@@ -27,9 +28,16 @@
 
   let {
     notebook,
+    tab,
+    ontab,
+    onchat = undefined,
     onchange = undefined
   }: {
     notebook: Notebook;
+    tab: Panel;
+    ontab: (tab: Panel) => void;
+    /** Carries the open chat's title up to the breadcrumb. */
+    onchat?: (title: string) => void;
     onchange?: () => void;
   } = $props();
 
@@ -39,7 +47,6 @@
   let filter = $state('');
   let uploading = $state(0);
   let dragging = $state(false);
-  let tab = $state('sources');
   let inspecting: Source | null = $state(null);
   // The chunk an answer cited, carried into the viewer so it opens on the place the
   // answer came from rather than at the top of a 400-page raster run.
@@ -60,7 +67,7 @@
 
   const tabs = $derived<Tab[]>([
     { id: 'sources', label: 'Sources', count: sources.length },
-    { id: 'ask', label: 'Ask' },
+    { id: 'chat', label: 'Chat' },
     { id: 'activity', label: 'Activity' }
   ]);
 
@@ -209,7 +216,7 @@
     </div>
   </div>
 
-  <Tabs items={tabs} active={tab} onselect={(id) => (tab = id)} />
+  <Tabs items={tabs} active={tab} onselect={(id) => ontab(id as Panel)} />
 
   <div class="panel">
     {#if error}
@@ -350,8 +357,8 @@
           <div class="drop-hint"><Icon name="upload" size={20} /> Drop to add</div>
         {/if}
       </div>
-    {:else if tab === 'ask'}
-      <ChatPanel notebook={notebook} {sources} oncite={openCitation} />
+    {:else if tab === 'chat'}
+      <ChatPanel notebook={notebook} {sources} oncite={openCitation} {onchat} />
     {:else}
       <EmptyState
         icon="pulse"

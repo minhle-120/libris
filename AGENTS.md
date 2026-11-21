@@ -290,8 +290,20 @@ PDFDPI int `key:"pdfDPI" group:"ingest" label:"PDF raster DPI" help:"…"
 - A notebook is never unnamed: New opens a `<dialog>` whose Create is disabled until
   the name is non-blank, and the sidebar renames in place (Enter commits, Escape
   abandons, blur commits what changed) rather than opening a second dialog for it.
-  "Untitled notebook" existed nowhere before this, and the server already refused it.
-- The sidebar's width and open/closed state are the only layout numbers the user owns,
+  The old one-click path hard-coded "Untitled notebook", a name the server refuses.
+- The header is the navigation bar: `libris / <notebook> / Sources`, or
+  `libris / <notebook> / Chat / <chat title>`. A crumb is a button only when it is an
+  ancestor — the page you are on is not a link to itself — which is why Chat becomes
+  clickable only once a chat title sits below it. `App` therefore owns the panel tab
+  (`Panel` in `lib/types.ts`) so a crumb can drive it; `NotebookView` no longer owns
+  `tab`, and `ChatPanel` reports the open chat's title upward because only the server
+  knows it, the title being the first question.
+- The panels are Sources · Chat · Activity. The middle one was "Ask"; the composer's
+  send button is still titled Ask because there it is a verb, not a place.
+- One New control per screen. The header's New button is gone: with the sidebar's `+`
+  and the landing empty state already creating notebooks, a third was three ways to
+  find the same dialog and three ways for one to be wired wrong — the landing button
+  was, for exactly one session, pointing at the old one-click `create`.
   so they live in `localStorage` and the component, not in `app.css` — that is why
   `--sidebar-w` is gone. A stylesheet cannot hold a per-user value it never reads back. and defines no labels,
   defaults or ranges; reads go through `str()/num()/bool()` and writes through `set()`,

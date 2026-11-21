@@ -1,19 +1,20 @@
 <script lang="ts">
+  import type { Crumb } from '../lib/types';
   import Icon from '../lib/Icon.svelte';
   import Button from '../lib/Button.svelte';
 
   let {
     theme,
     view = 'notebook',
+    crumbs = [],
     ontoggle,
-    onnew,
     onsettings,
     onhome
   }: {
     theme: 'light' | 'dark';
     view?: 'notebook' | 'settings';
+    crumbs?: Crumb[];
     ontoggle: () => void;
-    onnew: () => void;
     onsettings: () => void;
     onhome: () => void;
   } = $props();
@@ -25,8 +26,21 @@
       <Icon name="book" size={15} />
     </button>
     <span class="name">libris</span>
-    <span class="sep">/</span>
-    <span class="crumb">{view === 'settings' ? 'settings' : 'notebooks'}</span>
+    <nav class="crumbs" aria-label="Breadcrumb">
+      {#each crumbs as crumb, i (i)}
+        {#if i > 0}<span class="sep">/</span>{/if}
+        {#if crumb.onclick}
+          <button
+            type="button"
+            class="crumb link"
+            title={crumb.label}
+            onclick={crumb.onclick}
+          >{crumb.label}</button>
+        {:else}
+          <span class="crumb" title={crumb.label}>{crumb.label}</span>
+        {/if}
+      {/each}
+    </nav>
   </div>
 
   <label class="search">
@@ -36,10 +50,6 @@
   </label>
 
   <div class="right">
-    <Button variant="primary" size="sm" onclick={onnew}>
-      <Icon name="plus" size={14} />
-      New
-    </Button>
     <Button
       variant="ghost"
       iconOnly
@@ -77,6 +87,10 @@
     display: flex;
     align-items: center;
     gap: 8px;
+    min-width: 0;
+  }
+  .brand > .mark,
+  .brand > .name {
     flex-shrink: 0;
   }
   .mark {
@@ -100,9 +114,38 @@
   .sep {
     color: var(--border);
   }
+  .crumbs {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
   .crumb {
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
     font-size: 14px;
     color: var(--fg-muted);
+    white-space: nowrap;
+  }
+  .crumb:last-child {
+    max-width: 260px;
+    color: var(--fg);
+  }
+  .crumb.link {
+    padding: 2px 6px;
+    margin: 0 -6px;
+    font: inherit;
+    font-size: 14px;
+    border: none;
+    border-radius: var(--radius);
+    background: none;
+    cursor: pointer;
+  }
+  .crumb.link:hover {
+    color: var(--accent);
+    background: var(--canvas);
+    text-decoration: underline;
   }
   .search {
     display: flex;

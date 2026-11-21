@@ -40,7 +40,8 @@ const code = await withBrowser(
     checks.check('sidebar opens at the default width', boot.width === 288, `width=${boot.width}`);
 
     // ── create with a name ───────────────────────────────────────
-    await ui.click('New');
+    // The sidebar's + — the header's New button is gone, so this is the only one.
+    await ui.click('New notebook');
     const dialog = await ui.eval(`
       const d = document.querySelector('dialog.new-notebook');
       return {
@@ -213,6 +214,119 @@ const code = await withBrowser(
       (await ui.eval(`return { width: ${WIDTH}, rail: !!document.querySelector('.sidebar .rail') }`)).rail === true
     );
     await ui.eval(`localStorage.clear(); return true`);
+
+    // ── breadcrumb ───────────────────────────────────────────────
+    const crumbTexts = `
+      return [...document.querySelectorAll('.crumbs .crumb')].map((c) => c.textContent.trim());
+    `;
+
+    await ui.click('Show notebooks');
+    await ui.eval(`
+      [...document.querySelectorAll('.sidebar .list .item')]
+        .find((b) => b.textContent.includes('Renamed Notes'))?.click();
+      return true;
+    `);
+    await ui.settle(200);
+
+    const crumbs0 = await ui.eval(crumbTexts);
+    checks.check(
+      'breadcrumb reads libris / notebook / panel',
+      crumbs0.join(' / ') === 'libris / Renamed Notes / Sources',
+      crumbs0.join(' / ')
+    );
+    checks.check(
+      'the header has no New button',
+      (await ui.eval(`return [...document.querySelectorAll('.header button')].some((b) => b.textContent.trim() === 'New')`)) === false
+    );
+
+    await ui.click('Chat');
+    const crumbsChat = await ui.until(`
+      const c = [...document.querySelectorAll('.crumbs .crumb')].map((x) => x.textContent.trim());
+      return c.join('/') === 'libris/Renamed Notes/Chat' ? c : null;
+    `);
+    checks.check('switching to Chat moves the breadcrumb', (crumbsChat ?? []).join('/') === 'libris/Renamed Notes/Chat', JSON.stringify(crumbsChat));
+
+    // Two chats exist on the server only: the breadcrumb has to follow whichever one
+    // the panel opens, and Chat only becomes a level once something sits below it.
+    const notebook = (await fetch(`${app}api/notebooks`).then((r) => r.json())).find((n) => n.name === 'Renamed Notes');
+    for (const title of ['About the corpus', 'Second question']) {
+      await fetch(`${app}api/notebooks/${notebook.id}/chats`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ title })
+      });
+    }
+    // The panel opens the last chat it is given, so that is the title to expect —
+    // asserted off the server's list rather than a guess about its order.
+    const openTitle = await fetch(`${app}api/notebooks/${notebook.id}/chats`)
+      .then((r) => r.json())
+      .then((c) => c.at(-1).title);
+    await ui.reload(app);
+    await ui.settle();
+    await ui.click('Chat');
+    const crumbsNamed = await ui.until(`
+      const c = [...document.querySelectorAll('.crumbs .crumb')].map((x) => x.textContent.trim());
+      return c[c.length - 1] === ${JSON.stringify(openTitle)} ? c : null;
+    `);
+    checks.check(
+      'the open chat is the last crumb, with Chat above it',
+      (crumbsNamed ?? []).join('/') === `libris/Renamed Notes/Chat/${openTitle}`,
+      (crumbsNamed ?? []).join(' / ')
+    );
+    checks.check(
+      'Chat is clickable because something sits below it',
+      (await ui.eval(`return [...document.querySelectorAll('.crumbs .crumb.link')].map((b) => b.textContent.trim())`)).includes('Chat')
+    );
+
+    await ui.eval(`
+      const s = document.querySelector('select.picker');
+      const want = [...s.options].find((o) => o.textContent !== ${JSON.stringify(openTitle)});
+      s.value = want.value;
+      s.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    `);
+    const switched = await ui.until(`
+      const c = [...document.querySelectorAll('.crumbs .crumb')].map((x) => x.textContent.trim());
+      return c.join('/').includes('/Chat/') && c[c.length - 1] !== ${JSON.stringify(openTitle)}
+        ? c.join('/')
+        : null;
+    `);
+    checks.check('the breadcrumb follows the chat picker', switched !== null, String(switched));
+
+    await ui.eval(`
+      [...document.querySelectorAll('.crumbs .crumb.link')]
+        .find((b) => b.textContent === 'Renamed Notes')?.click();
+      return true;
+    `);
+    const upOne = await ui.until(`
+      const c = [...document.querySelectorAll('.crumbs .crumb')].map((x) => x.textContent.trim());
+      return c.join('/') === 'libris/Renamed Notes/Sources' && document.querySelector('.dropzone') ? c : null;
+    `);
+    checks.check('the notebook crumb goes up to its Sources', upOne !== null, JSON.stringify(upOne));
+
+    await ui.eval(`
+      [...document.querySelectorAll('.crumbs .crumb.link')]
+        .find((b) => b.textContent === 'libris')?.click();
+      return true;
+    `);
+    const home = await ui.until(`
+      return document.querySelector('.landing')
+        ? [...document.querySelectorAll('.crumbs .crumb')].map((x) => x.textContent.trim())
+        : null;
+    `);
+    checks.check('the libris crumb opens the notebook list', (home ?? []).join('/') === 'libris', JSON.stringify(home));
+
+    // The bug this file was written about: the landing button is a different control
+    // from the sidebar's + and the header's New, and it was wired to the wrong thing.
+    await ui.eval(`document.querySelector('.landing button')?.click(); return true;`);
+    checks.check(
+      'the landing New notebook opens the dialog',
+      (await ui.eval(`return document.querySelector('dialog.new-notebook')?.open === true`)) === true
+    );
+    checks.check(
+      'a refetch does not re-pick a notebook the user navigated away from',
+      (await ui.eval(`return !!document.querySelector('.landing')`)) === true
+    );
 
     checks.check('no uncaught page errors', ui.pageErrors.length === 0, ui.pageErrors.slice(0, 2).join(' | '));
     checks.check('no console errors', ui.consoleErrors.length === 0, ui.consoleErrors.slice(0, 2).join(' | '));
