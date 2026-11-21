@@ -39,7 +39,6 @@
   --radius-lg: 12px;
 
   --header-h: 56px;
-  --sidebar-w: 288px;
 }
 
 :root[data-theme='dark'] {

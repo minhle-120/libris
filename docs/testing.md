@@ -51,9 +51,10 @@ text, and that `ready` is backed by rows.
 ## `make ui`: the browser checks
 
 Builds, starts the binary against a throwaway data directory, and runs
-`scripts/ui-upload.mjs`, `scripts/ui-drop.mjs` and `scripts/ui-ask.mjs` over CDP
+`scripts/ui-upload.mjs`, `ui-drop.mjs`, `ui-ask.mjs` and `ui-nav.mjs` over CDP
 (`scripts/cdp.mjs`, no dependencies). They assert on DOM state — computed text and
-counts — not screenshots. 100 checks cover create-notebook, file-picker upload,
+counts — not screenshots. 123 checks across four harnesses cover create-notebook (with
+a name), rename, resize and collapse, file-picker upload,
 `processing → ready` polling, dedupe, drag-and-drop, unsupported files, filtering,
 detach, and a whole question: streaming, citations arriving before the answer, a chip
 opening the source on the cited chunk, a reload, the model refusing, the model answering

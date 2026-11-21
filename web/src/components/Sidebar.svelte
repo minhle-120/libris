@@ -1,5 +1,7 @@
 <script lang="ts">
   import type { Notebook } from '../lib/types';
+  import { renameNotebook } from '../lib/api';
+  import { errorMessage } from '../lib/format';
   import Icon from '../lib/Icon.svelte';
   import Button from '../lib/Button.svelte';
 
@@ -7,62 +9,229 @@
     notebooks,
     activeId,
     onselect,
-    onnew
+    onnew,
+    onrenamed,
+    onerror
   }: {
     notebooks: Notebook[];
     activeId: string | null;
     onselect: (id: string) => void;
     onnew: () => void;
+    /** The rename is already committed on the server; this only updates the list. */
+    onrenamed: (id: string, name: string) => void;
+    onerror: (message: string) => void;
   } = $props();
+
+  // Width lives here rather than in a stylesheet because it is the one layout number
+  // the user is allowed to set, and it must survive a reload. The rail is a fixed
+  // 44px: wide enough for the book icon, narrow enough to read as closed.
+  const MIN_W = 200;
+  const MAX_W = 480;
+  const DEFAULT_W = 288;
+  const RAIL_W = 44;
+  const KEY_W = 'libris.sidebar.width';
+  const KEY_OPEN = 'libris.sidebar.open';
+
+  const clamp = (n: number) => Math.min(MAX_W, Math.max(MIN_W, Math.round(n)));
+
+  let width = $state(clamp(Number(localStorage.getItem(KEY_W)) || DEFAULT_W));
+  let open = $state(localStorage.getItem(KEY_OPEN) !== '0');
+  let editingId = $state<string | null>(null);
+  let draft = $state('');
+
+  function persist() {
+    localStorage.setItem(KEY_W, String(width));
+    localStorage.setItem(KEY_OPEN, open ? '1' : '0');
+  }
+
+  function toggle() {
+    // Only a drag that produced a real width is worth storing, so a collapse keeps
+    // the width the sidebar will open back to.
+    open = !open;
+    persist();
+  }
+
+  function dragStart(e: PointerEvent) {
+    const fromX = e.clientX;
+    const fromW = width;
+    const move = (ev: PointerEvent) => (width = clamp(fromW + ev.clientX - fromX));
+    const stop = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', stop);
+      document.documentElement.classList.remove('resizing');
+      persist();
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', stop);
+    document.documentElement.classList.add('resizing');
+    e.preventDefault();
+  }
+
+  /** The separator is focusable, so the width is reachable without a mouse. */
+  function nudge(e: KeyboardEvent) {
+    if (e.key === 'ArrowLeft') width = clamp(width - 16);
+    else if (e.key === 'ArrowRight') width = clamp(width + 16);
+    else if (e.key === 'Home') width = DEFAULT_W;
+    else return;
+    e.preventDefault();
+    persist();
+  }
+
+  function beginRename(nb: Notebook) {
+    editingId = nb.id;
+    draft = nb.name;
+  }
+
+  function edit(el: HTMLInputElement) {
+    el.focus();
+    el.select();
+  }
+
+  /**
+   * Committed on Enter and on blur, cancelled on Escape — a click elsewhere is an
+   * implied "that is the name". A blank or unchanged draft reverts rather than
+   * asking the server to reject it: an unnamed notebook is not a state worth
+   * having, and the name is the only thing the row says.
+   */
+  async function commit(nb: Notebook) {
+    if (editingId !== nb.id) return;
+    editingId = null;
+    const name = draft.trim();
+    if (!name || name === nb.name) return;
+    try {
+      await renameNotebook(nb.id, name);
+      onrenamed(nb.id, name);
+    } catch (e) {
+      onerror(errorMessage(e));
+    }
+  }
 </script>
 
-<aside class="sidebar">
-  <div class="section">
-    <div class="section-head">
-      <h2>Notebooks</h2>
-      <Button variant="ghost" size="sm" iconOnly title="New notebook" onclick={onnew}>
-        <Icon name="plus" size={14} />
-      </Button>
+<aside class="sidebar" class:closed={!open} style:width={open ? `${width}px` : `${RAIL_W}px`}>
+  {#if !open}
+    <button
+      type="button"
+      class="rail-toggle"
+      title="Show notebooks"
+      aria-label="Show notebooks"
+      onclick={toggle}
+    >
+      <Icon name="panel-expand" size={16} />
+    </button>
+    <ul class="rail">
+      {#each notebooks as nb (nb.id)}
+        <li>
+          <button
+            type="button"
+            class="rail-item"
+            class:active={nb.id === activeId}
+            title={nb.name}
+            aria-label={nb.name}
+            onclick={() => onselect(nb.id)}
+          >
+            <Icon name="book" size={15} />
+          </button>
+        </li>
+      {/each}
+    </ul>
+  {:else}
+    <div class="section">
+      <div class="section-head">
+        <h2>Notebooks</h2>
+        <span class="head-actions">
+          <Button variant="ghost" size="sm" iconOnly title="New notebook" onclick={onnew}>
+            <Icon name="plus" size={14} />
+          </Button>
+          <button
+            type="button"
+            class="rail-toggle"
+            title="Hide notebooks"
+            aria-label="Hide notebooks"
+            onclick={toggle}
+          >
+            <Icon name="panel-collapse" size={16} />
+          </button>
+        </span>
+      </div>
+
+      {#if notebooks.length === 0}
+        <p class="empty-hint">No notebooks yet.</p>
+      {:else}
+        <ul class="list">
+          {#each notebooks as nb (nb.id)}
+            <li>
+              {#if editingId === nb.id}
+                <input
+                  class="rename"
+                  type="text"
+                  use:edit
+                  aria-label="Notebook name"
+                  maxlength="200"
+                  bind:value={draft}
+                  onkeydown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      commit(nb);
+                    } else if (e.key === 'Escape') {
+                      e.preventDefault();
+                      editingId = null;
+                    }
+                  }}
+                  onblur={() => commit(nb)}
+                />
+              {:else}
+                <div class="row" class:active={nb.id === activeId}>
+                  <button type="button" class="item" onclick={() => onselect(nb.id)}>
+                    <Icon name="book" size={14} />
+                    <span class="label truncate">{nb.name}</span>
+                    {#if nb.source_count > 0}
+                      <span class="count">{nb.source_count}</span>
+                    {/if}
+                  </button>
+                  <button
+                    type="button"
+                    class="rename-open"
+                    title="Rename {nb.name}"
+                    aria-label="Rename {nb.name}"
+                    onclick={() => beginRename(nb)}
+                  >
+                    <Icon name="pencil" size={13} />
+                  </button>
+                </div>
+              {/if}
+            </li>
+          {/each}
+        </ul>
+      {/if}
     </div>
 
-    {#if notebooks.length === 0}
-      <p class="empty-hint">No notebooks yet.</p>
-    {:else}
-      <ul class="list">
-        {#each notebooks as nb (nb.id)}
-          <li>
-            <button
-              type="button"
-              class="item"
-              class:active={nb.id === activeId}
-              onclick={() => onselect(nb.id)}
-            >
-              <Icon name="book" size={14} />
-              <span class="label truncate">{nb.name}</span>
-              {#if nb.source_count > 0}
-                <span class="count">{nb.source_count}</span>
-              {/if}
-            </button>
-          </li>
-        {/each}
-      </ul>
-    {/if}
-  </div>
-
-  <div class="footer">
-    <span class="dot" aria-hidden="true"></span>
-    <span class="mono">llama.cpp · not connected</span>
-  </div>
+    <button
+      type="button"
+      class="resizer"
+      title="Drag to resize · double-click to reset"
+      aria-label="Notebook list width. Drag, or use arrow keys."
+      onpointerdown={dragStart}
+      ondblclick={() => {
+        width = DEFAULT_W;
+        persist();
+      }}
+      onkeydown={nudge}
+    ></button>
+  {/if}
 </aside>
 
 <style>
   .sidebar {
+    position: relative;
     display: flex;
     flex-direction: column;
-    width: var(--sidebar-w);
     flex-shrink: 0;
     border-right: 1px solid var(--border);
     background: var(--canvas);
+  }
+  .sidebar.closed {
+    align-items: stretch;
+    padding-top: 8px;
   }
   .section {
     padding: 16px 12px;
@@ -80,16 +249,36 @@
     letter-spacing: 0.4px;
     color: var(--fg-muted);
   }
+  .head-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
   .list {
     margin: 0;
     padding: 0;
     list-style: none;
   }
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    border-radius: var(--radius);
+  }
+  .row:hover,
+  .row:focus-within {
+    background: var(--canvas-subtle);
+  }
+  .row.active {
+    background: var(--canvas-subtle);
+    box-shadow: inset 2px 0 0 var(--accent);
+  }
   .item {
     display: flex;
     align-items: center;
     gap: 8px;
-    width: 100%;
+    flex: 1;
+    min-width: 0;
     padding: 6px 8px;
     font: inherit;
     font-size: 14px;
@@ -100,13 +289,8 @@
     border-radius: var(--radius);
     cursor: pointer;
   }
-  .item:hover {
-    background: var(--canvas-subtle);
-  }
-  .item.active {
+  .row.active .item {
     font-weight: 600;
-    background: var(--canvas-subtle);
-    box-shadow: inset 2px 0 0 var(--accent);
   }
   .label {
     flex: 1;
@@ -115,24 +299,120 @@
     font-size: 12px;
     color: var(--fg-muted);
   }
+  .rename-open {
+    display: none;
+    padding: 4px;
+    color: var(--fg-muted);
+    background: none;
+    border: none;
+    border-radius: var(--radius);
+    cursor: pointer;
+  }
+  .row:hover .rename-open,
+  .row:focus-within .rename-open,
+  .rename-open:focus-visible {
+    display: inline-flex;
+  }
+  .rename-open:hover {
+    color: var(--fg);
+    background: var(--canvas);
+  }
+  .rename {
+    flex: 1;
+    min-width: 0;
+    width: 100%;
+    padding: 5px 8px;
+    margin: 1px 0;
+    font: inherit;
+    font-size: 14px;
+    color: var(--fg);
+    background: var(--canvas);
+    border: 1px solid var(--accent);
+    border-radius: var(--radius);
+    outline: none;
+  }
   .empty-hint {
     padding: 4px 8px;
     font-size: 13px;
     color: var(--fg-muted);
   }
-  .footer {
+
+  /* Collapsed: a rail of book icons, each titled by the name it cannot show. */
+  .rail {
+    margin: 0;
+    padding: 4px 6px;
+    list-style: none;
     display: flex;
-    align-items: center;
-    gap: 6px;
-    margin-top: auto;
-    padding: 12px 16px;
-    color: var(--fg-muted);
-    border-top: 1px solid var(--border);
+    flex-direction: column;
+    gap: 2px;
+    overflow: hidden;
   }
-  .dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: var(--fg-muted);
+  .rail-item {
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    color: var(--fg-muted);
+    background: none;
+    border: none;
+    border-radius: var(--radius);
+    cursor: pointer;
+  }
+  .rail-item:hover {
+    color: var(--fg);
+    background: var(--canvas-subtle);
+  }
+  .rail-item.active {
+    color: var(--fg);
+    background: var(--canvas-subtle);
+    box-shadow: inset 2px 0 0 var(--accent);
+  }
+  .rail-toggle {
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    margin: 0;
+    color: var(--fg-muted);
+    background: none;
+    border: none;
+    border-radius: var(--radius);
+    cursor: pointer;
+  }
+  .rail-toggle:hover {
+    color: var(--fg);
+    background: var(--canvas-subtle);
+  }
+  .closed .rail-toggle {
+    align-self: center;
+    margin-bottom: 4px;
+  }
+
+  /* The grip is invisible until hovered: 1px of border is not grabbable, but a
+     visible bar would read as content in an otherwise flat column. */
+  .resizer {
+    position: absolute;
+    padding: 0;
+    border: none;
+    top: 0;
+    right: -3px;
+    z-index: 11;
+    width: 7px;
+    height: 100%;
+    cursor: col-resize;
+    background: transparent;
+  }
+  .resizer:hover,
+  .resizer:focus-visible {
+    background: var(--accent);
+    opacity: 0.35;
+    outline: none;
+  }
+
+  :global(html.resizing) {
+    cursor: col-resize;
+  }
+  :global(html.resizing) * {
+    user-select: none;
   }
 </style>

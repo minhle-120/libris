@@ -19,6 +19,9 @@
   let activeId = $state<string | null>(null);
   let loading = $state(true);
   let error = $state('');
+  let dlg = $state<HTMLDialogElement | null>(null);
+  let nameInput = $state<HTMLInputElement | null>(null);
+  let newName = $state('');
 
   const active = $derived(notebooks.find((nb) => nb.id === activeId) ?? null);
 
@@ -39,16 +42,31 @@
     }
   }
 
+  function openNew() {
+    error = '';
+    newName = '';
+    dlg?.showModal();
+  }
+
   async function create() {
+    const name = newName.trim();
+    // The server refuses an unnamed notebook; refusing here keeps that from being
+    // the first thing a user learns about the feature.
+    if (!name) return;
     error = '';
     try {
-      const notebook = await createNotebook('Untitled notebook');
+      const notebook = await createNotebook(name);
       notebooks = [...notebooks, notebook];
       activeId = notebook.id;
       view = 'notebook';
+      dlg?.close();
     } catch (e) {
       error = errorMessage(e);
     }
+  }
+
+  function renamed(id: string, name: string) {
+    notebooks = notebooks.map((nb) => (nb.id === id ? { ...nb, name } : nb));
   }
 
   function openNotebook(id: string) {
@@ -67,13 +85,20 @@
   {theme}
   {view}
   ontoggle={toggleTheme}
-  onnew={create}
+  onnew={openNew}
   onsettings={() => (view = 'settings')}
   onhome={() => (view = 'notebook')}
 />
 
 <div class="shell">
-  <Sidebar {notebooks} {activeId} onselect={openNotebook} onnew={create} />
+  <Sidebar
+    {notebooks}
+    {activeId}
+    onselect={openNotebook}
+    onnew={openNew}
+    onrenamed={renamed}
+    onerror={(m) => (error = m)}
+  />
   <main>
     {#if error}
       <div class="banner" role="alert">
@@ -104,6 +129,31 @@
   </main>
 </div>
 
+<dialog
+  class="new-notebook"
+  aria-label="New notebook"
+  bind:this={dlg}
+  onclick={(e) => e.target === dlg && dlg?.close()}
+  onclose={() => nameInput?.blur()}
+>
+  <h2>New notebook</h2>
+  <label class="field">
+    <span>Name</span>
+    <input
+      type="text"
+      maxlength="200"
+      placeholder="Paper notes"
+      bind:this={nameInput}
+      bind:value={newName}
+      onkeydown={(e) => e.key === 'Enter' && create()}
+    />
+  </label>
+  <div class="actions">
+    <Button variant="ghost" onclick={() => dlg?.close()}>Cancel</Button>
+    <Button variant="primary" disabled={!newName.trim()} onclick={create}>Create</Button>
+  </div>
+</dialog>
+
 <style>
   .shell {
     display: flex;
@@ -125,6 +175,56 @@
   .center {
     padding: 48px 24px;
     text-align: center;
+  }
+  /* Native <dialog> + showModal(): Esc, focus trapping and the top layer come from
+     the browser, so the only thing written here is the layout of three controls. */
+  .new-notebook {
+    width: min(420px, calc(100vw - 32px));
+    padding: 20px;
+    color: var(--fg);
+    background: var(--canvas);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg, 12px);
+    box-shadow: 0 12px 32px rgb(0 0 0 / 18%);
+  }
+  .new-notebook::backdrop {
+    background: rgb(0 0 0 / 45%);
+  }
+  .new-notebook h2 {
+    margin: 0 0 14px;
+    font-size: 16px;
+    font-weight: 600;
+  }
+  .field {
+    display: block;
+  }
+  .field span {
+    display: block;
+    margin-bottom: 4px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--fg-muted);
+  }
+  .field input {
+    width: 100%;
+    padding: 6px 8px;
+    font: inherit;
+    font-size: 14px;
+    color: var(--fg);
+    background: var(--canvas);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    outline: none;
+  }
+  .field input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent);
+  }
+  .actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    margin-top: 18px;
   }
   .banner {
     display: flex;

@@ -53,7 +53,7 @@ UI_EMBED_PORT ?= 8124
 # fake for all of them, because that is what a running Libris looks like. UI_HARNESS
 # narrows it to one harness while developing — the whole suite is about a minute, so
 # this is about noise and signal, not waiting.
-UI_HARNESS ?= ui-upload ui-drop ui-ask
+UI_HARNESS ?= ui-upload ui-drop ui-ask ui-nav
 ui: build
 	@for h in $(UI_HARNESS); do test -f scripts/$$h.mjs || { echo "make ui: no harness named $$h" >&2; exit 2; }; done
 	@dir=$$(mktemp -d); \
@@ -72,8 +72,8 @@ ui: build
 	test $$i -gt 0 || { echo "make ui: no harness ran" >&2; exit 2; }; \
 	test $$rc -eq 0
 
-# One harness, same fixture: make ui-ask, make ui-drop, make ui-upload.
-ui-upload ui-drop ui-ask:
+# One harness, same fixture: make ui-ask, ui-drop, ui-upload or ui-nav.
+ui-upload ui-drop ui-ask ui-nav:
 	@$(MAKE) --no-print-directory ui UI_HARNESS=$@
 
 clean:

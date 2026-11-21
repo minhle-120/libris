@@ -25,7 +25,10 @@
     layers: 'M12 2 2 7l10 5 10-5-10-5M2 17l10 5 10-5M2 12l10 5 10-5',
     retry: 'M23 4v6h-6M20.49 15a9 9 0 1 1-2.12-9.36L23 10',
     stop: 'M7.5 7.5h9v9h-9z',
-    send: 'M21 4 3 11l6.5 2.5L12 20zM21 4l-11.5 9.5'
+    send: 'M21 4 3 11l6.5 2.5L12 20zM21 4l-11.5 9.5',
+    pencil: 'M4 20h4L20 8l-4-4L4 16z M14 6l4 4',
+    'panel-collapse': 'M4 4h16v16H4z M10 4v16 M7 12h1',
+    'panel-expand': 'M4 4h16v16H4z M10 4v16 M14 12h2'
   };
 </script>
 

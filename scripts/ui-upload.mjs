@@ -49,6 +49,13 @@ const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ui-pr
   // ── create a notebook ──────────────────────────────────────────
   const before = boot.notebooks;
   await ui.click('New');
+  await ui.eval(`
+    const el = document.querySelector('dialog.new-notebook input');
+    el.value = 'Upload Lab';
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    return true;
+  `);
+  await ui.click('Create');
   const created = await ui.until(
     `return document.querySelectorAll('.sidebar .list .item').length > ${before}
        ? document.querySelectorAll('.sidebar .list .item').length : null`
@@ -63,7 +70,7 @@ const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ui-pr
       empty: document.querySelector('.empty h2')?.textContent
     };
   `);
-  checks.check('notebook view opens', opened.title === 'Untitled notebook', `title=${opened.title}`);
+  checks.check('notebook view opens', opened.title === 'Upload Lab', `title=${opened.title}`);
   checks.check('Add sources is a working control', opened.addEnabled === true);
   checks.check('empty state invites an upload', /Nothing in this notebook yet/.test(opened.empty ?? ''), opened.empty);
 
@@ -149,12 +156,13 @@ const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ui-pr
   await ui.press('Escape');
   await ui.settle(300);
   const closed = await ui.eval(`
-    return ({
-    dialogs: document.querySelectorAll('dialog').length,
-      open: document.querySelector('dialog')?.open ?? null
-    });
+    const open = [...document.querySelectorAll('dialog')].filter((d) => d.open);
+    return { total: document.querySelectorAll('dialog').length,
+             open: open.map((d) => d.getAttribute('aria-label')) };
   `);
-  checks.check('the dialog closes', closed?.dialogs === 0, JSON.stringify(closed));
+  // Counting dialogs would now include the new-notebook dialog, which lives in the
+  // shell whether or not it is open: what matters is that none of them is.
+  checks.check('the dialog closes', closed.open.length === 0, JSON.stringify(closed));
 
   // ── the same bytes again must not create a second row ──────────
   await ui.setFiles('input[type=file]', [UPLOAD_FIXTURE]);

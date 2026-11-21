@@ -262,7 +262,7 @@ PDFDPI int `key:"pdfDPI" group:"ingest" label:"PDF raster DPI" help:"…"
 ## 7. Frontend
 
 - Primer/GitHub design language: 6px radii, `#1f883d` primary, `#d1d9e0` borders,
-  `#fd8c73` active-tab underline, 56px header, 288px sidebar; dark mode `#0d1117` /
+  `#fd8c73` active-tab underline, 56px header, 288px default sidebar; dark mode `#0d1117` /
   `#3d444d` / `#4493f8`. Tokens live in `web/src/app.css`.
 - `#app` is exactly viewport height with `overflow:hidden`, so `<main>` is the only
   scroller. Do not go back to `min-height:100%` — it scrolls the sidebar away.
@@ -287,7 +287,13 @@ PDFDPI int `key:"pdfDPI" group:"ingest" label:"PDF raster DPI" help:"…"
   thread, so the server's rows are what is on screen. The one thing it adds itself is the
   question at the moment it is sent — a half-minute turn that shows only a spinner reads
   as a hang.
-- `SettingsView.svelte` renders `settingGroups` generically and defines no labels,
+- A notebook is never unnamed: New opens a `<dialog>` whose Create is disabled until
+  the name is non-blank, and the sidebar renames in place (Enter commits, Escape
+  abandons, blur commits what changed) rather than opening a second dialog for it.
+  "Untitled notebook" existed nowhere before this, and the server already refused it.
+- The sidebar's width and open/closed state are the only layout numbers the user owns,
+  so they live in `localStorage` and the component, not in `app.css` — that is why
+  `--sidebar-w` is gone. A stylesheet cannot hold a per-user value it never reads back. and defines no labels,
   defaults or ranges; reads go through `str()/num()/bool()` and writes through `set()`,
   because `Settings` is a union-typed record. `NotebookView.svelte` likewise defines no
   fixtures for anything.
