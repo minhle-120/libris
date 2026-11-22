@@ -410,8 +410,10 @@
 
 <style>
   .chat {
+    --measure: min(100%, 42rem);
     display: flex;
     flex-direction: column;
+    align-items: center;
     gap: 10px;
     padding: 0 20px;
     /* The panel is a scroller of its own: the page owns the header and the composer,
@@ -419,6 +421,21 @@
        composer out from under the keyboard mid-question. */
     min-height: 0;
     height: 100%;
+  }
+
+  /* One measure, held by the column and not by each thing in it. The thread wrapped at
+     76ch while the composer spanned the whole pane, so an answer ended six inches short
+     of the box under it — and with the panel shut the composer was a metre of empty
+     field. Centred, not left-anchored: a narrow column against one edge of a wide pane
+     reads as a layout that failed to fill, and the same column in the middle reads as a
+     line of text, which is what it is. */
+  .bar,
+  .banner,
+  .messages,
+  .composer,
+  .empty {
+    width: 100%;
+    max-width: var(--measure);
   }
 
   .bar {
@@ -489,14 +506,14 @@
   }
 
   .turn {
-    max-width: 76ch;
+    max-width: 100%;
   }
 
   /* --canvas-inset is #010409, near black: a code block's well. The user's own message
      is not a well, so it sits on the subtle plane with a soft corner instead. */
   .turn.user {
     align-self: flex-end;
-    max-width: min(76ch, 82%);
+    max-width: min(100%, 82%);
     background: var(--canvas-subtle);
     border: 1px solid var(--border-muted);
     border-radius: 14px 14px 4px 14px;

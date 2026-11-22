@@ -310,6 +310,11 @@ PDFDPI int `key:"pdfDPI" group:"ingest" label:"PDF raster DPI" help:"…"
   two columns itself — the chat and the panel — because a transcript that grows the page
   scrolls the composer off the bottom. Do not go back to `min-height:100%`: it scrolls
   the sidebar away.
+- The chat is a reading column, not the pane: one `--measure` (`min(100%, 42rem)`) on
+  `.chat` governs the bar, the thread and the composer together, so an answer and the box
+  under it end at the same edge. `76ch` on a turn is a second wrap and disagrees with it.
+  Centred, not left-anchored — a 672px column against one edge of a 1468px pane reads as
+  a layout that failed to fill; the same column in the middle reads as a line of text.
 - A notebook is three columns, not three pages: the notebook list on the left, the chat
   in the middle, and one **panel** on the right holding Sources and Activity as a
   segmented view (ADR 0012). The panel repeats the left column's geometry on purpose —

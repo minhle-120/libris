@@ -484,6 +484,31 @@ const code = await withBrowser(
       (await ui.eval(`return !!document.querySelector('.landing')`)) === true
     );
 
+    // ── the reading measure ──────────────────────────────────────
+    // Last, because it resizes the window. The measure only binds when the pane is
+    // wider than it, and the pane is widest with the panel shut — the case that used to
+    // stretch the composer across a metre of empty field while the answer above it
+    // wrapped six inches short.
+    await ui.eval(`document.querySelector('dialog.new-notebook')?.close(); return true`);
+    await ui.eval(`[...document.querySelectorAll('.sidebar .list .item')][0]?.click(); return true`);
+    await ui.settle(500);
+    await ui.setViewport(1800, 900);
+    await ui.settle(400);
+    await ui.eval(`
+      [...document.querySelectorAll('.rail-toggle')].find((b) => b.title === 'Hide panel')?.click();
+      return true;
+    `);
+    await ui.settle(400);
+    const measure = await ui.eval(`
+      const w = (s) => Math.round(document.querySelector(s).getBoundingClientRect().width);
+      return { pane: w('.chat'), bar: w('.chat .bar'), composer: w('.composer .entry') };
+    `);
+    checks.check(
+      "the composer is the thread's width, not the pane's",
+      measure.bar > 0 && measure.bar === measure.composer && measure.pane - measure.bar >= 100,
+      JSON.stringify(measure)
+    );
+
     checks.check('no uncaught page errors', ui.pageErrors.length === 0, ui.pageErrors.slice(0, 2).join(' | '));
     checks.check('no console errors', ui.consoleErrors.length === 0, ui.consoleErrors.slice(0, 2).join(' | '));
 
