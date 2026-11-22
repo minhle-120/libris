@@ -28,7 +28,8 @@
     send: 'M21 4 3 11l6.5 2.5L12 20zM21 4l-11.5 9.5',
     pencil: 'M4 20h4L20 8l-4-4L4 16z M14 6l4 4',
     'panel-collapse': 'M4 4h16v16H4z M10 4v16 M7 12h1',
-    'panel-expand': 'M4 4h16v16H4z M10 4v16 M14 12h2'
+    'panel-expand': 'M4 4h16v16H4z M10 4v16 M14 12h2',
+    check: 'M4 12.5l5 5L20 6.5'
   };
 </script>
 

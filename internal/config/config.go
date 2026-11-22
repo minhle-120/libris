@@ -94,7 +94,7 @@ func groups() []struct{ ID, Label, Help string } {
 		{"connection", "llama.cpp servers", "One process per model. Separate ports keep embedding and chat from starving each other."},
 		{"models", "Models", "Names are what the server reports. Changing the embedder re-indexes every source."},
 		{"retrieval", "Retrieval", "Research loop budget. Every extra iteration costs one search round trip."},
-		{"ingest", "Ingest", "Extraction is a background job. Originals are always kept."},
+		{"ingest", "Ingest", "Extraction is a background job. An original is kept until no notebook uses it (ADR 0013)."},
 	}
 }
 

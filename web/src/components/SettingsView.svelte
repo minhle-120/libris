@@ -93,6 +93,37 @@
     </nav>
 
     <div class="panels">
+      <!-- One bar, and sticky: the page is several screens of fields, so a change made in
+           the first panel should not have to hunt for its Save button at the bottom. The
+           app header is sticky too, so this parks just below it rather than under it. -->
+      <div class="actions" class:dirty class:bad={!!error}>
+        <span class="status" role={error ? 'alert' : undefined}>
+          <Icon name={error ? 'alert' : dirty ? 'pencil' : 'check'} size={14} />
+          {#if loading}
+            Loading…
+          {:else if error}
+            {error}
+          {:else if dirty}
+            Unsaved changes
+          {:else if notice}
+            {notice}
+          {:else}
+            Saved settings loaded from the backend
+          {/if}
+        </span>
+        <div class="buttons">
+          <Button size="sm" disabled={!dirty || saving || loading} onclick={load}>Discard</Button>
+          <Button
+            variant="primary"
+            size="sm"
+            disabled={!dirty || saving}
+            onclick={save}
+          >
+            {saving ? 'Saving…' : 'Save changes'}
+          </Button>
+        </div>
+      </div>
+
       {#each settingGroups as group (group.id)}
         <section class="card" id={group.id}>
           <header>
@@ -150,38 +181,6 @@
         </section>
       {/each}
 
-      {#if error}
-        <div class="banner error" role="alert">
-          <Icon name="pulse" size={14} />
-          {error}
-        </div>
-      {/if}
-
-      <div class="foot">
-        <span class="muted small">
-          <Icon name="inbox" size={14} />
-          {#if loading}
-            Loading…
-          {:else if notice}
-            {notice}
-          {:else if dirty}
-            Unsaved changes
-          {:else}
-            Saved settings loaded from the backend
-          {/if}
-        </span>
-        <div class="foot-actions">
-          <Button size="sm" disabled={!dirty || saving || loading} onclick={load}>Discard</Button>
-          <Button
-            variant="primary"
-            size="sm"
-            disabled={!dirty || saving}
-            onclick={save}
-          >
-            {saving ? 'Saving…' : 'Save changes'}
-          </Button>
-        </div>
-      </div>
     </div>
   </div>
 </div>
@@ -277,33 +276,47 @@
     color: var(--fg-muted);
     white-space: nowrap;
   }
-  .banner {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 10px 12px;
-    font-size: 13px;
-    border: 1px solid var(--danger);
-    border-radius: var(--radius);
-    color: var(--danger);
-    background: var(--canvas);
-  }
-  .foot-actions {
-    display: flex;
-    gap: 8px;
-  }
-  .foot {
+  .actions {
+    position: sticky;
+    /* <main> is the scroller and starts below the header, so 0 is flush under it.
+       var(--header-h) here would leave a band of fields sliding through the gap. */
+    top: 0;
+    z-index: 9;
+    /* the field rows are cards, so an opaque background is not decoration */
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 16px;
-    padding: 4px 0 24px;
+    gap: 8px 16px;
+    flex-wrap: wrap;
+    padding: 10px 14px;
+    background: var(--canvas);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
   }
-  .small {
+  /* Both buttons are disabled until something changes, so the edge is what says the
+     page is holding work: a tint behind them would compete with the primary itself. */
+  .actions.dirty {
+    border-color: var(--accent);
+    box-shadow: inset 3px 0 0 var(--accent);
+  }
+  .actions.bad {
+    border-color: var(--danger);
+    box-shadow: inset 3px 0 0 var(--danger);
+  }
+  .actions.bad .status {
+    color: var(--danger);
+  }
+  .status {
     display: inline-flex;
     align-items: center;
     gap: 6px;
+    min-width: 0;
     font-size: 12px;
+    color: var(--fg-muted);
+  }
+  .buttons {
+    display: flex;
+    gap: 8px;
   }
   @media (max-width: 1000px) {
     .wide,

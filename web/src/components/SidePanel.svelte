@@ -213,7 +213,7 @@
           <EmptyState
             icon="upload"
             title="Nothing in this notebook yet"
-            description="Drop PDFs, images, or audio here. Text and page images are indexed separately, and the original file is always kept."
+            description="Drop PDFs, images, or audio here. Text and page images are indexed separately, and the original file is kept until no notebook uses it."
           >
             <Button variant="primary" size="sm" onclick={pick}>Choose files</Button>
           </EmptyState>

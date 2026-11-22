@@ -509,6 +509,60 @@ const code = await withBrowser(
       JSON.stringify(measure)
     );
 
+    // ── the settings action bar ──────────────────────────────────
+    // Settings is several screens of fields, so the bar that commits them belongs
+    // where the page is, not under its last row. These checks stay read-only: the
+    // first field is dirtied and then Discarded, so nothing another harness reads
+    // from the server is ever saved.
+    await ui.eval(
+      `return [...document.querySelectorAll('button')].find((b) => b.title === 'Settings').click()`
+    );
+    await ui.settle();
+
+    const bar = `
+      const a = document.querySelector('.panels > .actions');
+      if (!a) return { buttons: 'no bar' };
+      const r = a.getBoundingClientRect();
+      return {
+        buttons: [...a.querySelectorAll('button')]
+          .map((b) => b.textContent.trim() + (b.disabled ? ' off' : ' on'))
+          .join(', '),
+        status: a.querySelector('.status')?.textContent.trim().slice(0, 40),
+        top: Math.round(r.top),
+        scrollerTop: Math.round(document.querySelector('main').getBoundingClientRect().top),
+        onScreen: r.bottom <= innerHeight && r.top >= 0
+      };
+    `;
+    const clean = await ui.eval(bar);
+    checks.check('the settings bar carries both buttons', clean.buttons === 'Discard off, Save changes off', `${clean.buttons}`);
+    checks.check('a clean page says where its values came from', /Saved settings loaded/.test(clean.status), clean.status);
+
+    await ui.eval(type('.panels input[type=text]:not([disabled])', 'unsaved-probe'));
+    await ui.settle(200);
+    const dirty = await ui.eval(bar);
+    checks.check('a change enables both', dirty.buttons === 'Discard on, Save changes on', `${dirty.buttons}`);
+    checks.check('and the status changes with it', /Unsaved changes/.test(dirty.status), dirty.status);
+
+    await ui.click('Discard');
+    await ui.settle(400);
+    const afterDiscard = await ui.eval(bar);
+    checks.check('Discard reloads and disables both', afterDiscard.buttons === 'Discard off, Save changes off', `${afterDiscard.buttons}`);
+
+    // The trap this file exists to catch: <main> is the scroller, not the window, and
+    // the bar sticks to *its* top edge. Reaching for the header's height as the offset —
+    // the obvious guess — leaves a band of fields sliding through in the gap above it.
+    await ui.eval(`const m = document.querySelector('main'); m.scrollTop = m.scrollHeight; return 1`);
+    await ui.settle(200);
+    const stuck = await ui.eval(bar);
+    checks.check('deep in the page the bar is still on screen', stuck.onScreen, `top=${stuck.top}`);
+    checks.check('flush with the scroller, not a header-height below it', stuck.top === stuck.scrollerTop, `top=${stuck.top} scroller=${stuck.scrollerTop}`);
+
+    await ui.setViewport(640, 900);
+    await ui.settle(200);
+    const narrow = await ui.eval(bar);
+    checks.check('at 640px the bar wraps instead of overflowing', narrow.onScreen && narrow.buttons.split(', ').length === 2, `top=${narrow.top}`);
+    await ui.clearViewport();
+
     checks.check('no uncaught page errors', ui.pageErrors.length === 0, ui.pageErrors.slice(0, 2).join(' | '));
     checks.check('no console errors', ui.consoleErrors.length === 0, ui.consoleErrors.slice(0, 2).join(' | '));
 
