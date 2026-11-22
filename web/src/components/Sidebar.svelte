@@ -12,6 +12,7 @@
     onselect,
     onnew,
     onrenamed,
+    ondelete,
     onerror
   }: {
     notebooks: Notebook[];
@@ -20,6 +21,8 @@
     onnew: () => void;
     /** The rename is already committed on the server; this only updates the list. */
     onrenamed: (id: string, name: string) => void;
+    /** Deletion is asked for here and decided by the shell, which owns the selection. */
+    ondelete: (notebook: Notebook) => void;
     onerror: (message: string) => void;
   } = $props();
 
@@ -151,12 +154,21 @@
                   </button>
                   <button
                     type="button"
-                    class="rename-open"
+                    class="row-act rename-open"
                     title="Rename {nb.name}"
                     aria-label="Rename {nb.name}"
                     onclick={() => beginRename(nb)}
                   >
                     <Icon name="pencil" size={13} />
+                  </button>
+                  <button
+                    type="button"
+                    class="row-act delete-open"
+                    title="Delete {nb.name}"
+                    aria-label="Delete {nb.name}"
+                    onclick={() => ondelete(nb)}
+                  >
+                    <Icon name="trash" size={13} />
                   </button>
                 </div>
               {/if}
@@ -271,7 +283,10 @@
     background: color-mix(in srgb, var(--accent) 16%, transparent);
     color: var(--accent);
   }
-  .rename-open {
+  /* A row's actions wait for the pointer, and the destructive one is coloured for what
+     it does even at rest — a trash can shaped like a pencil is how you get a notebook
+     deleted by accident while reaching for the rename. */
+  .row-act {
     display: none;
     padding: 4px;
     color: var(--fg-muted);
@@ -280,14 +295,21 @@
     border-radius: var(--radius);
     cursor: pointer;
   }
-  .row:hover .rename-open,
-  .row:focus-within .rename-open,
-  .rename-open:focus-visible {
+  .row:hover .row-act,
+  .row:focus-within .row-act,
+  .row-act:focus-visible {
     display: inline-flex;
   }
-  .rename-open:hover {
+  .row-act:hover {
     color: var(--fg);
     background: var(--canvas);
+  }
+  .delete-open {
+    color: var(--danger);
+  }
+  .delete-open:hover {
+    color: var(--danger);
+    background: color-mix(in srgb, var(--danger) 14%, transparent);
   }
   .rename {
     flex: 1;

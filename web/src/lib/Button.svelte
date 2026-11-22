@@ -12,7 +12,7 @@
     onclick = undefined,
     children
   }: {
-    variant?: 'default' | 'primary' | 'ghost';
+    variant?: 'default' | 'primary' | 'ghost' | 'danger';
     size?: 'md' | 'sm';
     iconOnly?: boolean;
     active?: boolean;
@@ -28,6 +28,7 @@
     [
       'btn',
       variant === 'primary' && 'btn-primary',
+      variant === 'danger' && 'btn-danger',
       variant === 'ghost' && 'btn-ghost',
       size === 'sm' && 'btn-sm',
       iconOnly && 'btn-icon',

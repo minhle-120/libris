@@ -200,6 +200,20 @@ p {
   color: #ffffff;
 }
 
+/* The button that cannot be undone is never the green one the eye is trained to
+   press: red on a red tint, and it still darkens rather than inverting. */
+.btn-danger {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  border-color: transparent;
+}
+
+.btn-danger:hover {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 24%, transparent);
+  border-color: transparent;
+}
+
 .btn-primary {
   color: #ffffff;
   background: var(--success-emphasis);

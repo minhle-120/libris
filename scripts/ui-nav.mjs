@@ -132,6 +132,117 @@ const code = await withBrowser(
       rows.map((nb) => nb.name).join(',')
     );
 
+    // ── delete ───────────────────────────────────────────────────
+    // A second notebook exists only to be destroyed, and it is opened first: the case
+    // worth testing is deleting the notebook that is on screen, because that is the one
+    // where the app has to decide what to show next.
+    await ui.click('New notebook');
+    await ui.eval(type('dialog.new-notebook input', 'Doomed Book'));
+    await ui.click('Create');
+    await ui.until(`
+      return [...document.querySelectorAll('.sidebar .list .item')]
+        .some((b) => b.textContent.includes('Doomed Book')) ? true : null;
+    `);
+
+    const doomed = await ui.eval(`
+      const btn = [...document.querySelectorAll('.delete-open')]
+        .find((b) => b.getAttribute('aria-label') === 'Delete Doomed Book');
+      if (!btn) return { found: false };
+      btn.click();
+      return { found: true };
+    `);
+    checks.check('a row offers delete beside rename', doomed.found);
+
+    const confirm = await ui.eval(`
+      const d = document.querySelector('dialog.delete-notebook');
+      return {
+        open: d?.open === true,
+        names: /Doomed Book/.test(d?.querySelector('h2')?.textContent ?? ''),
+        keepsFiles: /stay on disk/.test(d?.textContent ?? ''),
+        focused: document.activeElement?.textContent.trim(),
+        danger: [...(d?.querySelectorAll('button') ?? [])]
+          .some((b) => b.textContent.trim() === 'Delete notebook' && b.className.includes('btn-danger'))
+      };
+    `);
+    checks.check('delete asks before it does anything', confirm.open && confirm.names, JSON.stringify(confirm));
+    checks.check(
+      'the confirmation says the files survive',
+      confirm.keepsFiles,
+      'that promise is the whole reason a user dares press this'
+    );
+    checks.check(
+      'the destructive button is red and Cancel has the focus',
+      confirm.danger && confirm.focused === 'Cancel',
+      JSON.stringify(confirm)
+    );
+
+    // Esc is a no-op, not a half-delete: the row and the server must still agree.
+    // It has to be a real key event — closing a <dialog> on Esc is a default action of
+    // a *trusted* key press, so the synthetic KeyboardEvent the rename tests use would
+    // report a dialog that never closed.
+    for (const type of ['keyDown', 'keyUp']) {
+      await ui.send('Input.dispatchKeyEvent', {
+        type,
+        key: 'Escape',
+        code: 'Escape',
+        windowsVirtualKeyCode: 27,
+        nativeVirtualKeyCode: 27
+      });
+    }
+    await ui.settle(250);
+    const survived = await fetch(`${app}api/notebooks`).then((r) => r.json());
+    checks.check(
+      'Escape closes the confirmation',
+      await ui.eval(`return document.querySelector('dialog.delete-notebook')?.open !== true`)
+    );
+    checks.check(
+      'and the notebook is still there',
+      survived.some((nb) => nb.name === 'Doomed Book'),
+      survived.map((nb) => nb.name).join(',')
+    );
+
+    // Delete the one being looked at, so the selection has to move somewhere.
+    await ui.eval(`
+      [...document.querySelectorAll('.delete-open')]
+        .find((b) => b.getAttribute('aria-label') === 'Delete Doomed Book').click();
+      return true;
+    `);
+    await ui.click('Delete notebook');
+    await ui.until(`
+      return [...document.querySelectorAll('.sidebar .list .item')]
+        .some((b) => b.textContent.includes('Doomed Book')) ? null : true;
+    `);
+    const gone = (await fetch(`${app}api/notebooks`).then((r) => r.json())).map((nb) => nb.name);
+    const after = await ui.eval(`
+      return {
+        listed: [...document.querySelectorAll('.sidebar .list .item')].map((b) => b.textContent.trim()),
+        active: document.querySelector('.sidebar .row.active')?.textContent.trim(),
+        crumb: [...document.querySelectorAll('.crumbs .crumb')][1]?.textContent
+      };
+    `);
+    checks.check(
+      'confirming deletes it on the server',
+      !gone.includes('Doomed Book') &&
+        !(await ui.eval(`return [...document.querySelectorAll('.sidebar .list .item')].some((b) => b.textContent.includes('Doomed Book'))`)),
+      gone.join(',')
+    );
+    checks.check(
+      'another notebook is open in its place',
+      /Renamed Notes/.test(after.active ?? '') && after.crumb === 'Renamed Notes',
+      JSON.stringify(after)
+    );
+
+    // A deleted notebook is gone from the rail too: the collapsed sidebar draws the same
+    // list, and a stale id there would be a button for nothing.
+    await ui.eval(`document.querySelector('.sidebar .section-head .rail-toggle').click(); return true`);
+    await ui.settle(300);
+    checks.check(
+      'the rail forgets it as well',
+      (await ui.eval(`return [...document.querySelectorAll('.rail-item')].map((b) => b.title).join(',')`)).includes('Doomed Book') === false
+    );
+    await ui.eval(`document.querySelector('.sidebar .rail-toggle').click(); return true`);
+    await ui.settle(300);
+
     // ── resize ───────────────────────────────────────────────────
     // Width is measured in a call of its own: Svelte has not flushed the DOM when
     // the dispatching eval returns, so the same round trip that reads the state is

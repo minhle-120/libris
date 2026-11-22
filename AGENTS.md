@@ -325,10 +325,13 @@ PDFDPI int `key:"pdfDPI" group:"ingest" label:"PDF raster DPI" help:"…"
   accessibility checks honestly. Backdrop-click-to-close is the `onclick` on the dialog
   comparing `e.target === dlg`. The chunk inspector is *not* one: it is a step inside the
   panel, because an inspector that dims the screen takes the answer with it.
-- Overlays are native `<dialog>` + `showModal()`, not positioned divs: Esc, focus
-  trapping and the top layer come from the browser, and a hand-rolled scrim fails the
-  accessibility checks honestly. Backdrop-click-to-close is the `onclick` on the dialog
-  comparing `e.target === dlg`.
+- A destructive action fires on the second click, never the first, and its button is
+  `.btn-danger` — red on a red tint, so it is never the green one the eye is trained to
+  press. `showModal()` focuses the first control it finds, which is why Cancel is first:
+  Enter on a freshly opened confirmation cannot delete anything. The notebook dialog says
+  what goes (chats, answers, memberships — the last two by cascade) and what stays (the
+  files, because sources are shared and nothing re-derives a raster cheaply), because the
+  thing a user fears losing is the file.
 - `lib/api.ts` is the only module that talks to `/api`. `lib/types.ts` mirrors the
   **JSON**, not the Go — snake_case, because that is what `internal/domain` marshals.
   `lib/format.ts` holds the only display formatting rules, so byte and duration strings

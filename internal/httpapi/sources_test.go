@@ -29,6 +29,7 @@ type fakeAPI struct {
 	err       error
 
 	created    string // name passed to CreateNotebook
+	deleted    string // id passed to DeleteNotebook
 	upload     string // filename passed to AddUpload
 	body       string // contents passed to AddUpload
 	reingested string // id passed to ReingestSource
@@ -52,7 +53,11 @@ func (f *fakeAPI) CreateNotebook(_ context.Context, name string) (domain.Noteboo
 }
 
 func (f *fakeAPI) RenameNotebook(context.Context, string, string) error { return f.err }
-func (f *fakeAPI) DeleteNotebook(context.Context, string) error         { return f.err }
+
+func (f *fakeAPI) DeleteNotebook(_ context.Context, id string) error {
+	f.deleted = id
+	return f.err
+}
 
 func (f *fakeAPI) GetNotebook(_ context.Context, id string) (domain.Notebook, error) {
 	if f.err != nil {
@@ -118,6 +123,41 @@ func (f *fakeAPI) GetAsset(_ context.Context, id string) (domain.Asset, error) {
 		return domain.Asset{}, fmt.Errorf("%w: %s", domain.ErrNotFound, id)
 	}
 	return f.asset, nil
+}
+
+// TestDeleteNotebookAnswersNoContent pins the two things the sidebar depends on: the
+// id in the path is the one deleted, and a notebook that is not there is a 404 rather
+// than the 500 a bare error would become — the shell re-selects another notebook either
+// way, but only the 404 tells it the row was already gone.
+func TestDeleteNotebookAnswersNoContent(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"deleted", nil, http.StatusNoContent},
+		{"already gone", fmt.Errorf("%w: nb9", domain.ErrNotFound), http.StatusNotFound},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakeAPI{err: tc.err}
+			srv := newAppServer(t, f)
+
+			res := request(t, srv, http.MethodDelete, "/api/notebooks/nb1", nil)
+			defer res.Body.Close()
+
+			if res.StatusCode != tc.want {
+				t.Fatalf("status = %d, want %d", res.StatusCode, tc.want)
+			}
+			if tc.err == nil && f.deleted != "nb1" {
+				t.Fatalf("deleted %q, want nb1", f.deleted)
+			}
+			if tc.err == nil {
+				if body, _ := io.ReadAll(res.Body); len(body) != 0 {
+					t.Fatalf("204 carried a body: %q", body)
+				}
+			}
+		})
+	}
 }
 
 func newAppServer(t *testing.T, a API) *httptest.Server {

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { createNotebook, listNotebooks } from './lib/api';
+  import { createNotebook, deleteNotebook, listNotebooks } from './lib/api';
   import { readOpen, SIDE, writeOpen } from './lib/panel';
   import { errorMessage } from './lib/format';
   import type { Crumb, Notebook, Panel, Source } from './lib/types';
@@ -23,6 +23,12 @@
   let dlg = $state<HTMLDialogElement | null>(null);
   let nameInput = $state<HTMLInputElement | null>(null);
   let newName = $state('');
+  // The notebook the user has asked to lose, and the dialog that makes them say it
+  // twice. Deletion is the one action in the app with no undo, so it never happens on
+  // the first click.
+  let dlgDelete = $state<HTMLDialogElement | null>(null);
+  let pending = $state<Notebook | null>(null);
+  let deleting = $state(false);
   let panel = $state<Panel>('sources');
   let panelOpen = $state(readOpen(SIDE));
   let inspecting = $state<Source | null>(null);
@@ -105,6 +111,44 @@
     notebooks = notebooks.map((nb) => (nb.id === id ? { ...nb, name } : nb));
   }
 
+  function askDelete(notebook: Notebook) {
+    error = '';
+    pending = notebook;
+    dlgDelete?.showModal();
+  }
+
+  /**
+   * Delete the notebook the dialog is holding.
+   *
+   * The row, its chats and its memberships go — the last two by cascade, which is why
+   * no message deletion is asked for here. The sources and their files do not: they are
+   * content-addressed and shared, and nothing re-derives a raster cheaply.
+   */
+  async function removeNotebook() {
+    const notebook = pending;
+    if (!notebook || deleting) return;
+    deleting = true;
+    error = '';
+    try {
+      await deleteNotebook(notebook.id);
+      const rest = notebooks.filter((nb) => nb.id !== notebook.id);
+      notebooks = rest;
+      if (activeId === notebook.id) {
+        // Falling back to the newest remaining is what load() would do; doing it here
+        // keeps the chat column showing something instead of the landing page.
+        activeId = rest.at(-1)?.id ?? null;
+        inspecting = null;
+      }
+      dlgDelete?.close();
+    } catch (e) {
+      error = errorMessage(e);
+      dlgDelete?.close();
+    } finally {
+      deleting = false;
+      pending = null;
+    }
+  }
+
   function openNotebook(id: string) {
     if (id !== activeId) inspecting = null;
     activeId = id;
@@ -165,6 +209,7 @@
     onselect={openNotebook}
     onnew={openNew}
     onrenamed={renamed}
+    ondelete={askDelete}
     onerror={(m) => (error = m)}
   />
   <main>
@@ -209,7 +254,7 @@
 <svelte:window on:dragover={fileDrop} on:drop={fileDrop} />
 
 <dialog
-  class="new-notebook"
+  class="modal new-notebook"
   aria-label="New notebook"
   bind:this={dlg}
   onclick={(e) => e.target === dlg && dlg?.close()}
@@ -230,6 +275,34 @@
   <div class="actions">
     <Button variant="ghost" onclick={() => dlg?.close()}>Cancel</Button>
     <Button variant="primary" disabled={!newName.trim()} onclick={create}>Create</Button>
+  </div>
+</dialog>
+
+<!-- showModal() focuses the first control it finds, which is Cancel — so Enter on a
+     freshly opened confirmation does nothing destructive. -->
+<dialog
+  class="modal delete-notebook"
+  aria-label="Delete notebook"
+  bind:this={dlgDelete}
+  onclick={(e) => e.target === dlgDelete && dlgDelete?.close()}
+  onclose={() => (pending = null)}
+>
+  <h2>Delete “{pending?.name ?? ''}”?</h2>
+  <p class="lead">
+    Its chats, and every answer in them, go with it<span
+      >{#if (pending?.source_count ?? 0) > 0}
+        , and so does this notebook's list of
+        {pending?.source_count} source{pending?.source_count === 1 ? '' : 's'}
+      {/if}</span
+    >. This cannot be undone.
+  </p>
+  <p class="kept">
+    The files themselves stay on disk. A source is shared between notebooks, so another
+    one can pick the same file up again without uploading or indexing it twice.
+  </p>
+  <div class="actions">
+    <Button variant="ghost" onclick={() => dlgDelete?.close()}>Cancel</Button>
+    <Button variant="danger" disabled={deleting} onclick={removeNotebook}>Delete notebook</Button>
   </div>
 </dialog>
 
@@ -256,8 +329,9 @@
     text-align: center;
   }
   /* Native <dialog> + showModal(): Esc, focus trapping and the top layer come from
-     the browser, so the only thing written here is the layout of three controls. */
-  .new-notebook {
+     the browser, so the only thing written here is the layout of three controls. Both
+     dialogs are one box; only their bodies differ. */
+  .modal {
     width: min(420px, calc(100vw - 32px));
     padding: 20px;
     color: var(--fg);
@@ -266,13 +340,29 @@
     border-radius: var(--radius-lg, 12px);
     box-shadow: 0 12px 32px rgb(0 0 0 / 18%);
   }
-  .new-notebook::backdrop {
+  .modal::backdrop {
     background: rgb(0 0 0 / 45%);
   }
-  .new-notebook h2 {
+  .modal h2 {
     margin: 0 0 14px;
     font-size: 16px;
     font-weight: 600;
+  }
+  .delete-notebook .lead {
+    margin: 0;
+    font-size: 14px;
+    line-height: 1.55;
+  }
+  /* The reassurance is the point of the dialog: the thing users fear losing is the
+     file, and the file is not going. */
+  .delete-notebook .kept {
+    margin: 12px 0 0;
+    padding: 10px 12px;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--fg-muted);
+    background: var(--canvas-subtle);
+    border-radius: var(--radius);
   }
   .field {
     display: block;
@@ -313,9 +403,13 @@
     margin: 16px 24px 0;
     padding: 10px 12px;
     font-size: 13px;
-    color: var(--danger);
-    border: 1px solid var(--danger);
+    color: var(--fg);
+    border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
     border-radius: var(--radius);
-    background: var(--canvas);
+    background: color-mix(in srgb, var(--danger) 10%, transparent);
+  }
+  .banner :global(svg) {
+    flex-shrink: 0;
+    color: var(--danger);
   }
 </style>
