@@ -226,6 +226,7 @@ const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ask-p
   // The viewer is on screen before its chunks are — the heading renders from the
   // source, the list arrives a fetch later. Measuring the ring any earlier reports a
   // working feature as broken.
+  const crumbsBefore = await ui.crumbs();
   const viewer = await ui.until(`
     const dlg = document.querySelector('.viewer');
     if (!dlg || !dlg.querySelector('.chunk, .tile')) return null;
@@ -237,19 +238,20 @@ const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ask-p
   checks.check('a citation opens the source it cites', /two-page\.pdf/.test(viewer?.heading ?? ''), () => `heading=${viewer?.heading}`);
   checks.check('it opens on the cited chunk, ringed', viewer?.highlighted === 1, () => `highlighted=${viewer?.highlighted}`);
 
-  // No Escape any more: the viewer is a step off Sources, not a top layer, so it is
-  // left the way the breadcrumb says — and the answer that cited it never left.
+  // No Escape any more: the viewer is a step off Sources, not a top layer, so Back is
+  // the only way out — and the answer that cited it never left. Leaving it must not
+  // move the header either: the viewer is a step inside a panel, not a place, so the
+  // crumbs before and after are the same list.
   await ui.eval(`document.querySelector('.viewer [aria-label="Back to sources"]').click(); return true;`);
   const closed = await ui.until(`
-    const c = [...document.querySelectorAll('.crumbs .crumb')].map((x) => x.textContent.trim());
     return !document.querySelector('.viewer') && document.querySelector('.chat .turn.assistant')
-      ? c
+      ? [...document.querySelectorAll('.crumbs .crumb')].map((x) => x.textContent.trim())
       : null;
   `);
   checks.check(
     'the chat is still there, answer and all, when the source closes',
-    closed !== null && closed[closed.length - 1] === 'Sources',
-    JSON.stringify(closed)
+    closed !== null && closed.join(' / ') === crumbsBefore.join(' / '),
+    () => `${crumbsBefore.join(' / ')} → ${JSON.stringify(closed)}`
   );
 
   // ── the turn is the server's, not the page's ───────────────────

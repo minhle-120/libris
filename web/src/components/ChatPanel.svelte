@@ -11,12 +11,15 @@
   let {
     notebook,
     sources,
-    oncite = undefined
+    oncite = undefined,
+    onchat = undefined
   }: {
     notebook: Notebook;
     sources: Source[];
     /** Opens the source at the cited page, character range or timestamp. */
     oncite?: (citation: Citation) => void;
+    /** The open chat's title, for the breadcrumb. Empty when there is no chat. */
+    onchat?: (title: string) => void;
   } = $props();
 
   let chats = $state<Chat[]>([]);
@@ -41,6 +44,11 @@
   let input: HTMLTextAreaElement | undefined = $state();
 
   const chat = $derived(chats.find((c) => c.id === chatId) ?? null);
+
+  // The breadcrumb names the chat you are reading, so the title has to leave this
+  // component — and it is the server's title, not a local guess, because a chat is
+  // only named once its first question is stored.
+  $effect(() => onchat?.(chat?.title ?? ''));
 
   const searchable = $derived(sources.filter((s) => s.status === 'ready').length);
   const canSend = $derived(draft.trim().length > 0 && searchable > 0 && !running);

@@ -164,25 +164,24 @@ const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ui-pr
     /0000 p1 459/.test(imgs?.caps?.[0] ?? '') && /0001 p2 459/.test(imgs?.caps?.[1] ?? ''),
     JSON.stringify(imgs?.caps));
 
-  // Back out the way the breadcrumb says to. The inspector is a step off Sources
-  // now, so 'Sources' is a link again, and clicking it is the app's own way home —
-  // Escape belonged to showModal(), which no longer owns this view.
+  // The way out is the viewer's own Back button. The header names the notebook and the
+  // chat, so an open inspector adds nothing to it and takes nothing away — there is no
+  // crumb to click, and Escape belonged to showModal(), which no longer owns this view.
   const crumbLinks = await ui.eval(`
     return [...document.querySelectorAll('.crumbs .crumb.link')].map((b) => b.textContent.trim());
   `);
   checks.check(
-    'an open inspector makes Sources a way back',
-    crumbLinks.includes('Sources'),
+    'the header says nothing about the inspector, open or shut',
+    crumbLinks.join(',') === 'libris',
     crumbLinks.join(', ')
   );
   await ui.eval(`
-    [...document.querySelectorAll('.crumbs .crumb.link')]
-      .find((b) => b.textContent === 'Sources')?.click();
+    document.querySelector('.viewer [aria-label="Back to sources"]').click();
     return true;
   `);
   const back = await ui.until(`
     const c = [...document.querySelectorAll('.crumbs .crumb')].map((x) => x.textContent.trim());
-    return c.join('/') === 'libris/Upload Lab/Sources' && document.querySelector('.sidepanel .list')
+    return !document.querySelector('.viewer') && document.querySelector('.sidepanel .list')
       ? c : null;
   `);
   checks.check('the inspector gives the panel back to the list', back !== null, JSON.stringify(back));

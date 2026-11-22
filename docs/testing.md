@@ -53,10 +53,11 @@ text, and that `ready` is backed by rows.
 Builds, starts the binary against a throwaway data directory, and runs
 `scripts/ui-upload.mjs`, `ui-drop.mjs`, `ui-ask.mjs` and `ui-nav.mjs` over CDP
 (`scripts/cdp.mjs`, no dependencies). They assert on DOM state — computed text and
-counts — not screenshots. 142 checks across four harnesses (43 upload, 23 drop, 39 ask,
-37 nav) cover create-notebook (with
+counts — not screenshots. 172 checks across four harnesses (50 upload, 23 drop, 39 ask,
+60 nav) cover create-notebook (with
 a name) from both the sidebar and the landing state, rename, resize and collapse of both
-columns, the breadcrumb and what it refuses to name, file-picker upload,
+columns, the breadcrumb — including that it names the chat and refuses to name the panel,
+the settings bar, file-picker upload,
 `processing → ready` polling, dedupe, drag-and-drop, unsupported files, filtering,
 detach, and a whole question: streaming, citations arriving before the answer, a chip
 opening the source on the cited chunk, a reload, the model refusing, the model answering

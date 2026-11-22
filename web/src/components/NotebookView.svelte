@@ -21,16 +21,19 @@
     onpanel,
     onopen,
     oninspect,
+    onchat,
     onchange = undefined
   }: {
     notebook: Notebook;
     panel: Panel;
     open: boolean;
-    /** Owned by App, because the breadcrumb has to say which source is open. */
+    /** Owned by App, so switching or deleting a notebook closes what it opened. */
     inspecting: Source | null;
     onpanel: (panel: Panel) => void;
     onopen: (open: boolean) => void;
     oninspect: (source: Source | null) => void;
+    /** The open chat's title, up to the breadcrumb. Empty when there is no chat. */
+    onchat: (title: string) => void;
     onchange?: () => void;
   } = $props();
 
@@ -161,7 +164,7 @@
       </div>
     {/if}
 
-    <ChatPanel notebook={notebook} {sources} oncite={openCitation} />
+    <ChatPanel notebook={notebook} {sources} oncite={openCitation} {onchat} />
   </section>
 
   <SidePanel

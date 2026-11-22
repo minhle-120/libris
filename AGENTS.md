@@ -14,7 +14,7 @@ the one you need before you start:
 | routes, status codes, SSE frames, file endpoints | `docs/api.md` |
 | `internal/llm`, any llama.cpp flag, endpoint or claim | `docs/llamacpp.md` |
 | tests, `make e2e`, `make ui`, the CDP harness | `docs/testing.md` |
-| the notebook's three columns, the panel, the breadcrumb | `docs/adr/0012-panel-navigation.md` |
+| the notebook's three columns, the panel, the breadcrumb | `docs/adr/0012-panel-navigation.md`, `docs/adr/0014-the-breadcrumb-ends-at-the-chat.md` |
 | a decision someone says was already made | `docs/adr/` |
 
 ---
@@ -117,7 +117,7 @@ mid-sentence — so what each one settles, in the order an agent is likely to ne
 | retrieval at scale, a vector index | 0010 | vectors are BLOBs in SQLite, scanned in Go — for now |
 | notebooks, dedupe, a shared file | 0003 | notebooks own memberships; sources are content-addressed and shared |
 | where files go on disk | 0005 | the data directory defaults to Documents/libris, resolved per platform |
-| the notebook's columns, the panel, the breadcrumb | 0012 | Sources and Activity are a panel beside the chat, not pages instead of it |
+| the notebook's columns, the panel, the breadcrumb | 0012, 0014 | Sources and Activity are a panel beside the chat, not pages instead of it; the header ends at the chat you are reading |
 | how settings reach the browser | 0002 | settings are served and saved over HTTP |
 
 ---
@@ -321,12 +321,13 @@ PDFDPI int `key:"pdfDPI" group:"ingest" label:"PDF raster DPI" help:"…"
   in the middle, and one **panel** on the right holding Sources and Activity as a
   segmented view (ADR 0012). The panel repeats the left column's geometry on purpose —
   260..640 drag from its inner edge, 44px rail, its width in `localStorage` — and
-  `lib/panel.ts` is the single rule that keeps them clamped, persisted and shortening
-  the breadcrumb by exactly the level they name. Do not split it into two components and
+  `lib/panel.ts` is the single rule that keeps them clamped and persisted. Do not
+  split it into two components and
   do not make the sizes equal: mirrored geometry, independent numbers.
-- The breadcrumb is the app's location, and it names levels the user can climb to:
-  `libris / <notebook> / <panel view>`. A chat is not in it — a chat is the ground under
-  the feet, not a step up, and it has a picker of its own.
+- The breadcrumb is the app's location and nothing else: `libris / <notebook>`, plus
+  the chat's title when a chat is open (ADR 0014). A panel view is not a level — Sources
+  and Activity are things you open beside the chat, and the segment control says which
+  one is showing. Only `libris` is a button, because only it is somewhere else.
 - Overlays are native `<dialog>` + `showModal()`, not positioned divs: Esc, focus
   trapping and the top layer come from the browser, and a hand-rolled scrim fails the
   accessibility checks honestly. Backdrop-click-to-close is the `onclick` on the dialog
@@ -368,15 +369,14 @@ PDFDPI int `key:"pdfDPI" group:"ingest" label:"PDF raster DPI" help:"…"
   the name is non-blank, and the sidebar renames in place (Enter commits, Escape
   abandons, blur commits what changed) rather than opening a second dialog for it.
   The old one-click path hard-coded "Untitled notebook", a name the server refuses.
-- The header is the navigation bar: `libris / <notebook> / Sources`, or
-  `libris / <notebook> / Chat / <chat title>`. A crumb is a button only when it is an
-  ancestor — the page you are on is not a link to itself — which is why Chat becomes
-  clickable only once a chat title sits below it. `App` therefore owns the panel tab
-  (`Panel` in `lib/types.ts`) so a crumb can drive it; `NotebookView` no longer owns
-  `tab`, and `ChatPanel` reports the open chat's title upward because only the server
-  knows it, the title being the first question.
-- The panels are Sources · Chat · Activity. The middle one was "Ask"; the composer's
-  send button is still titled Ask because there it is a verb, not a place.
+- `App` owns the panel tab (`Panel` in `lib/types.ts`) and whether the panel is open,
+  because the collapsed rail's buttons name a tab rather than toggle a box;
+  `NotebookView` does not own `tab`. `ChatPanel` reports the open chat's title upward,
+  because only it knows which chat the server has open — and the title is the server's,
+  the first question, so a chat with no question has no name and no crumb.
+- The panel's tabs are Sources · Activity. The chat is not one of them: it is the middle
+  column, and the composer's send button is still titled Ask because there it is a verb,
+  not a place.
 - One New control per screen. The header's New button is gone: with the sidebar's `+`
   and the landing empty state already creating notebooks, a third was three ways to
   find the same dialog and three ways for one to be wired wrong — the landing button
@@ -407,9 +407,9 @@ scripted model so all six termination paths are asserted with no model in the ro
 fake `API` and assert only the HTTP mapping.
 
 Three levels: `make check` (unit), `make e2e` (real binary against a fake embedding
-server, database read back with `sqlite3`), `make ui` (167 browser checks over CDP
+server, database read back with `sqlite3`), `make ui` (172 browser checks over CDP
 against the real UI and a fake that answers all three llama.cpp endpoints). Coverage is
-89% overall; the gaps are DB-error guards and unreachable IO branches, and production
+88% overall; the gaps are DB-error guards and unreachable IO branches, and production
 code should not be contorted to reach them.
 
 ### Run the smallest gate that implies the rest

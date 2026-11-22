@@ -6,6 +6,10 @@ Status: accepted, implemented (`web/src/components/SidePanel.svelte`,
 that §7 of `AGENTS.md` recorded, and takes the chunk inspector out of the top layer. No
 numbered ADR is reversed.
 
+*Amended 2026-11-22 by ADR 0014, which supersedes the breadcrumb clauses below — the
+panel view left the header and the chat's title took its place. The Context, the three
+columns, `lib/panel.ts` and the inspector-as-panel-step all stand as written.*
+
 ## Context
 
 A notebook was one column with three tabs — Sources, Chat, Activity — and an inspector

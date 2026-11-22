@@ -31,6 +31,8 @@
   let confirming = $state(false);
   let deleting = $state(false);
   let panel = $state<Panel>('sources');
+  // Reported up by ChatPanel, because only it knows which chat the server has open.
+  let chatTitle = $state('');
   let panelOpen = $state(readOpen(SIDE));
   let inspecting = $state<Source | null>(null);
   // The breadcrumb's first level means "no notebook picked", and load() must not
@@ -39,20 +41,18 @@
 
   const active = $derived(notebooks.find((nb) => nb.id === activeId) ?? null);
 
-  const panelLabel: Record<Panel, string> = { sources: 'Sources', activity: 'Activity' };
-
-  // The chat is not in here. It is the page, and a breadcrumb names where you are
-  // by climbing out of, not the ground you are standing on.
+  // The breadcrumb is where you are, read from the left: libris, the notebook, and
+  // the chat you are reading. The panel is not in it — Sources and Activity are a
+  // thing you open beside the chat, not a place you go to, and the segment control
+  // says which one is open. A chat with no title yet is no chat at all: the server
+  // names it from the first question, so until then there is nothing to show.
   const crumbs = $derived.by((): Crumb[] => {
     const out: Crumb[] = [{ label: 'libris', onclick: goHome }];
     if (view === 'settings') return [...out, { label: 'settings' }];
     if (!active) return out;
+    // Neither of these is a link: you are on both of them. Only `libris` climbs out.
     out.push({ label: active.name });
-    if (!panelOpen) return out;
-    // The page you are on is not a link, and Sources is one level above an open
-    // chunk viewer — which is the only time it becomes a way back.
-    out.push(inspecting ? { label: 'Sources', onclick: () => (inspecting = null) } : { label: panelLabel[panel] });
-    if (inspecting) out.push({ label: inspecting.name });
+    if (chatTitle) out.push({ label: chatTitle });
     return out;
   });
 
@@ -244,6 +244,7 @@
           onpanel={setPanel}
           onopen={setPanelOpen}
           oninspect={inspect}
+          onchat={(title) => (chatTitle = title)}
           onchange={load}
         />
       {/key}

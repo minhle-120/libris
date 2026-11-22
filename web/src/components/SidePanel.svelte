@@ -32,7 +32,7 @@
     loading: boolean;
     uploading: number;
     busy: boolean;
-    /** The source whose chunks are being shown, which sits above Sources in the breadcrumb. */
+    /** The source whose chunks are open in the viewer, replacing the list. */
     inspecting: Source | null;
     /** A chunk a citation pointed at, carried into the viewer. */
     focus?: { segment_id: string; chunk?: number } | undefined;
@@ -367,8 +367,9 @@
     border-bottom: 1px solid var(--border-muted);
   }
 
-  /* A segmented control, not page tabs: it switches the contents of one column, and
-     it is not navigation — the breadcrumb above is. Same words, different job. */
+  /* A segmented control, not page tabs: it switches the contents of one column, and it
+     is the only thing that says which one — the breadcrumb names the chat, not the
+     panel. Same words, different job. */
   .seg {
     display: flex;
     gap: 2px;
