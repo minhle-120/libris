@@ -456,7 +456,7 @@ const code = await withBrowser(
     const notebook = (await fetch(`${app}api/notebooks`).then((r) => r.json())).find((n) => n.name === 'Renamed Notes');
 
     checks.check(
-      'an unanswered notebook lists no conversations',
+      'a conversation is born from a question, not from a button',
       (await chatRows()).length === 0 &&
         (await ui.eval(`return !!document.querySelector('.sidebar .chat-new')`)) === false,
       JSON.stringify(await chatRows())

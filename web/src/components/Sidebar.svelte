@@ -221,7 +221,7 @@
                   <li>
                     <button type="button" class="chat-new" onclick={onnewchat}>
                       <Icon name="plus" size={13} />
-                      <span>New chat</span>
+                      <span>New conversation</span>
                     </button>
                   </li>
                   {#each chats as c (c.id)}
