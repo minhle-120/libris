@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -455,6 +456,58 @@ func TestAddUploadStoresThenProcesses(t *testing.T) {
 	}
 	if len(segments) != 1 || segments[0].Text != "hello" {
 		t.Errorf("segments = %+v", segments)
+	}
+}
+
+// TestDeleteNotebookKeepsTheFileItCites is the promise the confirmation dialog makes in
+// words. A notebook is a grouping and a transcript; the document is shared and content
+// addressed (ADR 0003), so the row, the bytes on disk and every other notebook's
+// membership of them have to outlive it — a wrong guess here deletes a cited file.
+func TestDeleteNotebookKeepsTheFileItCites(t *testing.T) {
+	ctx := context.Background()
+	svc, db, _ := testService(t, &fakeProcessor{})
+
+	first, err := svc.CreateNotebook(ctx, "Quantum")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := svc.CreateNotebook(ctx, "Reading list")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const body = "%PDF-1.4\nscan"
+	src, err := svc.AddUpload(ctx, first.ID, strings.NewReader(body), "paper.pdf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, "the source to become ready", func() bool {
+		return sourceStatus(t, db, src.ID).Status == domain.StatusReady
+	})
+	// The same bytes in another notebook, so the sharing being claimed is real.
+	if _, err := svc.AddUpload(ctx, second.ID, strings.NewReader(body), "paper.pdf"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := svc.DeleteNotebook(ctx, first.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Stat(src.OriginalPath); err != nil {
+		t.Errorf("the original went with the notebook: %v", err)
+	}
+	if got := sourceStatus(t, db, src.ID); got.Status != domain.StatusReady || got.SegmentCount != 1 {
+		t.Errorf("source after the delete = %+v, want the ready row untouched", got)
+	}
+	rest, err := svc.ListSources(ctx, second.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rest) != 1 || rest[0].ID != src.ID {
+		t.Errorf("the other notebook's sources = %+v, want the shared source still listed", rest)
+	}
+	if _, err := svc.GetNotebook(ctx, first.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("the notebook survived the delete: %v", err)
 	}
 }
 
