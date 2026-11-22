@@ -59,7 +59,7 @@ func TestChatLifecycle(t *testing.T) {
 	}
 
 	// Deleting the conversation leaves the sources it cited alone.
-	if err := db.DeleteNotebook(ctx, b); err != nil {
+	if _, err := db.DeleteNotebook(ctx, b); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := db.ListChats(ctx, b); len(got) != 0 {

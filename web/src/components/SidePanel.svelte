@@ -1,6 +1,7 @@
 <script lang="ts">
   import { originalURL } from '../lib/api';
   import { formatAge, formatBytes } from '../lib/format';
+  import ConfirmDialog from '../lib/ConfirmDialog.svelte';
   import { dragHandle, readW, SIDE } from '../lib/panel';
   import type { Panel, Source } from '../lib/types';
   import Icon from '../lib/Icon.svelte';
@@ -42,6 +43,25 @@
     onrebuild: (source: Source) => void;
     onremove: (source: Source) => void;
   } = $props();
+
+  // The last membership is a deletion, so that trash can does two different things
+  // depending on a number the row knows and the click does not. Asking is only the
+  // part that cannot be undone silently.
+  let doomed = $state<Source | null>(null);
+  let confirming = $state(false);
+
+  function askRemove(source: Source) {
+    doomed = source;
+    confirming = true;
+  }
+
+  function confirmRemove() {
+    if (!doomed) return;
+    // `doomed` is cleared by the box closing, which keeps its title readable right up
+    // until the moment it is gone.
+    onremove(doomed);
+    confirming = false;
+  }
 
   let width = $state(readW(SIDE));
   let filter = $state('');
@@ -264,15 +284,27 @@
                       <Icon name="open" size={14} />
                     </a>
                   {/if}
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    iconOnly
-                    title="Remove from this notebook (the file is kept)"
-                    onclick={() => onremove(source)}
-                  >
-                    <Icon name="trash" size={14} />
-                  </Button>
+                  {#if source.notebooks_using > 1}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      iconOnly
+                      title={`Remove from this notebook — ${source.notebooks_using} notebooks use this file, so it stays`}
+                      onclick={() => onremove(source)}
+                    >
+                      <Icon name="trash" size={14} />
+                    </Button>
+                  {:else}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      iconOnly
+                      title="Delete — no other notebook uses this file"
+                      onclick={() => askRemove(source)}
+                    >
+                      <Icon name="trash" size={14} />
+                    </Button>
+                  {/if}
                 </div>
               </li>
             {/each}
@@ -294,6 +326,20 @@
     ></button>
   {/if}
 </aside>
+
+<ConfirmDialog
+  label="Delete source"
+  cls="delete-source"
+  bind:open={confirming}
+  title={`Delete “${doomed?.name ?? ''}”?`}
+  lead={`No other notebook uses it, so its original, its ${doomed?.segment_count ?? 0} chunk${
+    doomed?.segment_count === 1 ? '' : 's'
+  } and every page image made from it are deleted. This cannot be undone.`}
+  note="A file another notebook also uses is never deleted here: it stays ready, rasters and all, for the notebooks that cite it."
+  confirmLabel="Delete file"
+  onconfirm={confirmRemove}
+  onclose={() => (doomed = null)}
+/>
 
 <style>
   /* The chrome plane. The chat is the deep one and the list items are raised cards on

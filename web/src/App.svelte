@@ -8,6 +8,7 @@
   import Sidebar from './components/Sidebar.svelte';
   import NotebookView from './components/NotebookView.svelte';
   import SettingsView from './components/SettingsView.svelte';
+  import ConfirmDialog from './lib/ConfirmDialog.svelte';
   import EmptyState from './lib/EmptyState.svelte';
   import Icon from './lib/Icon.svelte';
   import Button from './lib/Button.svelte';
@@ -26,8 +27,8 @@
   // The notebook the user has asked to lose, and the dialog that makes them say it
   // twice. Deletion is the one action in the app with no undo, so it never happens on
   // the first click.
-  let dlgDelete = $state<HTMLDialogElement | null>(null);
   let pending = $state<Notebook | null>(null);
+  let confirming = $state(false);
   let deleting = $state(false);
   let panel = $state<Panel>('sources');
   let panelOpen = $state(readOpen(SIDE));
@@ -114,15 +115,27 @@
   function askDelete(notebook: Notebook) {
     error = '';
     pending = notebook;
-    dlgDelete?.showModal();
+    confirming = true;
   }
+
+  /** The dialog's first sentence, with the one number only the row knows. */
+  const confirmLead = $derived(
+    `Its chats, and every answer in them, go with it${
+      (pending?.source_count ?? 0) > 0
+        ? `, and so does this notebook's list of ${pending?.source_count} source${
+            pending?.source_count === 1 ? '' : 's'
+          }`
+        : ''
+    }. This cannot be undone.`
+  );
 
   /**
    * Delete the notebook the dialog is holding.
    *
    * The row, its chats and its memberships go — the last two by cascade, which is why
-   * no message deletion is asked for here. The sources and their files do not: they are
-   * content-addressed and shared, and nothing re-derives a raster cheaply.
+   * no message deletion is asked for here. A source goes with it when this was the only
+   * notebook using it; a shared one keeps its row, its rasters and every other
+   * notebook's citation, which is what content-addressing bought.
    */
   async function removeNotebook() {
     const notebook = pending;
@@ -139,13 +152,12 @@
         activeId = rest.at(-1)?.id ?? null;
         inspecting = null;
       }
-      dlgDelete?.close();
+      confirming = false;
     } catch (e) {
       error = errorMessage(e);
-      dlgDelete?.close();
+      confirming = false;
     } finally {
       deleting = false;
-      pending = null;
     }
   }
 
@@ -278,33 +290,20 @@
   </div>
 </dialog>
 
-<!-- showModal() focuses the first control it finds, which is Cancel — so Enter on a
-     freshly opened confirmation does nothing destructive. -->
-<dialog
-  class="modal delete-notebook"
-  aria-label="Delete notebook"
-  bind:this={dlgDelete}
-  onclick={(e) => e.target === dlgDelete && dlgDelete?.close()}
+<!-- One confirmation box for every "are you sure", and its Cancel is the control
+     showModal() focuses, so Enter on a freshly opened confirmation deletes nothing. -->
+<ConfirmDialog
+  label="Delete notebook"
+  cls="delete-notebook"
+  bind:open={confirming}
+  title={`Delete “${pending?.name ?? ''}”?`}
+  lead={confirmLead}
+  note="Any source no other notebook uses goes with it — the file itself, its page images, its chunks. One that another notebook also lists stays, ready to open again without a second upload or a second indexing pass."
+  confirmLabel="Delete notebook"
+  busy={deleting}
+  onconfirm={removeNotebook}
   onclose={() => (pending = null)}
->
-  <h2>Delete “{pending?.name ?? ''}”?</h2>
-  <p class="lead">
-    Its chats, and every answer in them, go with it<span
-      >{#if (pending?.source_count ?? 0) > 0}
-        , and so does this notebook's list of
-        {pending?.source_count} source{pending?.source_count === 1 ? '' : 's'}
-      {/if}</span
-    >. This cannot be undone.
-  </p>
-  <p class="kept">
-    The files themselves stay on disk. A source is shared between notebooks, so another
-    one can pick the same file up again without uploading or indexing it twice.
-  </p>
-  <div class="actions">
-    <Button variant="ghost" onclick={() => dlgDelete?.close()}>Cancel</Button>
-    <Button variant="danger" disabled={deleting} onclick={removeNotebook}>Delete notebook</Button>
-  </div>
-</dialog>
+/>
 
 <style>
   .shell {
@@ -327,42 +326,6 @@
   .center {
     padding: 48px 24px;
     text-align: center;
-  }
-  /* Native <dialog> + showModal(): Esc, focus trapping and the top layer come from
-     the browser, so the only thing written here is the layout of three controls. Both
-     dialogs are one box; only their bodies differ. */
-  .modal {
-    width: min(420px, calc(100vw - 32px));
-    padding: 20px;
-    color: var(--fg);
-    background: var(--canvas);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg, 12px);
-    box-shadow: 0 12px 32px rgb(0 0 0 / 18%);
-  }
-  .modal::backdrop {
-    background: rgb(0 0 0 / 45%);
-  }
-  .modal h2 {
-    margin: 0 0 14px;
-    font-size: 16px;
-    font-weight: 600;
-  }
-  .delete-notebook .lead {
-    margin: 0;
-    font-size: 14px;
-    line-height: 1.55;
-  }
-  /* The reassurance is the point of the dialog: the thing users fear losing is the
-     file, and the file is not going. */
-  .delete-notebook .kept {
-    margin: 12px 0 0;
-    padding: 10px 12px;
-    font-size: 13px;
-    line-height: 1.5;
-    color: var(--fg-muted);
-    background: var(--canvas-subtle);
-    border-radius: var(--radius);
   }
   .field {
     display: block;

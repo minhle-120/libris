@@ -85,8 +85,10 @@ Argued through. Breaking one needs a conversation, not a commit.
 2. **One definition per setting.** `internal/config/config.go` is the only place settings
    exist — values, labels, help, ranges, enums — and the frontend is *generated* from it
    (ADR 0001).
-3. **Originals are always kept.** A citation must be able to open the source file. Never
-   delete or rewrite an uploaded original.
+3. **An uploaded original is never rewritten, and is deleted only when nothing uses it
+   any more.** A citation must be able to open the source file — which is the same fact
+   seen from the answer: while any notebook lists a source, its file is untouchable. The
+   last notebook to let go is the one act that may remove it (ADR 0013).
 4. **A PDF produces two derived documents** — page text and page rasters — always both,
    indexed and cited as if they were separate sources.
 5. **An ingest never fails a batch.** Unreadable, unknown or unsupported input returns a
@@ -156,7 +158,7 @@ internal/
   config/              the single definition of every setting (+ store, generator)
   domain/              plain types, zero imports
   llm/                 the only package that knows the OpenAI wire format
-  store/sqlite/        migrations + every query
+  store/sqlite/        migrations + every query (collect.go: the orphan sweep)
   ingest/              bytes → segments (+ pdf, audio, sink, chunker, detect)
   index/               text/image/audio → vectors via llm
   retrieve/            recall → rerank → evidence registry
@@ -198,7 +200,7 @@ chat and the chunk inspector; `make check`, `make e2e`, `make ui`.
 are empty directories, untracked); ingest progress events; audio transcription — slicing
 works, so audio is retrievable by embedding, but `Segment.Text` stays empty and the
 synthesiser cannot quote it; lexical recall; vector ANN (retrieval is a brute-force
-cosine scan); garbage collection; an eval set; model-server packaging; Office formats.
+cosine scan); an eval set; model-server packaging; Office formats.
 
 ---
 
@@ -330,6 +332,14 @@ PDFDPI int `key:"pdfDPI" group:"ingest" label:"PDF raster DPI" help:"…"
   accessibility checks honestly. Backdrop-click-to-close is the `onclick` on the dialog
   comparing `e.target === dlg`. The chunk inspector is *not* one: it is a step inside the
   panel, because an inspector that dims the screen takes the answer with it.
+- Every confirmation is `lib/ConfirmDialog.svelte`, opened by the parent flipping a
+  `$bindable` boolean. Its geometry is in `app.css` and its Cancel is first in the markup
+  on purpose — `showModal()` focuses the first control it finds, so Enter on a freshly
+  opened confirmation cannot do the destructive thing. Adding a second hand-written
+  `<dialog class="modal">` re-opens that argument in a place nobody is looking.
+- A source row's trash can means two different things, and `notebooks_using` on the source
+  read says which: with other notebooks using the file the tooltip says it stays, with one
+  it says "no other notebook uses this file" and the click asks first (ADR 0013).
 - A destructive action fires on the second click, never the first, and its button is
   `.btn-danger` — red on a red tint, so it is never the green one the eye is trained to
   press. `showModal()` focuses the first control it finds, which is why Cancel is first:
@@ -447,7 +457,7 @@ CDP harness's many ways of reporting a working feature as broken.
   index is `ls docs/adr/`, not this file. A reversal is a new ADR that names the old one —
   an ADR's Context is never rewritten to match today, because it describes the world the
   decision was made in. Cross-references from anywhere into this file name the rule
-  ("*originals are always kept*"), never a section number.
+  ("*an original is never rewritten*"), never a section number.
 - Commit messages describe behaviour and rationale, and `make check` runs first.
 
 ---
@@ -480,9 +490,11 @@ a ticket, or that a ticket would only restate.
    settings, so both are measurable without a rebuild.
 7. **Vector search.** Brute-force cosine in Go for now; `sqlite-vec` once the corpus is
    big enough to care.
-8. **Garbage collection.** Detaching a source and deleting a notebook never remove files,
-   so re-ingesting after a delete costs nothing but disk. Nothing yet decides when an
-   unreferenced source or asset may be collected, and a wrong guess deletes a cited file.
+8. **Collection of files left by an interrupted ingest.** ADR 0013 settled the case that
+   matters — the last notebook letting go takes the source's files with it — but a raster
+   written by a job that died before its rows exist is still found by nothing, because no
+   query can name it. A startup sweep for source directories with no row would catch it,
+   and has to tolerate a directory whose ingest is running right now.
 9. **MCP shape.** Same process at `/mcp`, loopback, bearer token, read-only by default;
    `cmd/libris-mcp` as a stdio shim. Details deferred.
 10. **Packaging the model servers** — supervise `llama-server`, or require it

@@ -32,6 +32,12 @@ export type Source = {
   warnings?: string[];
   added_at: number;
   segment_count: number;
+  /**
+   * How many notebooks list this file. Removing it from the last one deletes the
+   * original and everything derived from it, so the row that says `1` is the row
+   * whose trash can costs something — and the tooltip says so.
+   */
+  notebooks_using: number;
 };
 
 export type Asset = {

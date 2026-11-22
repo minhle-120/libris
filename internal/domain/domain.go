@@ -57,6 +57,28 @@ type Source struct {
 	// SegmentCount is read from the database rather than stored: it is how the
 	// UI shows "8 chunks" next to a finished source, and is 0 while processing.
 	SegmentCount int `json:"segment_count"`
+
+	// NotebooksUsing counts the memberships this source has, which is how many
+	// notebooks would have to lose it before the file is worth deleting. The UI
+	// says "remove from this notebook" or "delete" with it, because the two are
+	// the same click and only one of them costs anything.
+	NotebooksUsing int `json:"notebooks_using"`
+}
+
+// An Orphan is a source that no notebook refers to any more, together with every
+// file the app owns for it: the kept original, and the derived page rasters,
+// slices and images.
+//
+// The files travel with the fact because the database cannot describe them
+// afterwards — its rows are what just got deleted. Whoever collects an orphan
+// unlinks these paths, and only after the transaction that dropped the rows has
+// committed: a file deleted while its citation still resolves is a broken
+// answer, and a file left behind is only disk.
+type Orphan struct {
+	ID       string
+	Name     string
+	Original string
+	Assets   []string
 }
 
 // SourceStatus is where a source has got. Ingest is asynchronous, so an upload

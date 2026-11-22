@@ -319,3 +319,24 @@ p {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Native <dialog> + showModal(): Esc, focus trapping and the top layer come from the
+   browser, so the only thing written here is the box every confirmation shares. Both
+   of them — deleting a notebook and deleting a file — are this one box. */
+.modal {
+  width: min(420px, calc(100vw - 32px));
+  padding: 20px;
+  color: var(--fg);
+  background: var(--canvas);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg, 12px);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 18%);
+}
+.modal::backdrop {
+  background: rgb(0 0 0 / 45%);
+}
+.modal h2 {
+  margin: 0 0 14px;
+  font-size: 16px;
+  font-weight: 600;
+}

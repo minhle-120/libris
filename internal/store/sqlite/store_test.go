@@ -134,9 +134,12 @@ func TestNotebookSourceCount(t *testing.T) {
 		t.Errorf("GetNotebook = %+v, %v", got, err)
 	}
 
-	// Deleting a source's membership drops the count; the source survives.
-	if err := db.DetachSource(ctx, a.ID, "one"); err != nil {
+	// Deleting a source's membership drops the count. The source survives because
+	// the other notebook still lists it, and says so by returning no orphans.
+	if orphans, err := db.DetachSource(ctx, a.ID, "one"); err != nil {
 		t.Fatal(err)
+	} else if len(orphans) != 0 {
+		t.Errorf("orphans = %v, want none while another notebook uses the source", orphans)
 	}
 	if got, err := db.GetNotebook(ctx, a.ID); err != nil || got.SourceCount != 1 {
 		t.Errorf("after detach = %+v, %v", got, err)
@@ -174,7 +177,7 @@ func TestNotebookLifecycle(t *testing.T) {
 		t.Fatalf("ListNotebooks = %+v, %v", list, err)
 	}
 
-	if err := db.DeleteNotebook(ctx, n.ID); err != nil {
+	if _, err := db.DeleteNotebook(ctx, n.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.GetNotebook(ctx, n.ID); !errors.Is(err, ErrNotFound) {
@@ -183,7 +186,7 @@ func TestNotebookLifecycle(t *testing.T) {
 
 	for _, fn := range []func() error{
 		func() error { return db.RenameNotebook(ctx, "nope", "x") },
-		func() error { return db.DeleteNotebook(ctx, "nope") },
+		func() error { _, err := db.DeleteNotebook(ctx, "nope"); return err },
 	} {
 		if err := fn(); !errors.Is(err, ErrNotFound) {
 			t.Errorf("err = %v, want ErrNotFound", err)
@@ -313,8 +316,12 @@ func TestDetachKeepsTheSource(t *testing.T) {
 		t.Error("a segment naming an asset that does not exist should be refused")
 	}
 
-	if err := db.DetachSource(ctx, a, "sha1"); err != nil {
+	orphaned, err := db.DetachSource(ctx, a, "sha1")
+	if err != nil {
 		t.Fatal(err)
+	}
+	if len(orphaned) != 0 {
+		t.Errorf("orphans = %v, want none: B still uses this source", orphaned)
 	}
 	if list, _ := db.ListSources(ctx, a); len(list) != 0 {
 		t.Errorf("A still lists %d sources", len(list))
@@ -326,12 +333,14 @@ func TestDetachKeepsTheSource(t *testing.T) {
 	if segs, _ := db.ListSegments(ctx, "sha1"); len(segs) != 1 {
 		t.Errorf("segments = %d, want them kept", len(segs))
 	}
-	if err := db.DetachSource(ctx, a, "sha1"); !errors.Is(err, ErrNotFound) {
+	if _, err := db.DetachSource(ctx, a, "sha1"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("second detach err = %v", err)
 	}
 }
 
-func TestDeleteNotebookKeepsSourcesDropsChats(t *testing.T) {
+// The name says the whole rule: a notebook's own chats die with it, and a source
+// another notebook also lists does not.
+func TestDeleteNotebookKeepsSharedSourcesDropsChats(t *testing.T) {
 	ctx := context.Background()
 	db := openDB(t)
 	a := notebook(t, db, "A")
@@ -348,8 +357,12 @@ func TestDeleteNotebookKeepsSourcesDropsChats(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := db.DeleteNotebook(ctx, a); err != nil {
+	orphans, err := db.DeleteNotebook(ctx, a)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if len(orphans) != 0 {
+		t.Errorf("orphans = %v, want none: B still lists sha1", orphans)
 	}
 	if got := mustInt(t, db, `SELECT COUNT(*) FROM sources WHERE id = 'sha1'`); got != 1 {
 		t.Errorf("sources kept = %d, want 1", got)

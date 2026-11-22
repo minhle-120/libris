@@ -50,9 +50,9 @@ if it is shared, deleting B must not remove anything A can still cite.
 - A source's `Name` is the name it was first offered with, because the row is
   shared. Naming the same file differently per notebook needs an alias column on
   the membership — recorded as an open decision, not built.
-- Nothing garbage-collects. Deleting a notebook leaves its sources and assets
-  behind on purpose; when collection is added it must respect every remaining
-  citation, so the safe default (do nothing) stays until it can be reasoned about.
+- Nothing garbage-collects — *superseded by ADR 0013*, which settled the question
+  this left open: membership count is the reference count, so a source's files go
+  when its last notebook does. The reasoning it asked for is there.
 - `Status` is now load-bearing for correctness, not just display: retrieval
   selects `ready` sources only, so a half-ingested file can never be cited. A
   crash mid-ingest leaves `processing`, which the next start sweeps to `failed`.

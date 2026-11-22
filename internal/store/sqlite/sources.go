@@ -95,16 +95,31 @@ func (db *DB) AttachSource(ctx context.Context, notebookID, sourceID string) err
 	return db.setMembership(ctx, notebookID, sourceID)
 }
 
-// DetachSource removes a source from one notebook. The source, its segments and
-// its files are kept: another notebook may cite them and a raster is expensive
-// to re-make.
-func (db *DB) DetachSource(ctx context.Context, notebookID, sourceID string) error {
-	res, err := db.sql.ExecContext(ctx,
+// DetachSource drops one membership, and collects the source if it was the last
+// one: a file no notebook lists is not pending anything, and keeping it forever
+// was a decision nobody made. The returned orphans name the files to unlink —
+// empty when another notebook still uses the source, which is the common case
+// the shared-by-content-hash design exists for.
+func (db *DB) DetachSource(ctx context.Context, notebookID, sourceID string) ([]domain.Orphan, error) {
+	tx, err := db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	res, err := tx.ExecContext(ctx,
 		`DELETE FROM notebook_sources WHERE notebook_id = ? AND source_id = ?`, notebookID, sourceID)
 	if err != nil {
-		return fmt.Errorf("store: detach source: %w", err)
+		return nil, fmt.Errorf("store: detach source: %w", err)
 	}
-	return one(res, sourceID)
+	if err := one(res, sourceID); err != nil {
+		return nil, err
+	}
+	orphans, err := collectOrphans(ctx, tx, []string{sourceID})
+	if err != nil {
+		return nil, err
+	}
+	return orphans, tx.Commit()
 }
 
 // SetSourceStatus records how ingest ended. Warnings are the non-fatal findings
@@ -149,7 +164,8 @@ func (db *DB) GetSource(ctx context.Context, id string) (domain.Source, error) {
 const sourceSelect = `
 	SELECT s.id, s.name, s.kind, s.sha256, s.bytes, s.original_path,
 	       s.status, s.detail, s.warnings, s.created_at,
-	       (SELECT COUNT(*) FROM segments g WHERE g.source_id = s.id)
+	       (SELECT COUNT(*) FROM segments g WHERE g.source_id = s.id),
+	       (SELECT COUNT(*) FROM notebook_sources m WHERE m.source_id = s.id)
 	  FROM sources s`
 
 // ListSources returns a notebook's sources in the order they were added.
@@ -182,7 +198,7 @@ func scanSource(row rowScanner) (domain.Source, error) {
 		warnings string
 	)
 	err := row.Scan(&s.ID, &s.Name, &kind, &s.SHA256, &s.Bytes, &s.OriginalPath,
-		&status, &s.Detail, &warnings, &s.AddedAt, &s.SegmentCount)
+		&status, &s.Detail, &warnings, &s.AddedAt, &s.SegmentCount, &s.NotebooksUsing)
 	if err == sql.ErrNoRows {
 		return domain.Source{}, ErrNotFound
 	}

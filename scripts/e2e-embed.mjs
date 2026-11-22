@@ -305,6 +305,65 @@ try {
 
   const oldDims = sqlite(join(dataDir, 'libris.db'), `SELECT DISTINCT dim FROM segments WHERE source_id != '${third.id}'`);
   checks.check('earlier sources keep the length they were embedded at', oldDims.trim() === String(DIM), `dims=${oldDims.trim()}`);
+  // ── what a delete actually takes ───────────────────────────────
+  // The confirmation dialog promises that a file another notebook uses survives,
+  // and that nothing does when the last one lets go. That is asserted on the
+  // filesystem, because "the rows went" is not the promise anyone cares about.
+  {
+    const mk = async (name) =>
+      await (
+        await fetch(`${base}/api/notebooks`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name })
+        })
+      ).json();
+
+    const shared = Buffer.from(`shared bytes for the collector\n`.repeat(80));
+    const doomed = await mk('GC first');
+    const keep = await mk('GC keeper');
+    const first = await upload(base, doomed.id, 'shared.txt', shared, 'text/plain');
+    const again = await upload(base, keep.id, 'shared.txt', shared, 'text/plain');
+    checks.check('the same file in a second notebook is one source', first.id === again.id, `${first.id} vs ${again.id}`);
+
+    const ready = await poll(`${base}/api/sources/${first.id}`, (src) => src.status === 'ready');
+    checks.check('the shared source is ready before anything is deleted', ready.status === 'ready', `status=${ready.status}`);
+
+    const original = join(dataDir, 'originals', `${first.id}.txt`);
+    const exists = (p) => existsSync(p);
+    checks.check('the kept original is on disk', exists(original), original);
+
+    const keptNotebook = sqlite(join(dataDir, 'libris.db'), `SELECT COUNT(*) FROM notebooks WHERE id = '${keep.id}'`);
+    checks.check('the keeper notebook exists', keptNotebook.trim() === '1', keptNotebook.trim());
+    const firstNotebook = doomed.id;
+    checks.check(
+      'the file has two notebooks using it',
+      sqlite(join(dataDir, 'libris.db'), `SELECT COUNT(*) FROM notebook_sources WHERE source_id = '${first.id}'`).trim() === '2'
+    );
+
+    await fetch(`${base}/api/notebooks/${firstNotebook}`, { method: 'DELETE' });
+    checks.check(
+      'a shared file survives the deletion of one of its notebooks',
+      exists(original) &&
+        sqlite(join(dataDir, 'libris.db'), `SELECT COUNT(*) FROM sources WHERE id = '${first.id}'`).trim() === '1'
+    );
+
+    await fetch(`${base}/api/notebooks/${keep.id}/sources/${first.id}`, { method: 'DELETE' });
+    checks.check(
+      'the last notebook letting go deletes the file it was keeping',
+      !exists(original),
+      original
+    );
+    checks.check(
+      'and with it the rows that cited it',
+      sqlite(join(dataDir, 'libris.db'), `SELECT COUNT(*) FROM sources WHERE id = '${first.id}'`).trim() === '0' &&
+        sqlite(join(dataDir, 'libris.db'), `SELECT COUNT(*) FROM segments WHERE source_id = '${first.id}'`).trim() === '0'
+    );
+    checks.check(
+      'the source’s asset directory is gone too, rasters and all',
+      !exists(join(dataDir, 'assets', first.id))
+    );
+  }
 } finally {
   app.kill('SIGTERM');
   embed.close();

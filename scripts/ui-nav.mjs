@@ -158,7 +158,7 @@ const code = await withBrowser(
       return {
         open: d?.open === true,
         names: /Doomed Book/.test(d?.querySelector('h2')?.textContent ?? ''),
-        keepsFiles: /stay on disk/.test(d?.textContent ?? ''),
+        files: /no other notebook uses goes with it/.test(d?.textContent ?? ''),
         focused: document.activeElement?.textContent.trim(),
         danger: [...(d?.querySelectorAll('button') ?? [])]
           .some((b) => b.textContent.trim() === 'Delete notebook' && b.className.includes('btn-danger'))
@@ -166,9 +166,9 @@ const code = await withBrowser(
     `);
     checks.check('delete asks before it does anything', confirm.open && confirm.names, JSON.stringify(confirm));
     checks.check(
-      'the confirmation says the files survive',
-      confirm.keepsFiles,
-      'that promise is the whole reason a user dares press this'
+      'the confirmation says which files go and which stay',
+      confirm.files,
+      'the promise changed: a shared file stays, an unshared one goes, and the box must say both'
     );
     checks.check(
       'the destructive button is red and Cancel has the focus',

@@ -47,15 +47,55 @@ func (db *DB) RenameNotebook(ctx context.Context, id, name string) error {
 	return one(res, id)
 }
 
-// DeleteNotebook removes a notebook with its chats and memberships. Sources and
-// their files are deliberately untouched: another notebook may cite them, and
-// nothing re-derives a raster cheaply.
-func (db *DB) DeleteNotebook(ctx context.Context, id string) error {
-	res, err := db.sql.ExecContext(ctx, `DELETE FROM notebooks WHERE id = ?`, id)
+// DeleteNotebook removes a notebook with its chats and memberships, and collects
+// every source the last membership was: a file that no notebook lists after this
+// has no reason to sit on the disk forever. Sources another notebook still uses
+// stay, rows and rasters alike — that is what content-addressing bought.
+//
+// The answer lists the files to unlink, because the transaction that removes the
+// rows cannot also remove the bytes: a file deleted while its citation still
+// resolves is a broken answer, so the commit has to come first.
+func (db *DB) DeleteNotebook(ctx context.Context, id string) ([]domain.Orphan, error) {
+	tx, err := db.sql.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("store: delete notebook: %w", err)
+		return nil, err
 	}
-	return one(res, id)
+	defer tx.Rollback()
+
+	// The members have to be read before the cascade erases them; a DELETE of a
+	// notebook takes notebook_sources with it, and the sweep needs to know which
+	// sources it just made possible to delete.
+	rows, err := tx.QueryContext(ctx, `SELECT source_id FROM notebook_sources WHERE notebook_id = ?`, id)
+	if err != nil {
+		return nil, fmt.Errorf("store: list notebook members: %w", err)
+	}
+	var members []string
+	for rows.Next() {
+		var s string
+		if err := rows.Scan(&s); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		members = append(members, s)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+
+	res, err := tx.ExecContext(ctx, `DELETE FROM notebooks WHERE id = ?`, id)
+	if err != nil {
+		return nil, fmt.Errorf("store: delete notebook: %w", err)
+	}
+	if err := one(res, id); err != nil {
+		return nil, err
+	}
+	orphans, err := collectOrphans(ctx, tx, members)
+	if err != nil {
+		return nil, err
+	}
+	return orphans, tx.Commit()
 }
 
 // notebookSelect is the shared projection of the two notebook queries. The

@@ -459,11 +459,12 @@ func TestAddUploadStoresThenProcesses(t *testing.T) {
 	}
 }
 
-// TestDeleteNotebookKeepsTheFileItCites is the promise the confirmation dialog makes in
-// words. A notebook is a grouping and a transcript; the document is shared and content
-// addressed (ADR 0003), so the row, the bytes on disk and every other notebook's
-// membership of them have to outlive it — a wrong guess here deletes a cited file.
-func TestDeleteNotebookKeepsTheFileItCites(t *testing.T) {
+// The confirmation dialog tells the user what happens to their file, so this is
+// that sentence as a test. A notebook is a grouping and a transcript; the document
+// is shared and content-addressed (ADR 0003), so while another notebook lists it,
+// the row, the bytes and every other notebook's membership of them outlive this one.
+// The companion tests below are the half where nothing else does.
+func TestDeleteNotebookKeepsAFileAnotherNotebookCites(t *testing.T) {
 	ctx := context.Background()
 	svc, db, _ := testService(t, &fakeProcessor{})
 
@@ -509,6 +510,191 @@ func TestDeleteNotebookKeepsTheFileItCites(t *testing.T) {
 	if _, err := svc.GetNotebook(ctx, first.ID); !errors.Is(err, domain.ErrNotFound) {
 		t.Errorf("the notebook survived the delete: %v", err)
 	}
+}
+
+// A source no notebook lists is not pending anything, so its original and its
+// derived files go with it. This is the one action in libris that deletes bytes
+// the user never asked to delete, so it is asserted on the filesystem rather than
+// on a call log: a file left behind is only disk, and a file taken while another
+// notebook cites it is a lie.
+func TestDeleteNotebookTakesTheLastCopyWithIt(t *testing.T) {
+	ctx := context.Background()
+	svc, db, dir := testService(t, &fakeProcessor{})
+
+	nb, err := svc.CreateNotebook(ctx, "Quantum")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const body = "%PDF-1.4\nscan"
+	src, err := svc.AddUpload(ctx, nb.ID, strings.NewReader(body), "paper.pdf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, "the source to become ready", func() bool {
+		return sourceStatus(t, db, src.ID).Status == domain.StatusReady
+	})
+
+	// The files a finished PDF really owns: page rasters, named under a directory
+	// keyed by the source hash. Plus one the database never heard of — an ingest
+	// that died between writing a raster and storing its row leaves exactly that,
+	// and only the directory can find it.
+	assetDir := filepath.Join(dir, "assets", src.ID, "pages")
+	if err := os.MkdirAll(assetDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	raster := filepath.Join(assetDir, "page-0001.png")
+	if err := os.WriteFile(raster, []byte("png"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stray := filepath.Join(assetDir, "page-0002.png")
+	if err := os.WriteFile(stray, []byte("png"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.PutAssets(ctx, src.ID, []domain.Asset{{
+		ID: src.ID + "/pages/page-0001.png", Path: raster, MIME: "image/png", Bytes: 3,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	// A second source, in a notebook that survives, whose files must too. Same
+	// notebook would be pointless: its last membership went with this one.
+	elsewhere, err := svc.CreateNotebook(ctx, "Elsewhere")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := svc.AddUpload(ctx, elsewhere.ID, strings.NewReader("%PDF-1.4\nother"), "other.pdf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, "the second source to become ready", func() bool {
+		return sourceStatus(t, db, other.ID).Status == domain.StatusReady
+	})
+	otherFile := filepath.Join(dir, "assets", other.ID, "keep.txt")
+	if err := os.MkdirAll(filepath.Dir(otherFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(otherFile, []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := svc.DeleteNotebook(ctx, nb.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Stat(src.OriginalPath); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the original survived the last notebook: %v", err)
+	}
+	if _, err := os.Stat(assetDir); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the source's derived files survived: %v", err)
+	}
+	if _, err := os.Stat(otherFile); err != nil {
+		t.Errorf("a file belonging to another source went with it: %v", err)
+	}
+	// Nothing may be left pointing at files that are gone: the rows go first, so
+	// a citation can never resolve to a missing raster. Only the source another
+	// notebook still lists is left in the database.
+	if n := countRows(t, db, `SELECT COUNT(*) FROM sources`); n != 1 {
+		t.Errorf("sources = %d, want only the one Elsewhere still lists", n)
+	}
+	if id := mustText1(t, db, `SELECT id FROM sources`); id != other.ID {
+		t.Errorf("surviving source = %s, want %s", id, other.ID)
+	}
+}
+
+// The same rule through the other door: removing a source from a notebook is a
+// delete when it was the only notebook, and is not when it was one of two.
+func TestDetachSourceDeletesOnlyTheLastMembership(t *testing.T) {
+	ctx := context.Background()
+	svc, db, dir := testService(t, &fakeProcessor{})
+
+	a, err := svc.CreateNotebook(ctx, "A")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := svc.CreateNotebook(ctx, "B")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const body = "%PDF-1.4\nscan"
+	shared, err := svc.AddUpload(ctx, a.ID, strings.NewReader(body), "paper.pdf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	solo, err := svc.AddUpload(ctx, a.ID, strings.NewReader("%PDF-1.4\nsolo"), "solo.pdf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.AddUpload(ctx, b.ID, strings.NewReader(body), "paper.pdf"); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, "both sources to become ready", func() bool {
+		return sourceStatus(t, db, shared.ID).Status == domain.StatusReady &&
+			sourceStatus(t, db, solo.ID).Status == domain.StatusReady
+	})
+
+	if got := mustList(t, svc, a.ID); len(got) != 2 {
+		t.Fatalf("A has %d sources, want 2", len(got))
+	}
+	if err := svc.DetachSource(ctx, a.ID, shared.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(shared.OriginalPath); err != nil {
+		t.Errorf("B still lists this file and it is gone: %v", err)
+	}
+
+	if err := svc.DetachSource(ctx, a.ID, solo.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(solo.OriginalPath); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the last notebook let go and the file stayed: %v", err)
+	}
+	if _, err := db.GetSource(ctx, solo.ID); !errors.Is(err, sqlite.ErrNotFound) {
+		t.Errorf("GetSource = %v, want the row collected with its last membership", err)
+	}
+	// The directory the files lived in is the app's, not the user's, and goes too.
+	if _, err := os.Stat(filepath.Join(dir, "assets", solo.ID)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the source's asset directory survived: %v", err)
+	}
+	// B's copy of the shared file, files and all, is untouched by A letting go.
+	if err := os.MkdirAll(filepath.Join(dir, "assets", shared.ID), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	kept := filepath.Join(dir, "assets", shared.ID, "page-0001.png")
+	if err := os.WriteFile(kept, []byte("png"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.GetSource(ctx, shared.ID); err != nil {
+		t.Fatalf("the shared source went with a detach: %v", err)
+	}
+	if _, err := os.Stat(kept); err != nil {
+		t.Errorf("the shared source's files went with a detach: %v", err)
+	}
+}
+
+func mustList(t *testing.T, svc *Service, notebookID string) []domain.Source {
+	t.Helper()
+	list, err := svc.ListSources(context.Background(), notebookID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return list
+}
+
+func mustText1(t *testing.T, db *sqlite.DB, q string) string {
+	t.Helper()
+	var v string
+	if err := db.Raw().QueryRow(q).Scan(&v); err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+func countRows(t *testing.T, db *sqlite.DB, q string) int {
+	t.Helper()
+	var n int
+	if err := db.Raw().QueryRow(q).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
 }
 
 func TestAddUploadReusesIdenticalBytes(t *testing.T) {
@@ -916,18 +1102,8 @@ func TestNotebookAndSourceLifecycle(t *testing.T) {
 		t.Fatalf("get source = %+v, %v", got, err)
 	}
 
-	// Detaching keeps the file: another notebook may cite it.
-	if err := svc.DetachSource(ctx, nb.ID, b.ID); err != nil {
-		t.Fatal(err)
-	}
-	if sources, err = svc.ListSources(ctx, nb.ID); err != nil || len(sources) != 1 {
-		t.Fatalf("after detach: %d sources, %v", len(sources), err)
-	}
-	if _, err := svc.GetSource(ctx, b.ID); err != nil {
-		t.Errorf("a detached source must still exist on disk: %v", err)
-	}
-
-	// Re-attaching is how a shared file enters a second notebook.
+	// Re-attaching is how a shared file enters a second notebook, and it is also
+	// what makes the next step a removal rather than a deletion.
 	other, err := svc.CreateNotebook(ctx, "Shared")
 	if err != nil {
 		t.Fatal(err)
@@ -935,26 +1111,47 @@ func TestNotebookAndSourceLifecycle(t *testing.T) {
 	if err := svc.AttachSource(ctx, other.ID, b.ID); err != nil {
 		t.Fatal(err)
 	}
+
+	// Detaching drops one membership and keeps the source, now that a second
+	// notebook lists it — which is the only reason it is kept.
+	if err := svc.DetachSource(ctx, nb.ID, b.ID); err != nil {
+		t.Fatal(err)
+	}
+	if sources, err = svc.ListSources(ctx, nb.ID); err != nil || len(sources) != 1 {
+		t.Fatalf("after detach: %d sources, %v", len(sources), err)
+	}
+	if got, err := svc.GetSource(ctx, b.ID); err != nil || got.NotebooksUsing != 1 {
+		t.Errorf("a detached-but-shared source = %+v, %v; want it kept with one user left", got, err)
+	}
 	if list, err := svc.ListSources(ctx, other.ID); err != nil || len(list) != 1 {
 		t.Fatalf("attached source missing from the second notebook: %d, %v", len(list), err)
 	}
 	if err := svc.AttachSource(ctx, other.ID, "no-such-source"); !errors.Is(err, domain.ErrNotFound) {
 		t.Errorf("attaching an unknown source = %v, want ErrNotFound", err)
 	}
-	if err := svc.AttachSource(ctx, "no-such-notebook", b.ID); !errors.Is(err, domain.ErrNotFound) {
+	if err := svc.AttachSource(ctx, "no-such-notebook", a.ID); !errors.Is(err, domain.ErrNotFound) {
 		t.Errorf("attaching into an unknown notebook = %v, want ErrNotFound", err)
 	}
 
-	// Deleting a notebook takes its chats and memberships with it, but not the
-	// files, which the other notebook is still using.
+	// Letting go of the last membership is not a detach any more, it is a delete:
+	// a file no notebook lists has nothing left to be kept for.
+	if err := svc.DetachSource(ctx, other.ID, b.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.GetSource(ctx, b.ID); !errors.Is(err, sqlite.ErrNotFound) {
+		t.Errorf("the last membership went and the source survived: %v", err)
+	}
+
+	// Deleting a notebook takes its chats and memberships with it, and with them
+	// any source that has no other notebook left. `a` was only ever in nb.
 	if err := svc.DeleteNotebook(ctx, nb.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := svc.GetNotebook(ctx, nb.ID); !errors.Is(err, domain.ErrNotFound) {
 		t.Errorf("get after delete = %v, want ErrNotFound", err)
 	}
-	if _, err := svc.GetSource(ctx, b.ID); err != nil {
-		t.Errorf("deleting a notebook must not delete a shared source: %v", err)
+	if _, err := svc.GetSource(ctx, a.ID); !errors.Is(err, sqlite.ErrNotFound) {
+		t.Errorf("a source with no notebook left survived its notebook: %v", err)
 	}
 	if _, err := svc.ListSources(ctx, nb.ID); !errors.Is(err, domain.ErrNotFound) {
 		t.Errorf("listing a deleted notebook = %v, want ErrNotFound", err)

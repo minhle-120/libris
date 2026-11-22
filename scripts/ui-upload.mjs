@@ -3,7 +3,7 @@
 //
 // Requires a running server: `make ui` starts one against a throwaway data
 // directory. Standalone: APP=http://127.0.0.1:8080 node scripts/ui-upload.mjs
-import { writeFileSync } from 'node:fs';
+import { readFileSync, statSync, writeFileSync } from 'node:fs';
 import { Checks, withBrowser, UPLOAD_FIXTURE, CRUMB_NOTEBOOK } from './cdp.mjs';
 
 // The fake embeddings server `make ui` starts alongside the app; /control makes
@@ -218,24 +218,114 @@ const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ui-pr
   checks.check('filter hides non-matching sources', filtered.misses === 0 && /No source matches/.test(filtered.message ?? ''), filtered.message);
   checks.check('filter shows matching sources', filtered.hits === 1, `hits=${filtered.hits}`);
 
-  // ── detach ─────────────────────────────────────────────────────
-  // The remove button is found by title, not position: the inspect button now
-  // sits in the same group, and a positional selector silently clicks that.
+  // ── the last membership is a delete ────────────────────────────
+  // One file, one notebook: letting go of it cannot be a detach, because a file no
+  // notebook lists has nothing left to be kept for. The row says which of the two
+  // the click is, the box says what goes with it, and then the bytes go.
+  const offered = await ui.eval(`
+    const btn = document.querySelector('.source .row-actions button[title*="no other notebook"]');
+    return { tip: btn?.getAttribute('title') ?? null, found: !!btn };
+  `);
+  checks.check(
+    'a file this notebook alone uses is offered as a delete, not a detach',
+    offered.found,
+    () => `title=${offered.tip}`
+  );
+
   await ui.eval(`
-    document
-      .querySelector('.source .row-actions button[title^="Remove"]')
-      .click();
+    document.querySelector('.source .row-actions button[title*="no other notebook"]').click();
     return true;
   `);
-  const removed = await ui.until(`
+  await ui.settle(250);
+  const ask = await ui.eval(`
+    const d = document.querySelector('dialog.delete-source');
+    return {
+      open: d?.open === true,
+      names: /two-page/.test(d?.querySelector('h2')?.textContent ?? ''),
+      saysLast: /No other notebook uses it/.test(d?.textContent ?? ''),
+      saysDerived: /page image/.test(d?.textContent ?? ''),
+      focused: document.activeElement?.textContent.trim(),
+      danger: [...(d?.querySelectorAll('button') ?? [])].some(
+        (b) => b.textContent.trim() === 'Delete file' && b.className.includes('btn-danger')
+      )
+    };
+  `);
+  checks.check('delete asks before it takes a file', ask.open && ask.names, JSON.stringify(ask));
+  checks.check(
+    'the box says which file goes and what was derived from it',
+    ask.saysLast && ask.saysDerived,
+    JSON.stringify(ask)
+  );
+  checks.check(
+    'the destructive button is red and Cancel has the focus',
+    ask.danger && ask.focused === 'Cancel',
+    JSON.stringify(ask)
+  );
+
+  // Esc is a no-op: closing a <dialog> on Escape is a default action of a *trusted*
+  // key press, so it has to go through the Input domain, not a synthetic event.
+  for (const type of ['keyDown', 'keyUp']) {
+    await ui.send('Input.dispatchKeyEvent', {
+      type,
+      key: 'Escape',
+      code: 'Escape',
+      windowsVirtualKeyCode: 27,
+      nativeVirtualKeyCode: 27
+    });
+  }
+  await ui.settle(250);
+  checks.check(
+    'Escape closes it and the file is still there',
+    (await ui.eval(`
+      return document.querySelector('dialog.delete-source')?.open !== true &&
+        document.querySelectorAll('.source').length === 1;
+    `)) === true
+  );
+
+  // The app's log is the only place that says the *files* went: the DOM can report
+  // a row missing while the bytes sit there forever, which is the failure this
+  // feature had for its whole first life.
+  let logFrom = 0;
+  const LOG = '/tmp/libris-ui.log';
+  try {
+    logFrom = statSync(LOG).size;
+  } catch {
+    logFrom = -1;
+  }
+
+  await ui.eval(`
+    document.querySelector('.source .row-actions button[title*="no other notebook"]').click();
+    return true;
+  `);
+  await ui.settle(250);
+  await ui.click('Delete file');
+
+  const gone = await ui.until(`
     return document.querySelectorAll('.source').length === 0 && {
       empty: document.querySelector('.sidepanel .empty h2')?.textContent,
       count: document.querySelector('.sidebar .row.active .count')?.textContent ?? null
     };
   `);
-  checks.check('remove detaches the source', !!removed, () => 'rows never reached 0');
-  checks.check('empty state returns', /Nothing in this notebook yet/.test(removed?.empty ?? ''), removed?.empty);
-  checks.check('sidebar count cleared', removed?.count === null, `count=${removed?.count}`);
+  checks.check('confirming deletes the source', !!gone, () => 'rows never reached 0');
+  const lab = (await (await fetch(`${app}api/notebooks`)).json()).find((n) => n.name === 'Upload Lab');
+  checks.check(
+    'the server agrees the notebook has nothing',
+    lab?.source_count === 0,
+    () => `source_count=${lab?.source_count}`
+  );
+  checks.check('empty state returns', /Nothing in this notebook yet/.test(gone?.empty ?? ''), gone?.empty);
+  checks.check('sidebar count cleared', gone?.count === null, `count=${gone?.count}`);
+
+  if (logFrom >= 0) {
+    const tail = readFileSync(LOG, 'utf8').slice(logFrom);
+    checks.check(
+      'the collector ran, so the file itself went too',
+      /collected a source no notebook uses/.test(tail),
+      () => tail.split('\n').slice(-3).join(' | ')
+    );
+  } else {
+    console.log(`  skip ${LOG} is not here, so the file deletion itself is not asserted`);
+  }
 
   // ── the embedding server goes away, and comes back ─────────────
   // `ready` means searchable, so a source uploaded while the embedding server is

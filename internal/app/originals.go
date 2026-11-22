@@ -18,9 +18,10 @@ import (
 //
 // The name is the hash for two reasons: two uploads of the same bytes are the
 // same file, and a citation can always open a path that cannot have moved out
-// from under it. Nothing here overwrites or deletes — keeping the original is a
-// stated rule, and garbage collection that might delete a cited file is a
-// separate decision.
+// from under it. Nothing here overwrites a file. Saving is not the half of it
+// that decides a file's fate: an original is removed only once no notebook lists
+// its source any more, by app.Service.collect, which is where the ordering
+// between the database and the filesystem is argued (ADR 0013).
 type Originals struct {
 	Dir string
 }

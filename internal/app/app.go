@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -23,13 +25,15 @@ import (
 type Store interface {
 	CreateNotebook(context.Context, string) (domain.Notebook, error)
 	RenameNotebook(context.Context, string, string) error
-	DeleteNotebook(context.Context, string) error
+	// Deleting either one answers with the sources it left without a notebook,
+	// so the caller can delete their files after the database agreed (ADR 0013).
+	DeleteNotebook(context.Context, string) ([]domain.Orphan, error)
 	GetNotebook(context.Context, string) (domain.Notebook, error)
 	ListNotebooks(context.Context) ([]domain.Notebook, error)
 
 	AddSource(context.Context, string, domain.Source) (domain.Source, bool, error)
 	AttachSource(context.Context, string, string) error
-	DetachSource(context.Context, string, string) error
+	DetachSource(context.Context, string, string) ([]domain.Orphan, error)
 	GetSource(context.Context, string) (domain.Source, error)
 	ListSources(context.Context, string) ([]domain.Source, error)
 	SetSourceStatus(context.Context, string, domain.SourceStatus, string, []string) error
@@ -259,7 +263,12 @@ func (s *Service) RenameNotebook(ctx context.Context, id, name string) error {
 }
 
 func (s *Service) DeleteNotebook(ctx context.Context, id string) error {
-	return s.store.DeleteNotebook(ctx, id)
+	orphans, err := s.store.DeleteNotebook(ctx, id)
+	if err != nil {
+		return err
+	}
+	s.collect(orphans)
+	return nil
 }
 
 func (s *Service) GetNotebook(ctx context.Context, id string) (domain.Notebook, error) {
@@ -392,8 +401,101 @@ func (s *Service) AttachSource(ctx context.Context, notebookID, sourceID string)
 
 // DetachSource removes a source from a notebook, keeping the file and every
 // derived artefact: another notebook may be citing them.
+// DetachSource removes a source from one notebook, and deletes it outright when
+// that was the only notebook using it. The two are one action because a file no
+// notebook lists is not waiting for anything; the shared-by-hash design means the
+// usual case is the quiet one, where the source and its rasters stay for the
+// notebooks that still cite them.
 func (s *Service) DetachSource(ctx context.Context, notebookID, sourceID string) error {
-	return s.store.DetachSource(ctx, notebookID, sourceID)
+	orphans, err := s.store.DetachSource(ctx, notebookID, sourceID)
+	if err != nil {
+		return err
+	}
+	s.collect(orphans)
+	return nil
+}
+
+// collect unlinks the files the orphans owned. It runs after the transaction
+// that dropped their rows committed, and that order is the whole design: a file
+// deleted while its citations still resolve takes an answer's evidence with it,
+// whereas a file left behind by a crash between commit and unlink is only disk —
+// the failure mode this app has had all along.
+//
+// A failed unlink is logged and skipped. Nothing here can be retried by the user,
+// so nothing here may fail an action that already worked.
+func (s *Service) collect(orphans []domain.Orphan) {
+	for _, o := range orphans {
+		// The subtree before the listed files: a raster written by an ingest that
+		// died before its rows exist appears in no directory listing the database
+		// can give, and the directory named after the source hash is the only
+		// thing that can find it.
+		s.removeTree(s.assetsDir, o.ID)
+		for _, p := range o.Assets {
+			s.removeFile(s.assetsDir, p)
+		}
+		s.removeFile(s.originals.Dir, o.Original)
+		s.log.Info("collected a source no notebook uses",
+			"source", o.ID, "name", o.Name, "files", len(o.Assets)+1)
+	}
+}
+
+// removeFile deletes one path, and only if it lies inside root. The path came
+// from the database, which is the one place a stale row, an older build's layout
+// or a hand-edited file can point somewhere the user never uploaded. This is the
+// only code in libris that deletes a person's bytes, so it refuses rather than
+// trusts — the same rule DirSink applies to names.
+func (s *Service) removeFile(root, path string) {
+	if !under(root, path) {
+		if path != "" {
+			s.log.Warn("refusing to delete a file outside the data directory", "path", path)
+		}
+		return
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		s.log.Warn("could not delete a file", "path", path, "err", err)
+	}
+}
+
+// removeTree deletes a directory the app owns outright, named by source id. The
+// id is content-addressed, so it is checked as one: a row whose id is not the
+// 64 hex characters a hash is gets the refusal, not a recursive delete.
+func (s *Service) removeTree(root, id string) {
+	if !hexID(id) {
+		if id != "" {
+			s.log.Warn("refusing to delete a directory named by a non-hash id", "id", id)
+		}
+		return
+	}
+	dir := filepath.Join(root, id)
+	if !under(root, dir) {
+		return
+	}
+	if err := os.RemoveAll(dir); err != nil && !errors.Is(err, os.ErrNotExist) {
+		s.log.Warn("could not delete a source's directory", "dir", dir, "err", err)
+	}
+}
+
+// under reports whether an absolute path lies inside root.
+func under(root, path string) bool {
+	if root == "" || path == "" || !filepath.IsAbs(path) {
+		return false
+	}
+	rel, err := filepath.Rel(root, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// hexID is the shape of a sha256 hex digest, which is the only thing allowed to
+// name a directory under the asset root.
+func hexID(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for _, r := range s {
+		if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Service) GetSource(ctx context.Context, id string) (domain.Source, error) {
@@ -476,6 +578,16 @@ func (s *Service) ingest(ctx context.Context, sourceID string) {
 	case err != nil:
 		s.log.Warn("ingest failed", "source", sourceID, "err", err)
 		s.setStatus(ctx, sourceID, domain.StatusFailed, err.Error(), nil)
+		return
+	}
+
+	// The notebook may have been deleted while this job ran, and with it the last
+	// notebook using this file — in which case its rows are already gone and its
+	// files were just re-made by the rasters below. Nothing may be written for a
+	// source that no longer exists, so the job cleans up after itself instead.
+	if _, err := s.store.GetSource(ctx, sourceID); errors.Is(err, domain.ErrNotFound) {
+		s.removeTree(s.assetsDir, sourceID)
+		s.log.Info("ingest discarded: the source was deleted while indexing", "source", sourceID)
 		return
 	}
 

@@ -420,7 +420,10 @@ func TestUploadWithoutMultipartIsRejected(t *testing.T) {
 
 func TestSourceReadEndpoints(t *testing.T) {
 	api := &fakeAPI{
-		sources: []domain.Source{{ID: "sha1", Name: "paper.pdf", Status: domain.StatusReady, SegmentCount: 3}},
+		sources: []domain.Source{{
+			ID: "sha1", Name: "paper.pdf", Status: domain.StatusReady,
+			SegmentCount: 3, NotebooksUsing: 2,
+		}},
 		segments: []domain.Segment{
 			{ID: "sha1:0000", DocID: "sha1", Kind: domain.KindText, Ordinal: 0, Text: "a passage"},
 		},
@@ -434,6 +437,9 @@ func TestSourceReadEndpoints(t *testing.T) {
 	}{
 		{"GET", "/api/sources/sha1", http.StatusOK, `"name":"paper.pdf"`},
 		{"GET", "/api/notebooks/nb1/sources", http.StatusOK, `"segment_count":3`},
+		// The side panel words its trash can from this number — the row that says 1 is
+		// the row whose removal deletes a file — so it has to be on the wire.
+		{"GET", "/api/notebooks/nb1/sources", http.StatusOK, `"notebooks_using":2`},
 		{"GET", "/api/sources/sha1/segments", http.StatusOK, "a passage"},
 		{"GET", "/api/sources/nope", http.StatusNotFound, "nothing with that id"},
 	} {

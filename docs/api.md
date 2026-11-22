@@ -12,9 +12,13 @@ GET    /api/settings                      23 values, effective configuration
 PUT    /api/settings                      partial document; 400 on unknown key / bad range
 POST   /api/notebooks                     {"name":…} → 201
 GET    /api/notebooks                     ·  GET /api/notebooks/{id}
-PATCH  /api/notebooks/{id}                rename ·  DELETE → 204
+PATCH  /api/notebooks/{id}                rename ·  DELETE → 204 (its chats too; a source
+                                          with no notebook left is collected, ADR 0013)
 POST   /api/notebooks/{id}/sources        multipart field "file" → 202 while processing
-GET    /api/notebooks/{id}/sources        ·  DELETE …/sources/{sourceID} → 204
+GET    /api/notebooks/{id}/sources        carries notebooks_using, the count a row's trash
+                                          can is worded from ·  DELETE …/sources/{sourceID}
+                                          → 204, and deletes the source if it was the last
+                                          notebook using it (ADR 0013)
 GET    /api/sources/{id}                  status, for the UI to poll
 POST   /api/sources/{id}/reingest         rebuild from the original, any state → 202
 GET    /api/sources/{id}/segments         chunks + provenance + assets
