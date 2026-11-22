@@ -441,43 +441,56 @@ const code = await withBrowser(
     );
     checks.check('the panel opens back at the width it closed at', reopenedPanel === 420, `width=${reopenedPanel}`);
 
-    // ── the breadcrumb names the chat you are reading ────────────
-    // Nothing has been asked in this notebook, so there is no chat and no third
-    // level. The server titles a chat from its first question, so there is nothing
-    // to name until one is stored — hence a chat made over the API here rather than
-    // by asking, because asking is ui-ask's job.
+    // ── the notebook list is a tree: the notebook, then its conversations ──
+    // A conversation lives where the breadcrumb says it does, so the two are the same
+    // fact twice rather than a copy that can drift. Chats are made over the API here
+    // because asking is ui-ask's job; the server titles a chat from its first question,
+    // which is the rule the titles below are standing in for.
+    const chatRows = () =>
+      ui.eval(`return [...document.querySelectorAll('.sidebar .chat-open')].map((b) => b.textContent.trim());`);
+    const openRow = () =>
+      ui.eval(`return document.querySelector('.sidebar .chat-row.active .chat-open')?.textContent.trim() ?? '';`);
+    const crumbTail = () =>
+      ui.eval(`return [...document.querySelectorAll('.crumbs .crumb')].map((x) => x.textContent.trim());`);
+
     const notebook = (await fetch(`${app}api/notebooks`).then((r) => r.json())).find((n) => n.name === 'Renamed Notes');
-    const madeChat = await fetch(`${app}api/notebooks/${notebook.id}/chats`, {
+
+    checks.check(
+      'an unanswered notebook lists no conversations',
+      (await chatRows()).length === 0 &&
+        (await ui.eval(`return !!document.querySelector('.sidebar .chat-new')`)) === false,
+      JSON.stringify(await chatRows())
+    );
+
+    await fetch(`${app}api/notebooks/${notebook.id}/chats`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ title: 'A named chat' })
-    }).then((r) => r.json());
-
+    });
     await ui.reload(app);
-    await ui.settle();
-    await segment('Activity');
-    await segment('Sources');
-    await ui.settle(200);
+    await ui.settle(300);
+
     checks.check(
-      'the open chat is named where it is switched',
-      ['A named chat'].includes(
-        await ui.eval(`
-          const picker = document.querySelector('.chat select.picker');
-          return picker
-            ? picker.options[picker.selectedIndex]?.textContent?.trim()
-            : document.querySelector('.chat .thread .title')?.textContent?.trim();
-        `)
-      ),
-      JSON.stringify(madeChat)
+      'a conversation appears under its notebook, and opens as the newest',
+      (await chatRows()).join(' | ') === 'A named chat' && (await openRow()) === 'A named chat',
+      `${(await chatRows()).join(' | ')} · open=${await openRow()}`
     );
-    const chatCrumb = await ui.until(`
-      const c = [...document.querySelectorAll('.crumbs .crumb')].map((x) => x.textContent.trim());
-      return c.at(-1) === 'A named chat' ? c : null;
+    const nesting = await ui.eval(`
+      const lists = [...document.querySelectorAll('.sidebar .chats')];
+      return {
+        lists: lists.length,
+        under: lists.length === 1 ? lists[0].closest('li')?.querySelector('.row.active .item')?.textContent.trim() : ''
+      };
     `);
     checks.check(
-      'the breadcrumb ends with the chat you are reading',
-      chatCrumb?.join(' / ') === 'libris / Renamed Notes / A named chat',
-      JSON.stringify(chatCrumb)
+      'only the notebook you are in expands',
+      nesting.lists === 1 && (nesting.under ?? '').startsWith('Renamed Notes'),
+      JSON.stringify(nesting)
+    );
+    checks.check(
+      'and the breadcrumb reads the same tree',
+      (await crumbTail()).join(' / ') === 'libris / Renamed Notes / A named chat',
+      (await crumbTail()).join(' / ')
     );
     const shape = await ui.eval(`
       const c = [...document.querySelectorAll('.crumbs .crumb')];
@@ -492,49 +505,123 @@ const code = await withBrowser(
       JSON.stringify(shape)
     );
 
-    // The crumb follows the open chat, which is the reason it can be trusted. Which
-    // chat a reload opens is the picker's business and not asserted here — both
-    // directions of the switch are.
     await fetch(`${app}api/notebooks/${notebook.id}/chats`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ title: 'Second chat' })
     });
     await ui.reload(app);
-    await ui.settle(400);
-
-    const crumbTail = () =>
-      ui.eval(`return [...document.querySelectorAll('.crumbs .crumb')].map((x) => x.textContent.trim());`);
-    const pickChat = (title) =>
-      ui.until(`
-        const s = document.querySelector('.chat select.picker');
-        if (!s) return null;
-        const opt = [...s.options].find((o) => o.textContent.trim() === ${JSON.stringify(title)});
-        if (!opt) return null;
-        s.value = opt.value;
-        s.dispatchEvent(new Event('change', { bubbles: true }));
-        return true;
-      `);
-    const crumbIs = (title) =>
-      ui.until(`
-        const c = [...document.querySelectorAll('.crumbs .crumb')].map((x) => x.textContent.trim());
-        return c.at(-1) === ${JSON.stringify(title)} ? c : null;
-      `);
-
+    await ui.settle(300);
     checks.check(
-      'switching to another chat takes the crumb with it',
-      (await pickChat('Second chat')) && (await crumbIs('Second chat'))?.at(-1) === 'Second chat',
-      JSON.stringify(await crumbTail())
+      'newest first, and the newest is the one that opens',
+      (await chatRows()).join(' | ') === 'Second chat | A named chat' && (await openRow()) === 'Second chat',
+      `${(await chatRows()).join(' | ')} · open=${await openRow()}`
+    );
+
+    await ui.until(`
+      const row = [...document.querySelectorAll('.sidebar .chat-open')]
+        .find((b) => b.textContent.trim() === 'A named chat');
+      if (!row) return null;
+      row.click();
+      return true;
+    `);
+    checks.check(
+      'clicking a row opens it, and the breadcrumb follows',
+      (await openRow()) === 'A named chat' && (await crumbTail()).at(-1) === 'A named chat',
+      `open=${await openRow()} · ${(await crumbTail()).join(' / ')}`
+    );
+
+    // A first question is a poor label by the time it is one of five. Renaming is
+    // inline, like a notebook, and blur commits it — a click elsewhere means "that is
+    // what it is called".
+    await ui.until(`
+      const btn = [...document.querySelectorAll('.chat-rename-open')]
+        .find((b) => b.getAttribute('aria-label') === 'Rename A named chat');
+      if (!btn) return null;
+      btn.click();
+      return true;
+    `);
+    await ui.settle(150);
+    // Committed with a key, not a blur: the input is a rendered control and Enter is
+    // its documented commit, and a synthetic blur only fires if something had actually
+    // focused it — which a click driven from the debugger is not obliged to do.
+    const edited = await ui.eval(`
+      const el = document.querySelector('.sidebar input.chat-rename');
+      if (!el) return null;
+      el.value = 'Why the tail is long';
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+      return true;
+    `);
+    checks.check(
+      'a chat renames in place, and the header follows',
+      edited === true &&
+        (await ui.until(`return [...document.querySelectorAll('.sidebar .chat-open')]
+          .map((b) => b.textContent.trim()).includes('Why the tail is long') ? true : null`)) === true &&
+        (await openRow()) === 'Why the tail is long' &&
+        (await crumbTail()).at(-1) === 'Why the tail is long',
+      `${(await chatRows()).join(' | ')} · ${(await crumbTail()).join(' / ')}`
+    );
+
+    await ui.click('Hide notebooks');
+    await ui.settle(200);
+    checks.check(
+      'the rail is notebooks only, and the header still says which chat is open',
+      (await ui.eval(`return document.querySelectorAll('.sidebar .chat-open, .sidebar .chats').length`)) === 0 &&
+        (await ui.eval(`return document.querySelectorAll('.sidebar .rail-item').length`)) > 0 &&
+        (await crumbTail()).at(-1) === 'Why the tail is long',
+      `${await ui.eval(`return document.querySelectorAll('.sidebar .rail-item').length`)} rail items · ${(await crumbTail()).join(' / ')}`
+    );
+    await ui.click('Show notebooks');
+    await ui.settle(200);
+
+    await ui.until(`
+      const btn = [...document.querySelectorAll('.chat-delete-open')]
+        .find((b) => b.getAttribute('aria-label') === 'Delete Why the tail is long');
+      if (!btn) return null;
+      btn.click();
+      return true;
+    `);
+    const confirmChat = await ui.eval(`
+      const d = document.querySelector('dialog.delete-chat');
+      return {
+        open: d?.open === true,
+        names: /Why the tail is long/.test(d?.querySelector('h2')?.textContent ?? ''),
+        keeps: /sources it cites are untouched/.test(d?.textContent ?? ''),
+        focused: document.activeElement?.textContent.trim(),
+        danger: [...(d?.querySelectorAll('button') ?? [])]
+          .some((b) => b.textContent.trim() === 'Delete chat' && b.className.includes('btn-danger'))
+      };
+    `);
+    checks.check(
+      'deleting a conversation asks first, and names it',
+      confirmChat.open && confirmChat.names,
+      JSON.stringify(confirmChat)
     );
     checks.check(
-      'and switching back moves it back',
-      (await pickChat('A named chat')) && (await crumbIs('A named chat'))?.at(-1) === 'A named chat',
-      JSON.stringify(await crumbTail())
+      'the box says the sources survive',
+      confirmChat.keeps,
+      JSON.stringify(confirmChat)
+    );
+    checks.check(
+      'the destructive button is red and Cancel has the focus',
+      confirmChat.danger && confirmChat.focused === 'Cancel',
+      JSON.stringify(confirmChat)
+    );
+
+    await ui.click('Delete chat');
+    checks.check(
+      'confirming drops the row, and the next conversation opens',
+      (await ui.until(`return [...document.querySelectorAll('.sidebar .chat-open')]
+        .map((b) => b.textContent.trim()).join(' | ') === 'Second chat' ? true : null`)) === true &&
+        (await openRow()) === 'Second chat' &&
+        (await crumbTail()).at(-1) === 'Second chat',
+      `${(await chatRows()).join(' | ')} · ${(await crumbTail()).join(' / ')}`
     );
     checks.check(
       'the panel still says nothing up there',
-      (await crumbs()).length === 3,
-      (await crumbs()).join(' / ')
+      (await crumbTail()).length === 3,
+      (await crumbTail()).join(' / ')
     );
 
     await ui.eval(`
@@ -569,6 +656,17 @@ const code = await withBrowser(
     await ui.eval(`document.querySelector('dialog.new-notebook')?.close(); return true`);
     await ui.eval(`[...document.querySelectorAll('.sidebar .list .item')][0]?.click(); return true`);
     await ui.settle(500);
+    // A notebook nobody has asked in opens on the landing, and the landing has no
+    // composer to measure — so get a conversation on screen before measuring it.
+    await ui.until(`
+      const open = document.querySelector('.sidebar .chat-open');
+      if (open) { open.click(); return true; }
+      const draft = [...document.querySelectorAll('button')]
+        .find((b) => b.textContent.trim() === 'New conversation');
+      if (draft) { draft.click(); return true; }
+      return null;
+    `);
+    await ui.settle(300);
     await ui.setViewport(1800, 900);
     await ui.settle(400);
     await ui.eval(`
@@ -576,13 +674,16 @@ const code = await withBrowser(
       return true;
     `);
     await ui.settle(400);
+    // Measured against the composer column, not a header row: the header is gone, and
+    // the rule the CSS makes is that the column holding the thread and the column
+    // holding the box are the same width, and neither is the pane.
     const measure = await ui.eval(`
       const w = (s) => Math.round(document.querySelector(s).getBoundingClientRect().width);
-      return { pane: w('.chat'), bar: w('.chat .bar'), composer: w('.composer .entry') };
+      return { pane: w('.chat'), column: w('.chat .composer'), entry: w('.composer .entry') };
     `);
     checks.check(
-      "the composer is the thread's width, not the pane's",
-      measure.bar > 0 && measure.bar === measure.composer && measure.pane - measure.bar >= 100,
+      "the composer is the thread's measure, not the pane's",
+      measure.column === measure.entry && measure.pane - measure.column >= 100,
       JSON.stringify(measure)
     );
 

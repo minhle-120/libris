@@ -21,7 +21,8 @@
     onpanel,
     onopen,
     oninspect,
-    onchat,
+    chatId,
+    onopenchat,
     onchange = undefined
   }: {
     notebook: Notebook;
@@ -32,8 +33,11 @@
     onpanel: (panel: Panel) => void;
     onopen: (open: boolean) => void;
     oninspect: (source: Source | null) => void;
-    /** The open chat's title, up to the breadcrumb. Empty when there is no chat. */
-    onchat: (title: string) => void;
+    /** The conversation to show. Owned above, because the notebook list is where it
+     * is chosen; empty is a draft with no chat behind it yet. */
+    chatId: string;
+    /** The turn started a conversation — here is its id, so the list can show it. */
+    onopenchat: (chatId: string) => void;
     onchange?: () => void;
   } = $props();
 
@@ -164,7 +168,7 @@
       </div>
     {/if}
 
-    <ChatPanel notebook={notebook} {sources} oncite={openCitation} {onchat} />
+    <ChatPanel notebook={notebook} {sources} {chatId} oncite={openCitation} onopen={onopenchat} />
   </section>
 
   <SidePanel

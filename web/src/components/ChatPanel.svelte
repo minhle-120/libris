@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { ask, createChat, deleteChat, listChats, listMessages } from '../lib/api';
+  import { ask, listMessages } from '../lib/api';
   import { chunkPieces, trimPartialLabel } from '../lib/chunks';
   import { citationLocator, errorMessage } from '../lib/format';
-  import type { Chat, Citation, Message, Notebook, Source } from '../lib/types';
+  import type { Citation, Message, Notebook, Source } from '../lib/types';
   import Badge from '../lib/Badge.svelte';
   import Button from '../lib/Button.svelte';
   import Icon from '../lib/Icon.svelte';
@@ -11,21 +11,33 @@
   let {
     notebook,
     sources,
+    chatId,
     oncite = undefined,
-    onchat = undefined
+    onopen = undefined
   }: {
     notebook: Notebook;
     sources: Source[];
+    /**
+     * The conversation on screen, owned by the sidebar that lists them. Empty means a
+     * draft: a thread with nothing in it yet, which is not a chat until a question is
+     * asked, so it has no row and no name.
+     */
+    chatId: string;
     /** Opens the source at the cited page, character range or timestamp. */
     oncite?: (citation: Citation) => void;
-    /** The open chat's title, for the breadcrumb. Empty when there is no chat. */
-    onchat?: (title: string) => void;
+    /** The turn started a conversation. Its id, from the row the server stored. */
+    onopen?: (chatId: string) => void;
   } = $props();
 
-  let chats = $state<Chat[]>([]);
-  let chatId = $state('');
   let messages = $state<Message[]>([]);
+  // True until the effect below has looked at the selection. It does so in the same
+  // task as the first render, so a draft never shows a loader for a visible frame;
+  // initialising this from `chatId` instead would only capture its starting value.
   let loading = $state(true);
+  // A chat this component just started. The turn owns reloading its messages, so the
+  // effect below stands down once for the id it is about to be handed back — otherwise
+  // a first question fetches its own thread twice.
+  let reported = '';
   let error = $state('');
 
   // The turn in flight. `streaming` is the answer arriving; `status` is what the
@@ -43,13 +55,6 @@
   let panel: HTMLDivElement | undefined = $state();
   let input: HTMLTextAreaElement | undefined = $state();
 
-  const chat = $derived(chats.find((c) => c.id === chatId) ?? null);
-
-  // The breadcrumb names the chat you are reading, so the title has to leave this
-  // component — and it is the server's title, not a local guess, because a chat is
-  // only named once its first question is stored.
-  $effect(() => onchat?.(chat?.title ?? ''));
-
   const searchable = $derived(sources.filter((s) => s.status === 'ready').length);
   const canSend = $derived(draft.trim().length > 0 && searchable > 0 && !running);
 
@@ -63,13 +68,29 @@
     el.style.height = `${Math.min(el.scrollHeight, 192)}px`;
   });
 
-  // Opening a notebook loads its threads. The effect re-runs only when the notebook
-  // actually changes, which is also the case that used to leave the previous
-  // notebook's messages on screen.
+  // The thread follows whichever conversation the sidebar selected. Switching clears
+  // the half-finished turn out of the way first, because a streaming answer belongs to
+  // the chat it was asked in and not to the one now on screen.
   $effect(() => {
-    const id = notebook.id;
-    if (!id) return;
-    void loadChats(id);
+    const id = chatId;
+    // `reported` is only ever a real id, so an empty selection — a draft, or a notebook
+    // nobody has asked in — never takes this branch. It would, and the loader would
+    // never come off the screen.
+    if (id && id === reported) {
+      reported = '';
+      return;
+    }
+    messages = [];
+    streaming = '';
+    status = '';
+    reasoning = '';
+    live = [];
+    if (!id) {
+      loading = false;
+      return;
+    }
+    loading = true;
+    void loadMessages(id);
   });
 
   // Follow the answer as it arrives, unless the reader has scrolled up to re-read
@@ -84,54 +105,17 @@
     if (el.scrollHeight - el.scrollTop - el.clientHeight < 160) el.scrollTop = el.scrollHeight;
   });
 
-  async function loadChats(notebookId: string) {
+  async function loadMessages(id: string) {
     error = '';
     try {
-      chats = await listChats(notebookId);
-      const keep = chats.some((c) => c.id === chatId) ? chatId : (chats.at(-1)?.id ?? '');
-      await selectChat(keep);
+      const list = await listMessages(notebook.id, id);
+      // A switch during the fetch wins over this response; otherwise the reader ends
+      // up looking at one chat under another chat's name.
+      if (chatId === id) messages = list;
     } catch (e) {
       error = errorMessage(e);
     } finally {
       loading = false;
-    }
-  }
-
-  async function selectChat(id: string) {
-    chatId = id;
-    messages = [];
-    streaming = '';
-    status = '';
-    reasoning = '';
-    live = [];
-    if (!id) return;
-    try {
-      messages = await listMessages(notebook.id, id);
-    } catch (e) {
-      error = errorMessage(e);
-    }
-  }
-
-  async function newChat() {
-    error = '';
-    try {
-      const chat = await createChat(notebook.id, 'New chat');
-      chats = [...chats, chat];
-      await selectChat(chat.id);
-      input?.focus();
-    } catch (e) {
-      error = errorMessage(e);
-    }
-  }
-
-  async function removeChat(id: string) {
-    error = '';
-    try {
-      await deleteChat(notebook.id, id);
-      chats = chats.filter((c) => c.id !== id);
-      if (chatId === id) await selectChat(chats.at(-1)?.id ?? '');
-    } catch (e) {
-      error = errorMessage(e);
     }
   }
 
@@ -140,8 +124,8 @@
     if (!question || running || searchable === 0) return;
 
     draft = '';
-    // A thread with no chat yet is named after the first question asked in it, which
-    // is what the sidebar will show and the only label a one-question thread gets.
+    // A thread with no chat yet is named after the first question asked in it, which is
+    // what the sidebar shows and the only label a one-question thread gets.
     start(question).catch(() => {
       /* reported through `error`; nothing else to do from a text box */
     });
@@ -176,13 +160,6 @@
 
     let id = chatId;
     try {
-      if (!id) {
-        const created = await createChat(notebook.id, question.slice(0, 120));
-        chats = [...chats, created];
-        id = created.id;
-        chatId = id;
-      }
-
       controller = new AbortController();
       const events = {
         onStatus: (text: string) => {
@@ -196,6 +173,14 @@
           if (think) reasoning = reasoning + think;
         },
         onDone: (message: Message) => {
+          // A draft became a chat. The server made it, named it after the question, and
+          // said so in the row it stored — the sidebar cannot show a row it has not
+          // been told about, and the breadcrumb cannot name one it cannot see.
+          if (message.chat_id && message.chat_id !== chatId) {
+            id = message.chat_id;
+            reported = message.chat_id;
+            onopen?.(message.chat_id);
+          }
           messages = [...messages, message];
           streaming = '';
           live = [];
@@ -209,18 +194,22 @@
     } finally {
       // Whatever happened, the server has the last word on what the turn was.
       controller = undefined;
-      running = false;
-      streaming = '';
-      status = '';
-      reasoning = '';
+      // The live turn is the only place a stopped answer's text exists until the stored
+      // row comes back, so the turn comes down all at once, after that row arrives.
+      // Blanking it first blinks the answer out for a frame and back, and a reader is
+      // left guessing which of the two the server saved — which is the frame the browser
+      // harness used to catch. The reload is bounded by the client's own timeout.
       if (id) {
         try {
           messages = await listMessages(notebook.id, id);
         } catch {
           /* keep what is on screen rather than blanking it over a failed refresh */
         }
-        void loadChats(notebook.id); // the thread may have just been named
       }
+      streaming = '';
+      status = '';
+      reasoning = '';
+      running = false;
     }
   }
 
@@ -247,35 +236,10 @@
   }
 </script>
 
+<!-- No header. A conversation is chosen in the notebook list, which is the one place
+     that can show several of them at a width worth reading; this column is the thread
+     and the box to ask the next question in. -->
 <section class="chat">
-  <header class="bar">
-    <div class="thread">
-      {#if chats.length > 1}
-        <select
-          class="picker"
-          aria-label="Chat"
-          bind:value={chatId}
-          onchange={(e) => selectChat((e.target as HTMLSelectElement).value)}
-        >
-          {#each chats as c (c.id)}
-            <option value={c.id}>{c.title}</option>
-          {/each}
-        </select>
-      {:else}
-        <span class="title">{chat?.title || 'New chat'}</span>
-      {/if}
-    </div>
-    <div class="actions">
-      {#if chat}
-        <Button size="sm" variant="ghost" title="Delete this chat" onclick={() => removeChat(chat.id)}>
-          <Icon name="trash" size={15} />
-        </Button>
-      {/if}
-      <Button size="sm" variant="ghost" title="Start a new chat" onclick={newChat}>
-        <Icon name="plus" size={15} /> New
-      </Button>
-    </div>
-  </header>
 
   {#if error}
     <div class="banner">
@@ -437,70 +401,12 @@
      field. Centred, not left-anchored: a narrow column against one edge of a wide pane
      reads as a layout that failed to fill, and the same column in the middle reads as a
      line of text, which is what it is. */
-  .bar,
   .banner,
   .messages,
   .composer,
   .empty {
     width: 100%;
     max-width: var(--measure);
-  }
-
-  .bar {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    height: 44px;
-    flex-shrink: 0;
-  }
-
-  .thread {
-    min-width: 0;
-    flex: 1;
-  }
-
-  /* The thread's name is context, not a heading: it used to shout as loudly as the
-     question underneath it. */
-  .title {
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--fg-muted);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    display: block;
-  }
-
-  .picker {
-    max-width: 100%;
-    font: inherit;
-    font-size: 13px;
-    color: var(--fg);
-    background: var(--canvas-inset);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: 4px 6px;
-  }
-
-  .actions {
-    display: flex;
-    gap: 4px;
-    flex-shrink: 0;
-  }
-
-  /* Deleting a thread is not a first-class action, so it waits for the pointer the way
-     the source rows' actions do. `New` stays: it is the one thing to press here. */
-  .actions :global(.btn[title='Delete this chat']) {
-    opacity: 0;
-  }
-  .bar:hover :global(.btn[title='Delete this chat']),
-  .bar:focus-within :global(.btn[title='Delete this chat']) {
-    opacity: 1;
-  }
-  @media (hover: none) {
-    .actions :global(.btn[title='Delete this chat']) {
-      opacity: 1;
-    }
   }
 
   .messages {

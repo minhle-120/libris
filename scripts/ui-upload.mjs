@@ -299,8 +299,12 @@ const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ui-pr
   await ui.settle(250);
   await ui.click('Delete file');
 
+  // Both halves have to arrive: the panel empties from its own refetch, and the
+  // sidebar's badge only when the shell refetches the notebooks. Reading the badge the
+  // moment the list empties reports a stale number as a broken one.
   const gone = await ui.until(`
-    return document.querySelectorAll('.source').length === 0 && {
+    return document.querySelectorAll('.source').length === 0 &&
+      !document.querySelector('.sidebar .row.active .count') && {
       empty: document.querySelector('.sidepanel .empty h2')?.textContent,
       count: document.querySelector('.sidebar .row.active .count')?.textContent ?? null
     };

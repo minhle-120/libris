@@ -193,8 +193,9 @@ in `app` so both transports share one implementation.
 
 **Built:** settings and the generated settings UI; ingest of text, PDFs (text +
 rasters), images and audio slices; embedding; recall, rerank and the registry; the
-research loop and synthesis; turn persistence; the SSE ask stream; the web UI including
-chat and the chunk inspector; `make check`, `make e2e`, `make ui`.
+research loop and synthesis; turn persistence in a chat that a question finds, starts, or
+deletes; the SSE ask stream; the web UI including the conversation tree and the chunk
+inspector; `make check`, `make e2e`, `make ui`.
 
 **Not built:** `/mcp` and `cmd/libris-mcp` (`internal/events` and `internal/mcpserver`
 are empty directories, untracked); ingest progress events; audio transcription — slicing
@@ -328,6 +329,17 @@ PDFDPI int `key:"pdfDPI" group:"ingest" label:"PDF raster DPI" help:"…"
   the chat's title when a chat is open (ADR 0014). A panel view is not a level — Sources
   and Activity are things you open beside the chat, and the segment control says which
   one is showing. Only `libris` is a button, because only it is somewhere else.
+- Conversations live under the notebook that owns them, in the left column, because that
+  is the one place with the width to show several titles side by side and the room to
+  rename one in place. They are a second list (`ul.chats`) inside the notebook's `li`, not
+  rows of the notebook list: a chat is not a notebook and must not borrow its geometry.
+  Only the open notebook expands, so the list is the tree it describes rather than a
+  hundred rows to scroll. `ChatPanel` has no conversation switcher — one control, one
+  home — and no header at all: the title the open chat has is on screen in the breadcrumb,
+  and a second copy of a fact the header already states is how the two start disagreeing.
+  Renaming a chat is the notebook's inline rule (Enter or blur commits, Escape abandons),
+  and deleting one goes through `ConfirmDialog` naming the conversation, because a chat is
+  an answer someone needed.
 - Overlays are native `<dialog>` + `showModal()`, not positioned divs: Esc, focus
   trapping and the top layer come from the browser, and a hand-rolled scrim fails the
   accessibility checks honestly. Backdrop-click-to-close is the `onclick` on the dialog

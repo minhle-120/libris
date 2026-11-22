@@ -1,9 +1,15 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { createNotebook, deleteNotebook, listNotebooks } from './lib/api';
+  import {
+    createNotebook,
+    deleteChat,
+    deleteNotebook,
+    listChats,
+    listNotebooks
+  } from './lib/api';
   import { readOpen, SIDE, writeOpen } from './lib/panel';
   import { errorMessage } from './lib/format';
-  import type { Crumb, Notebook, Panel, Source } from './lib/types';
+  import type { Chat, Crumb, Notebook, Panel, Source } from './lib/types';
   import Header from './components/Header.svelte';
   import Sidebar from './components/Sidebar.svelte';
   import NotebookView from './components/NotebookView.svelte';
@@ -31,8 +37,21 @@
   let confirming = $state(false);
   let deleting = $state(false);
   let panel = $state<Panel>('sources');
-  // Reported up by ChatPanel, because only it knows which chat the server has open.
-  let chatTitle = $state('');
+
+  // The conversations inside the active notebook, and which one is open. They live up
+  // here because the notebook list is what shows and switches them: a chat is a thing
+  // inside a notebook, and the breadcrumb is a reading of that same tree. An empty
+  // chatId is a draft — the middle column is ready for a question that has not started
+  // a conversation yet.
+  let chats = $state<Chat[]>([]);
+  let chatId = $state('');
+
+  // A conversation the user has asked to lose. Separate from the notebook's pending
+  // delete, because both dialogs can be open in principle and one busy flag must not
+  // quiet the other.
+  let pendingChat = $state<Chat | null>(null);
+  let confirmingChat = $state(false);
+  let deletingChat = $state(false);
   let panelOpen = $state(readOpen(SIDE));
   let inspecting = $state<Source | null>(null);
   // The breadcrumb's first level means "no notebook picked", and load() must not
@@ -40,6 +59,11 @@
   let atHome = $state(false);
 
   const active = $derived(notebooks.find((nb) => nb.id === activeId) ?? null);
+
+  // One row, read from two places: the header names the conversation, and the tree
+  // highlights it. Not a copy of the title — the same object, so the two cannot
+  // disagree about which chat is open.
+  const chatTitle = $derived(chats.find((c) => c.id === chatId)?.title ?? '');
 
   // The breadcrumb is where you are, read from the left: libris, the notebook, and
   // the chat you are reading. The panel is not in it — Sources and Activity are a
@@ -57,6 +81,38 @@
   });
 
   onMount(load);
+
+  // Chats belong to a notebook, so they are fetched when the notebook changes — and
+  // cleared when there is none, rather than leaving the previous notebook's threads
+  // listed under this one's name. A notebook's own selection never carries over.
+  let chatsFor = '';
+  $effect(() => {
+    const id = activeId;
+    if (!id) {
+      chats = [];
+      chatId = '';
+      chatsFor = '';
+      return;
+    }
+    if (id === chatsFor) return;
+    chatsFor = id;
+    void loadChats(id);
+  });
+
+  async function loadChats(notebookId: string, keep = '') {
+    try {
+      chats = await listChats(notebookId);
+      if (chats.some((c) => c.id === keep)) {
+        chatId = keep;
+      } else {
+        // Opening a notebook is not the same as starting a chat: the newest thread
+        // opens, and a blank one only appears when it is asked for.
+        chatId = chats[0]?.id ?? '';
+      }
+    } catch (e) {
+      error = errorMessage(e);
+    }
+  }
 
   async function load() {
     try {
@@ -107,6 +163,61 @@
   const fileDrop = (e: DragEvent) => {
     if (Array.from(e.dataTransfer?.types ?? []).includes('Files')) e.preventDefault();
   };
+
+  /**
+   * A conversation begins at its first question, so `+` creates nothing: it puts the
+   * middle column back to an empty thread. The row appears when the server has made
+   * one, which is also what happens if the draft is never used — an abandoned question
+   * leaves no conversation called "New chat" behind.
+   */
+  function newChat() {
+    chatId = '';
+  }
+
+  function openChat(id: string) {
+    chatId = id;
+  }
+
+  /**
+   * The turn just made a conversation. Its id arrives on the done frame; the title is
+   * the server's — the question, on one line — so the row comes from a refetch rather
+   * than being invented here.
+   */
+  function openCreated(id: string) {
+    chatId = id;
+    if (activeId) void loadChats(activeId, id);
+  }
+
+  /** The sidebar committed the rename; the list and the breadcrumb follow it. */
+  function chatRenamed(id: string, title: string) {
+    chats = chats.map((c) => (c.id === id ? { ...c, title } : c));
+  }
+
+  function askDeleteChat(chat: Chat) {
+    error = '';
+    pendingChat = chat;
+    confirmingChat = true;
+  }
+
+  /** A conversation and its messages. Nothing else: the sources it cited stay. */
+  async function removeChat() {
+    const chat = pendingChat;
+    if (!chat || deletingChat || !activeId) return;
+    deletingChat = true;
+    error = '';
+    try {
+      await deleteChat(activeId, chat.id);
+      const rest = chats.filter((c) => c.id !== chat.id);
+      chats = rest;
+      if (chatId === chat.id) chatId = rest[0]?.id ?? '';
+      confirmingChat = false;
+    } catch (e) {
+      error = errorMessage(e);
+      confirmingChat = false;
+    } finally {
+      deletingChat = false;
+    }
+  }
 
   function renamed(id: string, name: string) {
     notebooks = notebooks.map((nb) => (nb.id === id ? { ...nb, name } : nb));
@@ -218,10 +329,16 @@
   <Sidebar
     {notebooks}
     {activeId}
+    {chats}
+    {chatId}
     onselect={openNotebook}
     onnew={openNew}
     onrenamed={renamed}
     ondelete={askDelete}
+    onchat={openChat}
+    onnewchat={newChat}
+    onchatrenamed={chatRenamed}
+    onchatdelete={askDeleteChat}
     onerror={(m) => (error = m)}
   />
   <main>
@@ -244,7 +361,8 @@
           onpanel={setPanel}
           onopen={setPanelOpen}
           oninspect={inspect}
-          onchat={(title) => (chatTitle = title)}
+          {chatId}
+          onopenchat={openCreated}
           onchange={load}
         />
       {/key}
@@ -304,6 +422,19 @@
   busy={deleting}
   onconfirm={removeNotebook}
   onclose={() => (pending = null)}
+/>
+
+<ConfirmDialog
+  label="Delete chat"
+  cls="delete-chat"
+  bind:open={confirmingChat}
+  title={`Delete “${pendingChat?.title ?? ''}”?`}
+  lead="Every question asked in it, and every answer, go with it. This cannot be undone."
+  note="The sources it cites are untouched — the files, their page images and their chunks stay, ready to be asked about again by a later question."
+  confirmLabel="Delete chat"
+  busy={deletingChat}
+  onconfirm={removeChat}
+  onclose={() => (pendingChat = null)}
 />
 
 <style>

@@ -1,7 +1,7 @@
 <script lang="ts">
-  import type { Notebook } from '../lib/types';
+  import type { Chat, Notebook } from '../lib/types';
   import { dragHandle, NOTEBOOKS, readOpen, readW, writeOpen } from '../lib/panel';
-  import { renameNotebook } from '../lib/api';
+  import { renameChat, renameNotebook } from '../lib/api';
   import { errorMessage } from '../lib/format';
   import Icon from '../lib/Icon.svelte';
   import Button from '../lib/Button.svelte';
@@ -9,20 +9,35 @@
   let {
     notebooks,
     activeId,
+    chats,
+    chatId,
     onselect,
     onnew,
     onrenamed,
     ondelete,
+    onchat,
+    onnewchat,
+    onchatrenamed,
+    onchatdelete,
     onerror
   }: {
     notebooks: Notebook[];
     activeId: string | null;
+    /** The active notebook's conversations, newest first. */
+    chats: Chat[];
+    /** Which one is open. Empty is a draft: a thread no question has started yet. */
+    chatId: string;
     onselect: (id: string) => void;
     onnew: () => void;
     /** The rename is already committed on the server; this only updates the list. */
     onrenamed: (id: string, name: string) => void;
     /** Deletion is asked for here and decided by the shell, which owns the selection. */
     ondelete: (notebook: Notebook) => void;
+    onchat: (id: string) => void;
+    /** Back to an empty thread. Nothing is created until something is asked in it. */
+    onnewchat: () => void;
+    onchatrenamed: (id: string, title: string) => void;
+    onchatdelete: (chat: Chat) => void;
     onerror: (message: string) => void;
   } = $props();
 
@@ -32,6 +47,10 @@
   let open = $state(readOpen(NOTEBOOKS));
   let editingId = $state<string | null>(null);
   let draft = $state('');
+  // A conversation renames the same way a notebook does, so it gets its own pair of
+  // these: one row is being edited at a time, in one of the two lists.
+  let editingChatId = $state<string | null>(null);
+  let chatDraft = $state('');
 
   const handle = (node: HTMLElement) =>
     dragHandle(node, { spec: NOTEBOOKS, get: () => width, set: (n) => (width = n) });
@@ -65,6 +84,26 @@
     try {
       await renameNotebook(nb.id, name);
       onrenamed(nb.id, name);
+    } catch (e) {
+      onerror(errorMessage(e));
+    }
+  }
+
+  function beginChatRename(chat: Chat) {
+    editingChatId = chat.id;
+    chatDraft = chat.title;
+  }
+
+  /** The same rule as a notebook's, for the same reason: a conversation with no name
+     is the thing the list exists to prevent, so a blank draft reverts. */
+  async function commitChat(chat: Chat) {
+    if (editingChatId !== chat.id || !activeId) return;
+    editingChatId = null;
+    const title = chatDraft.trim();
+    if (!title || title === chat.title) return;
+    try {
+      await renameChat(activeId, chat.id, title);
+      onchatrenamed(chat.id, title);
     } catch (e) {
       onerror(errorMessage(e));
     }
@@ -171,6 +210,75 @@
                     <Icon name="trash" size={13} />
                   </button>
                 </div>
+              {/if}
+
+              <!-- Only the notebook you are in expands. Its conversations are the
+                   second level of the one tree the breadcrumb reads, and a chevron
+                   per row would be a control for a question nobody asks: which other
+                   notebook's chats do I want to see right now? -->
+              {#if nb.id === activeId && chats.length > 0}
+                <ul class="chats">
+                  <li>
+                    <button type="button" class="chat-new" onclick={onnewchat}>
+                      <Icon name="plus" size={13} />
+                      <span>New chat</span>
+                    </button>
+                  </li>
+                  {#each chats as c (c.id)}
+                    <li>
+                      {#if editingChatId === c.id}
+                        <input
+                          class="rename chat-rename"
+                          type="text"
+                          use:edit
+                          aria-label="Chat title"
+                          maxlength="200"
+                          bind:value={chatDraft}
+                          onkeydown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              commitChat(c);
+                            } else if (e.key === 'Escape') {
+                              e.preventDefault();
+                              editingChatId = null;
+                            }
+                          }}
+                          onblur={() => commitChat(c)}
+                        />
+                      {:else}
+                        <div class="row chat-row" class:active={c.id === chatId}>
+                          <button
+                            type="button"
+                            class="item chat-open"
+                            title={c.title}
+                            aria-label={c.title}
+                            onclick={() => onchat(c.id)}
+                          >
+                            <span class="label clamp">{c.title}</span>
+                          </button>
+                          <button
+                            type="button"
+                            class="row-act chat-rename-open"
+                            title="Rename {c.title}"
+                            aria-label="Rename {c.title}"
+                            onclick={() => beginChatRename(c)}
+                          >
+                            <Icon name="pencil" size={12} />
+                          </button>
+                          <button
+                            type="button"
+                            class="row-act delete-open chat-delete-open"
+                            title="Delete {c.title}"
+                            aria-label="Delete {c.title}"
+                            onclick={() => onchatdelete(c)}
+                          >
+                            <Icon name="trash" size={12} />
+                          </button>
+                        </div>
+                      {/if}
+                    </li>
+                  {/each}
+                </ul>
               {/if}
             </li>
           {/each}
@@ -311,6 +419,66 @@
     color: var(--danger);
     background: color-mix(in srgb, var(--danger) 14%, transparent);
   }
+  /* The second level. A rule rather than an indent says what it is: these belong to
+     the row above, and two spaces of padding would read as a mistake in the list.
+     Quoted rather than coloured when open, because a notebook and one of its chats are
+     active together and two accent bars would have to be told apart at a glance. */
+  .chats {
+    margin: 2px 0 4px 15px;
+    padding: 0 0 0 9px;
+    list-style: none;
+    border-left: 1px solid var(--border-muted);
+  }
+  .chat-open {
+    height: auto;
+    padding: 5px 8px;
+    font-size: 13px;
+    line-height: 1.35;
+    color: var(--fg-muted);
+  }
+  .chat-row:hover .chat-open,
+  .chat-row.active .chat-open {
+    color: var(--fg);
+  }
+  .chat-row.active .chat-open {
+    font-weight: 600;
+  }
+  /* Titles are the first question, up to seventy characters. Two lines and an ellipsis
+     keep them tellable apart, and a whole row of them stays readable as a list instead
+     of a column of clipped fragments. */
+  .clamp {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .chat-new {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    width: 100%;
+    padding: 5px 8px;
+    font: inherit;
+    font-size: 12.5px;
+    color: var(--fg-muted);
+    text-align: left;
+    background: none;
+    border: none;
+    border-radius: var(--radius);
+    cursor: pointer;
+  }
+  .chat-new:hover,
+  .chat-new:focus-visible {
+    color: var(--accent);
+    background: var(--hover);
+  }
+  .chat-rename {
+    font-size: 13px;
+  }
+
   .rename {
     flex: 1;
     min-width: 0;

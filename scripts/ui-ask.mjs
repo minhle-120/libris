@@ -153,6 +153,20 @@ const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ask-p
   checks.check('the ask tab opens a composer', !!panel?.placeholder, JSON.stringify(panel));
   checks.check('Ask is disabled with nothing typed', panel?.askDisabled === true, () => `disabled=${panel?.askDisabled}`);
 
+  // A conversation begins at its first question, so an unanswered notebook has none —
+  // and no "New chat" row waiting to be abandoned into the list.
+  const beforeFirst = await ui.eval(`
+    return {
+      rows: [...document.querySelectorAll('.sidebar .chat-open')].map((b) => b.textContent.trim()),
+      newChat: !!document.querySelector('.sidebar .chat-new')
+    };
+  `);
+  checks.check(
+    'a notebook nobody has asked in lists no conversations',
+    beforeFirst.rows.length === 0 && beforeFirst.newChat === false,
+    () => JSON.stringify(beforeFirst)
+  );
+
   await send(ui, 'What does the paper measure?');
   await ui.settle(60); // a $state write lands on a microtask; the button is re-rendered after it
   const enabled = await ui.eval(`return document.querySelector('.composer button[title="Ask"]')?.disabled`);
@@ -218,6 +232,29 @@ const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ask-p
   );
   checks.check('the answer call streamed', wire.lastStream === true, () => `stream=${wire.lastStream}`);
 
+  // The row appeared because the question did, and it is the server's title — the
+  // question, one line — not a string the browser made up on the way past.
+  const thread = await ui.until(`
+    const rows = [...document.querySelectorAll('.sidebar .chat-open')];
+    const row = rows.find((b) => b.textContent.includes('What does the paper measure'));
+    return row && {
+      count: rows.length,
+      title: row.textContent.trim(),
+      active: row.closest('.chat-row')?.classList.contains('active') === true
+    };
+  `);
+  checks.check(
+    'the question started the conversation, and the list shows it',
+    thread?.count === 1 && thread?.title === 'What does the paper measure?' && thread?.active === true,
+    () => JSON.stringify(thread)
+  );
+  const crumbsAfter = await ui.crumbs();
+  checks.check(
+    'and the breadcrumb ends with it',
+    crumbsAfter.at(-1) === 'What does the paper measure?',
+    () => crumbsAfter.join(' / ')
+  );
+
   // ── opening a citation ─────────────────────────────────────────
   await ui.eval(`
     document.querySelector('.turn.assistant:last-of-type .chips .cite').click();
@@ -264,7 +301,7 @@ const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ask-p
     return turn && {
       text: turn.querySelector('.answer')?.textContent.trim(),
       chips: turn.querySelectorAll('.chips .cite').length,
-      title: document.querySelector('.thread .title, .thread .picker')?.textContent.trim()
+      title: document.querySelector('.sidebar .chat-row.active .chat-open')?.textContent.trim()
     };
   `);
   checks.check('the answer survived a reload', /4\.2 K/.test(afterReload?.text ?? ''), () => `text=${afterReload?.text}`);
