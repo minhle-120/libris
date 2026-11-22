@@ -423,8 +423,11 @@
      the row above, and two spaces of padding would read as a mistake in the list.
      Quoted rather than coloured when open, because a notebook and one of its chats are
      active together and two accent bars would have to be told apart at a glance. */
+  /* Indented to the notebook's *title*, not to its row: a notebook line carries a
+     checkbox first, so an indent measured from the box puts the children to the left of
+     the thing they belong to. The rule is the tree; the alignment is the sentence. */
   .chats {
-    margin: 2px 0 4px 15px;
+    margin: 2px 0 4px 26px;
     padding: 0 0 0 9px;
     list-style: none;
     border-left: 1px solid var(--border-muted);

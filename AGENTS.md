@@ -14,7 +14,7 @@ the one you need before you start:
 | routes, status codes, SSE frames, file endpoints | `docs/api.md` |
 | `internal/llm`, any llama.cpp flag, endpoint or claim | `docs/llamacpp.md` |
 | tests, `make e2e`, `make ui`, the CDP harness | `docs/testing.md` |
-| the notebook's three columns, the panel, the breadcrumb | `docs/adr/0012-panel-navigation.md`, `docs/adr/0014-the-breadcrumb-ends-at-the-chat.md` |
+| the notebook's three columns, the panel, the breadcrumb, a conversation's place in the UI | `docs/adr/0012-panel-navigation.md`, `docs/adr/0014-the-breadcrumb-ends-at-the-chat.md`, `docs/adr/0015-conversations-under-their-notebook.md` |
 | a decision someone says was already made | `docs/adr/` |
 
 ---
@@ -117,7 +117,7 @@ mid-sentence — so what each one settles, in the order an agent is likely to ne
 | retrieval at scale, a vector index | 0010 | vectors are BLOBs in SQLite, scanned in Go — for now |
 | notebooks, dedupe, a shared file | 0003 | notebooks own memberships; sources are content-addressed and shared |
 | where files go on disk | 0005 | the data directory defaults to Documents/libris, resolved per platform |
-| the notebook's columns, the panel, the breadcrumb | 0012, 0014 | Sources and Activity are a panel beside the chat, not pages instead of it; the header ends at the chat you are reading |
+| the notebook's columns, the panel, the breadcrumb, a conversation | 0012, 0014, 0015 | Sources and Activity are a panel beside the chat, not pages instead of it; the header ends at the chat you are reading; conversations are the second level of the notebook list, not a control in the composer |
 | how settings reach the browser | 0002 | settings are served and saved over HTTP |
 
 ---
@@ -381,11 +381,13 @@ PDFDPI int `key:"pdfDPI" group:"ingest" label:"PDF raster DPI" help:"…"
   the name is non-blank, and the sidebar renames in place (Enter commits, Escape
   abandons, blur commits what changed) rather than opening a second dialog for it.
   The old one-click path hard-coded "Untitled notebook", a name the server refuses.
-- `App` owns the panel tab (`Panel` in `lib/types.ts`) and whether the panel is open,
-  because the collapsed rail's buttons name a tab rather than toggle a box;
-  `NotebookView` does not own `tab`. `ChatPanel` reports the open chat's title upward,
-  because only it knows which chat the server has open — and the title is the server's,
-  the first question, so a chat with no question has no name and no crumb.
+- `App` owns the panel tab (`Panel` in `lib/types.ts`), whether the panel is open, the
+  notebook's chats, and which one is being read — because the list that shows them is in
+  the sidebar, and a component cannot show the open row of a selection it does not own.
+  `NotebookView` does not own `tab`, and `ChatPanel` owns no chat at all: `chatId` is a
+  prop, and the one thing it still reports upward is which chat a question *started*.
+  The title is the server's, the first question, so a chat with no question has no name
+  and no crumb.
 - The panel's tabs are Sources · Activity. The chat is not one of them: it is the middle
   column, and the composer's send button is still titled Ask because there it is a verb,
   not a place.
