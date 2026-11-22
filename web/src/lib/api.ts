@@ -182,10 +182,13 @@ export async function ask(
   events: AskEvents,
   signal?: AbortSignal
 ): Promise<void> {
-  const res = await fetch(`/api/notebooks/${notebookId}/chats/${chatId}/ask`, {
+  // A question is asked in a notebook; `chatId` empty means the turn starts the
+  // conversation and the server names it after the question. The id comes back on the
+  // done frame, which is the only way the caller learns which row appeared.
+  const res = await fetch(`/api/notebooks/${notebookId}/ask`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ question }),
+    body: JSON.stringify({ question, chat_id: chatId }),
     signal
   });
 

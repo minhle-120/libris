@@ -26,8 +26,9 @@ GET    /api/sources/{id}/original         the kept copy
 GET    /api/assets/{id...}                derived files; id contains slashes
 POST   /api/notebooks/{id}/chats          {"title":…} → 201
 GET    /api/notebooks/{id}/chats          ·  DELETE …/chats/{chatID} → 204
+PATCH  …/chats/{chatID}                   {"title":…} → 204
 GET    /api/notebooks/{id}/chats/{chatID}/messages
-POST   /api/notebooks/{id}/chats/{chatID}/ask   SSE, see below
+POST   /api/notebooks/{id}/ask            SSE, see below
 GET    /                                  embedded SPA, index.html fallback
 ```
 
@@ -58,7 +59,8 @@ lets the browser seek inside an audio slice or a PDF page without downloading th
 
 ## A question streams
 
-`POST …/chats/{chatID}/ask` answers `text/event-stream` with `status`, then
+`POST /api/notebooks/{id}/ask` takes `{"question":…, "chat_id":…}` and answers
+`text/event-stream` with `status`, then
 `citations`, then `delta`s, then `done` — in that order, because the order is the
 contract: the citations arrive before the prose that rests on them, so the UI can show
 what an answer is grounded in while it is still being written.
@@ -68,7 +70,7 @@ what an answer is grounded in while it is still being written.
 | `status` | `{"text":…}` | what the loop is doing; also carries reasoning |
 | `citations` | `[domain.Citation]` | frozen, before any prose |
 | `delta` | `{"text":…,"reasoning":…}` | answer text and reasoning travel apart; reasoning is never appended to the answer |
-| `done` | `domain.Message` | the stored row, so the client reconciles with the server rather than with its own accumulation |
+| `done` | `domain.Message` | the stored row, so the client reconciles with the server rather than with its own accumulation — including its `chat_id`, which is how a question asked with no chat finds out which one it started |
 | `error` | `{"text":…}` | after the stream opened, there is no status code left to set |
 
 Before the stream opens, the `fail` mapping applies as everywhere else. The request

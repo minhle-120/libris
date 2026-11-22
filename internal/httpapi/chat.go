@@ -26,7 +26,7 @@ func (s *Server) addChatRoutes() {
 	s.mux.HandleFunc("PATCH /api/notebooks/{id}/chats/{chatID}", s.handleRenameChat)
 	s.mux.HandleFunc("DELETE /api/notebooks/{id}/chats/{chatID}", s.handleDeleteChat)
 	s.mux.HandleFunc("GET /api/notebooks/{id}/chats/{chatID}/messages", s.handleListMessages)
-	s.mux.HandleFunc("POST /api/notebooks/{id}/chats/{chatID}/ask", s.handleAsk)
+	s.mux.HandleFunc("POST /api/notebooks/{id}/ask", s.handleAsk)
 }
 
 func (s *Server) handleListChats(w http.ResponseWriter, r *http.Request) {
@@ -108,9 +108,16 @@ func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 //
 // After the stream opens there is no status code left to set, so a failure is reported
 // in band. Before it opens, the usual mapping applies.
+// A question is asked in a notebook, not in a chat: `chat_id` is a field of the body
+// and may be empty, which means the turn starts the conversation and names it after the
+// question. Both halves of that are the use case's, so the route that used to carry the
+// chat id in its path is gone — an empty path segment is not a route, and a client
+// inventing the chat first would have to duplicate the naming rule to get a title worth
+// reading.
 func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Question string `json:"question"`
+		ChatID   string `json:"chat_id"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -133,7 +140,7 @@ func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	msg, askErr := s.app.Ask(ctx, r.PathValue("id"), r.PathValue("chatID"), body.Question, app.AskEvents{
+	msg, askErr := s.app.Ask(ctx, r.PathValue("id"), body.ChatID, body.Question, app.AskEvents{
 		Status: func(text string) {
 			out.event("status", map[string]string{"text": text})
 		},

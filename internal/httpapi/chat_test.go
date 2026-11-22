@@ -236,7 +236,7 @@ func TestAskStreamsFramesInOrder(t *testing.T) {
 			Citations: citationsForTest(), CreatedAt: 2,
 		},
 	}}
-	rec := do(t, chatServer(t, f), "POST", "/api/notebooks/nb/chats/c1/ask", `{"question":"What did Smith measure?"}`)
+	rec := do(t, chatServer(t, f), "POST", "/api/notebooks/nb/ask", `{"question":"What did Smith measure?","chat_id":"c1"}`)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("ask = %d, want 200 before any of it has happened", rec.Code)
@@ -314,7 +314,7 @@ func TestAskKeepsReasoningApart(t *testing.T) {
 		deltas: [][2]string{{"", "counting the pages…"}, {"There are seven.", ""}},
 		msg:    domain.Message{ID: 1, Content: "There are seven.", Status: domain.MessageAnswered},
 	}}
-	body := do(t, chatServer(t, f), "POST", "/api/notebooks/nb/chats/c1/ask", `{"question":"how many pages?"}`).Body.String()
+	body := do(t, chatServer(t, f), "POST", "/api/notebooks/nb/ask", `{"question":"how many pages?","chat_id":"c1"}`).Body.String()
 
 	frames := frames(t, body)
 	if len(frames) != 3 || frames[0] != "delta" {
@@ -340,7 +340,7 @@ func TestAskReportsFailureInBand(t *testing.T) {
 		statuses: []string{"Searching…"},
 		err:      app.ErrInvalid,
 	}}
-	body := do(t, chatServer(t, f), "POST", "/api/notebooks/nb/chats/c1/ask", `{"question":"anything"}`).Body.String()
+	body := do(t, chatServer(t, f), "POST", "/api/notebooks/nb/ask", `{"question":"anything","chat_id":"c1"}`).Body.String()
 
 	names := frames(t, body)
 	if names[len(names)-1] != "error" {
@@ -358,6 +358,36 @@ func TestAskReportsFailureInBand(t *testing.T) {
 	}
 }
 
+// A question that names no chat is the use case's to place, and the empty id is what
+// says so. It stays empty rather than being invented here because the chat that gets
+// created is titled from the question, and a client that made the row first would have
+// to duplicate that rule to give it a name worth reading. The id comes back inside the
+// done frame's row, which is how the browser learns which line just appeared in its list.
+func TestAskWithNoChatIDRevealsTheOneItCreated(t *testing.T) {
+	f := &fakeAPI{script: askScript{
+		deltas: [][2]string{{"Because of the long tail.", ""}},
+		msg: domain.Message{
+			ID: 3, ChatID: "fresh", Role: domain.RoleAssistant,
+			Content: "Because of the long tail.", Status: domain.MessageAnswered, CreatedAt: 2,
+		},
+	}}
+	rec := do(t, chatServer(t, f), "POST", "/api/notebooks/nb/ask", `{"question":"Why the long tail?"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("ask = %d, want 200", rec.Code)
+	}
+	if f.notebookOf != "nb" || f.chatID != "" {
+		t.Errorf("use case saw (%q, %q), want the notebook and an empty chat", f.notebookOf, f.chatID)
+	}
+
+	var msg domain.Message
+	if err := json.Unmarshal(frameData(t, rec.Body.String(), "done"), &msg); err != nil {
+		t.Fatal(err)
+	}
+	if msg.ChatID != "fresh" {
+		t.Errorf("done carries chat %q, want the id of the chat this turn created", msg.ChatID)
+	}
+}
+
 // A turn the client stopped is not a failure to report: the reader is by definition
 // gone, and there is nothing to gain from writing a frame nobody will read.
 func TestAskStopsWritingAfterTheReaderGoes(t *testing.T) {
@@ -368,7 +398,7 @@ func TestAskStopsWritingAfterTheReaderGoes(t *testing.T) {
 	srv := chatServer(t, f)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	req := httptest.NewRequest("POST", "/api/notebooks/nb/chats/c1/ask",
+	req := httptest.NewRequest("POST", "/api/notebooks/nb/ask",
 		strings.NewReader(`{"question":"what now"}`)).WithContext(ctx)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -385,7 +415,7 @@ func TestAskStopsWritingAfterTheReaderGoes(t *testing.T) {
 // deserves a status code the browser can read rather than an event nobody asked for.
 func TestAskRefusesAnEmptyQuestionBeforeStreaming(t *testing.T) {
 	srv := chatServer(t, &fakeAPI{})
-	rec := do(t, srv, "POST", "/api/notebooks/nb/chats/c1/ask", `{"question":"   "}`)
+	rec := do(t, srv, "POST", "/api/notebooks/nb/ask", `{"question":"   ","chat_id":"c1"}`)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("empty question = %d, want 400", rec.Code)
@@ -405,7 +435,7 @@ func TestChatRoutesAbsentWithoutAnApp(t *testing.T) {
 	for _, tc := range []struct{ method, path string }{
 		{"GET", "/api/notebooks/nb/chats"},
 		{"GET", "/api/notebooks/nb/chats/c1/messages"},
-		{"POST", "/api/notebooks/nb/chats/c1/ask"},
+		{"POST", "/api/notebooks/nb/ask"},
 	} {
 		rec := do(t, srv, tc.method, tc.path, `{"question":"hi"}`)
 		if rec.Code == http.StatusOK || rec.Code == http.StatusNoContent {
