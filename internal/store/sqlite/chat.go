@@ -71,6 +71,17 @@ func (db *DB) ListChats(ctx context.Context, notebookID string) ([]domain.Chat, 
 	return out, rows.Err()
 }
 
+// UpdateChatTitle renames a conversation. What a title may be is the caller's
+// business, not the query's: the same column holds a title derived from a question
+// and one a reader typed, and only the use case knows which it is holding.
+func (db *DB) UpdateChatTitle(ctx context.Context, id, title string) error {
+	res, err := db.sql.ExecContext(ctx, `UPDATE chats SET title = ? WHERE id = ?`, title, id)
+	if err != nil {
+		return fmt.Errorf("store: rename chat: %w", err)
+	}
+	return one(res, id)
+}
+
 // DeleteChat removes a conversation with its messages. The sources it cited are
 // untouched, for the same reason deleting a notebook leaves them alone.
 func (db *DB) DeleteChat(ctx context.Context, id string) error {

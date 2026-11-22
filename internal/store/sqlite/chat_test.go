@@ -67,6 +67,46 @@ func TestChatLifecycle(t *testing.T) {
 	}
 }
 
+// A reader renames a conversation. What matters to the store is that the rename names
+// exactly one row: an id that is not there is an error, not a no-op, and the chat next
+// to it in the same list is not involved.
+func TestUpdateChatTitle(t *testing.T) {
+	ctx := context.Background()
+	db := openDB(t)
+	a := notebook(t, db, "A")
+
+	target := chatIn(t, db, a, "Why does the long tail fall off so slowly?")
+	neighbour := chatIn(t, db, a, "And the follow-up?")
+
+	if err := db.UpdateChatTitle(ctx, target.ID, "Why the tail is long"); err != nil {
+		t.Fatalf("UpdateChatTitle: %v", err)
+	}
+
+	got, err := db.ListChats(ctx, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("%d chats", len(got))
+	}
+	for _, c := range got {
+		switch c.ID {
+		case target.ID:
+			if c.Title != "Why the tail is long" {
+				t.Errorf("renamed chat is still %q", c.Title)
+			}
+		case neighbour.ID:
+			if c.Title != "And the follow-up?" {
+				t.Errorf("the other chat was renamed too: %q", c.Title)
+			}
+		}
+	}
+
+	if err := db.UpdateChatTitle(ctx, "no-such-chat", "x"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("renaming an absent chat = %v, want ErrNotFound", err)
+	}
+}
+
 func TestCreateChatUnknownNotebook(t *testing.T) {
 	if _, err := openDB(t).CreateChat(context.Background(), "nope", "title"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("CreateChat = %v, want ErrNotFound — a chat must not be orphaned", err)

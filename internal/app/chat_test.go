@@ -647,6 +647,57 @@ func TestAskDoesNotCrossNotebooks(t *testing.T) {
 	_ = db
 }
 
+// A conversation's title is the first question until a reader says otherwise. The trim
+// is the same one RenameNotebook makes; the blank is refused because a chat with no
+// name is the thing the list exists to prevent, and a chat named in the wrong notebook
+// is absent here too, as everywhere else in this file.
+func TestRenameChat(t *testing.T) {
+	ctx := context.Background()
+	svc, _, _ := askWiring(t)
+	a := notebookID(t, svc)
+	b := notebookID(t, svc)
+
+	chat, err := svc.NewChat(ctx, a, "Why does the long tail fall off so slowly?")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := svc.RenameChat(ctx, a, chat.ID, "  Why the tail is long  "); err != nil {
+		t.Fatalf("RenameChat: %v", err)
+	}
+	title := func() string {
+		t.Helper()
+		list, err := svc.Chats(ctx, a)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(list) != 1 {
+			t.Fatalf("%d chats", len(list))
+		}
+		return list[0].Title
+	}
+	if title() != "Why the tail is long" {
+		t.Errorf("title = %q", title())
+	}
+
+	if err := svc.RenameChat(ctx, a, chat.ID, "   "); !errors.Is(err, ErrInvalid) {
+		t.Errorf("blank title = %v, want ErrInvalid", err)
+	}
+	if title() != "Why the tail is long" {
+		t.Errorf("a rejected rename changed the title to %q", title())
+	}
+
+	if err := svc.RenameChat(ctx, b, chat.ID, "elsewhere"); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("renaming across notebooks = %v, want ErrNotFound", err)
+	}
+	if err := svc.RenameChat(ctx, a, "no-such-chat", "x"); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("renaming an absent chat = %v, want ErrNotFound", err)
+	}
+	if title() != "Why the tail is long" {
+		t.Errorf("a rejected rename changed the title to %q", title())
+	}
+}
+
 // The two packages name roles with the same strings, and the history builders key off
 // that. It is cheap to pin and expensive to get wrong: a role that fails to map is a
 // silently missing turn, which reads as a model that forgot.

@@ -130,6 +130,14 @@ export async function listChats(notebookId: string): Promise<Chat[]> {
   return list(await request<Chat[] | null>(`/api/notebooks/${notebookId}/chats`));
 }
 
+/** A conversation's title, after its reader decided what it should be. */
+export function renameChat(notebookId: string, chatId: string, title: string): Promise<void> {
+  return request<void>(`/api/notebooks/${notebookId}/chats/${chatId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ title })
+  });
+}
+
 export function createChat(notebookId: string, title: string): Promise<Chat> {
   return request<Chat>(`/api/notebooks/${notebookId}/chats`, {
     method: 'POST',

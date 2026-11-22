@@ -23,6 +23,7 @@ import (
 func (s *Server) addChatRoutes() {
 	s.mux.HandleFunc("GET /api/notebooks/{id}/chats", s.handleListChats)
 	s.mux.HandleFunc("POST /api/notebooks/{id}/chats", s.handleCreateChat)
+	s.mux.HandleFunc("PATCH /api/notebooks/{id}/chats/{chatID}", s.handleRenameChat)
 	s.mux.HandleFunc("DELETE /api/notebooks/{id}/chats/{chatID}", s.handleDeleteChat)
 	s.mux.HandleFunc("GET /api/notebooks/{id}/chats/{chatID}/messages", s.handleListMessages)
 	s.mux.HandleFunc("POST /api/notebooks/{id}/chats/{chatID}/ask", s.handleAsk)
@@ -52,6 +53,24 @@ func (s *Server) handleCreateChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, chat)
+}
+
+// handleRenameChat takes a title from the reader. 204, not the chat back: the caller
+// typed the title, so there is nothing to learn — and a body would be a second place
+// the same string has to be right.
+func (s *Server) handleRenameChat(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Title string `json:"title"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.app.RenameChat(r.Context(), r.PathValue("id"), r.PathValue("chatID"), body.Title); err != nil {
+		s.fail(w, "rename chat", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) handleDeleteChat(w http.ResponseWriter, r *http.Request) {

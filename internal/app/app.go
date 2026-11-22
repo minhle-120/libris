@@ -55,6 +55,7 @@ type Chats interface {
 	CreateChat(context.Context, string, string) (domain.Chat, error)
 	GetChat(context.Context, string) (domain.Chat, error)
 	ListChats(context.Context, string) ([]domain.Chat, error)
+	UpdateChatTitle(context.Context, string, string) error
 	DeleteChat(context.Context, string) error
 
 	AppendMessage(context.Context, domain.Message) (domain.Message, error)

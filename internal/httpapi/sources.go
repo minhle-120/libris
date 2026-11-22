@@ -36,6 +36,7 @@ type API interface {
 
 	Chats(context.Context, string) ([]domain.Chat, error)
 	NewChat(context.Context, string, string) (domain.Chat, error)
+	RenameChat(context.Context, string, string, string) error
 	DeleteChat(context.Context, string, string) error
 	ChatMessages(context.Context, string, string) ([]domain.Message, error)
 	Ask(context.Context, string, string, string, app.AskEvents) (domain.Message, error)

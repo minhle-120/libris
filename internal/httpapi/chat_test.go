@@ -54,6 +54,11 @@ func (f *fakeAPI) NewChat(_ context.Context, notebookID, title string) (domain.C
 	return domain.Chat{ID: "chat-1", NotebookID: notebookID, Title: title, CreatedAt: 1}, nil
 }
 
+func (f *fakeAPI) RenameChat(_ context.Context, notebookID, chatID, title string) error {
+	f.notebookOf, f.chatID, f.chatTitle = notebookID, chatID, title
+	return f.err
+}
+
 func (f *fakeAPI) DeleteChat(_ context.Context, notebookID, chatID string) error {
 	f.notebookOf, f.chatID = notebookID, chatID
 	return f.err
@@ -170,20 +175,41 @@ func TestChatCollectionRoutes(t *testing.T) {
 	}
 }
 
+// Renaming answers nothing. The caller typed the title, so a body would only be a
+// second place the same string has to be right — and the notebook and chat ids have to
+// reach the use case together, or a chat in one notebook could be renamed through
+// another.
+func TestChatRenameRoute(t *testing.T) {
+	f := &fakeAPI{}
+	rec := do(t, chatServer(t, f), "PATCH", "/api/notebooks/nb/chats/c1", `{"title":"Why the tail is long"}`)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("rename chat = %d, want 204", rec.Code)
+	}
+	if f.notebookOf != "nb" || f.chatID != "c1" || f.chatTitle != "Why the tail is long" {
+		t.Errorf("use case saw (%q, %q, %q)", f.notebookOf, f.chatID, f.chatTitle)
+	}
+	if rec.Body.Len() != 0 {
+		t.Errorf("a rename answered %q, want an empty body", rec.Body.String())
+	}
+}
+
 // A chat from another notebook reads as absent, which is what the use case reports; the
 // transport must not turn it into a 500.
 func TestChatErrorsMapToStatuses(t *testing.T) {
 	for _, tc := range []struct {
-		method, path string
-		err          error
-		want         int
+		method, path, body string
+		err                error
+		want               int
 	}{
-		{"GET", "/api/notebooks/nb/chats/nope/messages", domain.ErrNotFound, http.StatusNotFound},
-		{"DELETE", "/api/notebooks/nb/chats/nope", domain.ErrNotFound, http.StatusNotFound},
-		{"GET", "/api/notebooks/nb/chats/nope/messages", errors.New("disk on fire"), http.StatusInternalServerError},
+		{"GET", "/api/notebooks/nb/chats/nope/messages", "", domain.ErrNotFound, http.StatusNotFound},
+		{"DELETE", "/api/notebooks/nb/chats/nope", "", domain.ErrNotFound, http.StatusNotFound},
+		{"PATCH", "/api/notebooks/nb/chats/nope", `{"title":"x"}`, domain.ErrNotFound, http.StatusNotFound},
+		// A title of nothing but spaces is the reader's mistake, and answers like one.
+		{"PATCH", "/api/notebooks/nb/chats/c1", `{"title":"  "}`, app.ErrInvalid, http.StatusBadRequest},
+		{"GET", "/api/notebooks/nb/chats/nope/messages", "", errors.New("disk on fire"), http.StatusInternalServerError},
 	} {
 		f := &fakeAPI{err: tc.err}
-		rec := do(t, chatServer(t, f), tc.method, tc.path, "")
+		rec := do(t, chatServer(t, f), tc.method, tc.path, tc.body)
 		if rec.Code != tc.want {
 			t.Errorf("%s %s = %d, want %d (%s)", tc.method, tc.path, rec.Code, tc.want, tc.err)
 		}

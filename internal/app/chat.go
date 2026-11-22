@@ -446,6 +446,30 @@ func (s *Service) Chats(ctx context.Context, notebookID string) ([]domain.Chat, 
 	return s.chats.ListChats(ctx, notebookID)
 }
 
+// RenameChat gives a conversation a title a reader chose, rather than the one its
+// first question produced. That title is honest but often a rambling sentence, and a
+// list of them is hard to tell apart — which is the whole reason the list exists.
+//
+// The blank is refused here, not at the transport, so that no transport can store a
+// chat with no name. Whitespace is trimmed rather than collapsed the way NewChat does
+// it, because this title is typed rather than pasted, and RenameNotebook has the same
+// rule for the same reason.
+func (s *Service) RenameChat(ctx context.Context, notebookID, chatID, title string) error {
+	if s.chats == nil {
+		return fmt.Errorf("%w: this build cannot answer questions", ErrInvalid)
+	}
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return fmt.Errorf("%w: a chat needs a title", ErrInvalid)
+	}
+	if c, err := s.chats.GetChat(ctx, chatID); err != nil {
+		return err
+	} else if c.NotebookID != notebookID {
+		return fmt.Errorf("%w: chat %s", domain.ErrNotFound, chatID)
+	}
+	return s.chats.UpdateChatTitle(ctx, chatID, title)
+}
+
 // DeleteChat removes one conversation with its messages. Like deleting a notebook,
 // it touches no source and no file: another chat may cite the same page, and nothing
 // re-derives a raster cheaply.
