@@ -407,7 +407,7 @@ scripted model so all six termination paths are asserted with no model in the ro
 fake `API` and assert only the HTTP mapping.
 
 Three levels: `make check` (unit), `make e2e` (real binary against a fake embedding
-server, database read back with `sqlite3`), `make ui` (142 browser checks over CDP
+server, database read back with `sqlite3`), `make ui` (167 browser checks over CDP
 against the real UI and a fake that answers all three llama.cpp endpoints). Coverage is
 89% overall; the gaps are DB-error guards and unreachable IO branches, and production
 code should not be contorted to reach them.
@@ -418,19 +418,28 @@ Pick the test that *entails* the change, not the whole matrix. The cost of runni
 level nobody needed is not the seconds, it is the ten-minute habit that makes an agent
 stop testing small.
 
+**Test the thing you changed, at the level where only that level can see it.** Two
+levels are per-change, not per-suite: one harness covering the behaviour, not the suite
+that contains it. `make ui UI_HARNESS=ui-nav` and `make ui-nav` are the same thing; the
+other three harnesses running because three exist is noise, and a failure in the two you
+did not need costs the same reading time as one you did.
+
 | the change is | gate | ≈ |
 |---|---|---|
-| one package's logic | `go test ./internal/<pkg>/` | 1 s |
-| `internal/config`, migrations, `app`, `store` | `make check`, then `make e2e` if a stored row or the pipeline is affected | 4 s + 1 min |
-| `web/`, `scripts/`, the `ui` target | `make ui-upload` / `ui-drop` / `ui-ask` while iterating, `make ui` once before committing | 40 s → 1 min |
+| one behaviour, while iterating | `go test ./internal/<pkg>/ -run <TestName>` | <1 s |
+| any Go change, before commit | `make check` | 4 s |
+| a `web/` change, while iterating | `make web-check`, then the one harness that covers it | 10 s + 30 s |
+| a `web/` change, before commit | that one harness again — `make ui` only if the change is in shared chrome (`App.svelte`, `api.ts`, the header, sidebar, panel, `app.css`) | 30 s |
+| a stored row, the ingest pipeline, or bytes on disk | `make e2e` once, because nothing below it can see the filesystem | 1 min |
 | a wire shape, an endpoint, the SSE frame contract | `make check` + `make e2e`, and re-check the claim against `docs/llamacpp.md` | 1 min |
 
-`make check` (4 s) always runs before a commit — that is cheap enough to be a rule and
-not a judgement call. Everything above it is a judgement: `TestGeneratedSchemaIsCurrent`
-already proves the generated TypeScript cannot disagree with the struct, so a new
-setting does not need a browser to know the field exists — only to learn it renders
-wrong. Three browser harnesses running because three exist is noise, and a failure in
-the two you did not need costs the same reading time as one you did.
+`make check` (4 s) always runs before a commit — it compiles every package, so it is
+what notices that a signature change in `app` reached `httpapi`, which a package-scoped
+run cannot see. That is cheap enough to be a rule and not a judgement call. Everything
+above it is a judgement: `TestGeneratedSchemaIsCurrent` already proves the generated
+TypeScript cannot disagree with the struct, so a new setting does not need a browser to
+know the field exists — only to learn it renders wrong. Nothing runs *for reassurance*: if
+the change is visible at a lower level, the higher level is not evidence, it is reading.
 
 `docs/testing.md` has the detail — the fixture traps, what each level proves, and the
 CDP harness's many ways of reporting a working feature as broken.

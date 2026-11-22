@@ -134,6 +134,17 @@ saw, not what the client intended.
   shared server the previous notebook's is already there, the drop lands in it, and the
   click that was supposed to switch notebooks wins later. Wait for the thing you created,
   by name.
+- Before believing a red run, ask who owns the port. A `libris` left running by `make run`
+  answers on 8080 and embeds the bundle from *whenever it was built*, so every check fails
+  on markup that is correct on disk, and the diff you reach for is the wrong one.
+  `ss -tlnp | grep :8080` first — or run `make ui`, which picks its own port, its own fake
+  and a throwaway data dir, which is also the only way a harness gets the clean state it
+  assumes: a second standalone run against the same directory inherits the first run's
+  notebooks and chats, and reports them as collisions.
+- The page scroller is `<main>`, not the window — `#app` is `overflow: hidden`, so
+  `window.scrollTo` is a no-op and a sticky-position check passes with nothing scrolled at
+  all. Scroll `main`, and compare against `main`'s own `getBoundingClientRect().top`, which
+  is the edge a sticky child actually sticks to.
 - A synthetic `KeyboardEvent('keydown', {key:'Escape'})` cannot close a `<dialog>`:
   Chrome honours Escape only for trusted input. Use `Input.dispatchKeyEvent`
   (`ui.press`), which is the behaviour worth testing anyway.
