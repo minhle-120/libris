@@ -172,7 +172,7 @@
             <Icon name="search" size={14} />
             <input placeholder="Filter sources" bind:value={filter} />
           </label>
-          <Button variant="ghost" size="sm" iconOnly title="Add sources" onclick={pick}>
+          <Button variant="default" size="sm" iconOnly title="Add sources" onclick={pick}>
             <Icon name="plus" size={14} />
           </Button>
         </div>
@@ -208,13 +208,13 @@
                 <div class="meta">
                   <div class="name-row">
                     <span class="name truncate" title={source.name}>{source.name}</span>
+                  </div>
+
+                  <div class="facts muted small">
                     <Badge tone={statusTone[source.status]}>
                       {#if source.status === 'processing'}<span class="pulse"></span>{/if}
                       {source.status}
                     </Badge>
-                  </div>
-
-                  <div class="facts muted small">
                     {source.kind} · {formatBytes(source.bytes)}
                     {#if source.status === 'ready'}
                       · {source.segment_count} chunk{source.segment_count === 1 ? '' : 's'}
@@ -296,6 +296,8 @@
 </aside>
 
 <style>
+  /* The chrome plane. The chat is the deep one and the list items are raised cards on
+     this one, so a source row reads as an object and not as a slice of a table. */
   .sidepanel {
     position: relative;
     display: flex;
@@ -303,7 +305,7 @@
     flex-shrink: 0;
     min-height: 0;
     border-left: 1px solid var(--border);
-    background: var(--canvas);
+    background: var(--canvas-subtle);
   }
   .sidepanel.closed {
     align-items: center;
@@ -315,8 +317,8 @@
     align-items: center;
     justify-content: space-between;
     gap: 8px;
-    padding: 8px 8px 0 12px;
-    border-bottom: 1px solid var(--border);
+    padding: 10px 8px 10px 14px;
+    border-bottom: 1px solid var(--border-muted);
   }
 
   /* A segmented control, not page tabs: it switches the contents of one column, and
@@ -324,36 +326,47 @@
   .seg {
     display: flex;
     gap: 2px;
-    padding: 2px;
-    background: var(--canvas-subtle);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
+    padding: 3px;
+    background: var(--canvas);
+    border: 1px solid var(--border-muted);
+    border-radius: 999px;
   }
   .seg-btn {
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    padding: 3px 9px;
+    height: 24px;
+    padding: 0 11px;
     font: inherit;
     font-size: 12px;
     font-weight: 500;
     color: var(--fg-muted);
     background: none;
     border: none;
-    border-radius: var(--radius-sm);
+    border-radius: 999px;
     cursor: pointer;
+    transition: background 80ms ease, color 80ms ease;
   }
   .seg-btn:hover {
     color: var(--fg);
   }
   .seg-btn.active {
     color: var(--fg);
-    background: var(--canvas);
-    box-shadow: var(--shadow-sm, 0 1px 0 rgb(0 0 0 / 8%));
+    background: var(--elevated);
+    box-shadow: var(--shadow-md);
   }
   .count {
-    font-size: 11px;
+    display: inline-grid;
+    place-items: center;
+    min-width: 15px;
+    height: 15px;
+    padding: 0 4px;
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 1;
     color: var(--fg-muted);
+    background: color-mix(in srgb, var(--fg-muted) 18%, transparent);
+    border-radius: 999px;
   }
 
   .rail-toggle {
@@ -369,7 +382,7 @@
   }
   .rail-toggle:hover {
     color: var(--fg);
-    background: var(--canvas-subtle);
+    background: var(--hover);
   }
   .rail-count {
     font-size: 12px;
@@ -404,8 +417,8 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 8px;
-    padding: 10px 0 6px;
+    gap: 6px;
+    padding: 12px 0 8px;
   }
   .filter {
     display: flex;
@@ -413,12 +426,20 @@
     gap: 6px;
     flex: 1;
     min-width: 0;
-    height: 28px;
-    padding: 0 8px;
+    height: 30px;
+    padding: 0 10px;
     color: var(--fg-muted);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
+    border: 1px solid transparent;
+    border-radius: 8px;
     background: var(--canvas);
+    transition: border-color 80ms ease;
+  }
+  .filter:hover {
+    border-color: var(--border);
+  }
+  .filter:focus-within {
+    border-color: var(--accent);
+    box-shadow: var(--focus-ring);
   }
   .filter input {
     flex: 1;
@@ -443,25 +464,30 @@
     padding: 16px 0;
     text-align: center;
   }
+  /* One card per source, not one box with hairlines through it: the row is the object
+     a user aims at, and a bordered group of four rows reads as a table of nothing. */
   .list {
     display: flex;
     flex-direction: column;
+    gap: 6px;
     margin: 0;
     padding: 0;
     list-style: none;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    background: var(--canvas);
   }
   .source {
+    position: relative;
     display: flex;
     align-items: flex-start;
-    gap: 8px;
-    padding: 8px;
-    border-bottom: 1px solid var(--border-muted);
+    gap: 10px;
+    padding: 10px;
+    background: var(--elevated);
+    border: 1px solid var(--border-muted);
+    border-radius: 10px;
+    transition: border-color 100ms ease, box-shadow 100ms ease;
   }
-  .source:last-child {
-    border-bottom: none;
+  .source:hover {
+    border-color: var(--border);
+    box-shadow: var(--shadow-md);
   }
   /* Ingest has no progress stream yet, so a working row is dimmed rather than
      showing a percentage we do not have. */
@@ -471,13 +497,13 @@
   .kind {
     display: grid;
     place-items: center;
-    width: 26px;
-    height: 26px;
+    width: 30px;
+    height: 30px;
     flex-shrink: 0;
     color: var(--fg-muted);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    background: var(--canvas-subtle);
+    border: none;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--fg-muted) 14%, transparent);
   }
   .meta {
     flex: 1;
@@ -486,15 +512,21 @@
   .name-row {
     display: flex;
     align-items: center;
-    gap: 6px;
     min-width: 0;
   }
   .name {
     font-size: 13px;
-    font-weight: 500;
+    font-weight: 600;
   }
+  /* The status lives on the fact line rather than beside the name: four action buttons
+     in the corner plus a badge in the same row left about seven characters of filename,
+     which is a worse way to say "this is your file" than a second line. */
   .facts {
-    margin-top: 2px;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 4px;
   }
   .note {
     margin: 4px 0 0;
@@ -504,23 +536,45 @@
   .note.bad {
     color: var(--danger);
   }
+  /* Four always-on icons per row is four decisions the user did not ask to make, and in
+     flow they cost the filename 128px of width. So they arrive over the corner of the
+     card — still in the DOM, still tab-reachable, and the name's tail is the one part of
+     a card that is empty when the pointer gets there. */
   .row-actions {
+    position: absolute;
+    top: 6px;
+    right: 6px;
     display: flex;
     align-items: center;
     gap: 0;
-    flex-shrink: 0;
+    padding: 1px;
+    background: var(--elevated);
+    border: 1px solid var(--border-muted);
+    border-radius: 9px;
+    box-shadow: var(--shadow-md);
+    opacity: 0;
+    transition: opacity 100ms ease;
+  }
+  .source:hover .row-actions,
+  .source:focus-within .row-actions {
+    opacity: 1;
+  }
+  @media (hover: none) {
+    .row-actions {
+      opacity: 1;
+    }
   }
   .iconlink {
     display: grid;
     place-items: center;
-    width: 24px;
-    height: 24px;
+    width: 26px;
+    height: 26px;
     color: var(--fg-muted);
     border-radius: var(--radius);
   }
   .iconlink:hover {
     color: var(--accent);
-    background: var(--canvas-subtle);
+    background: var(--hover);
   }
   .pulse {
     width: 6px;

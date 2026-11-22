@@ -25,7 +25,9 @@
     <button type="button" class="mark" title="Notebooks" onclick={onhome}>
       <Icon name="book" size={15} />
     </button>
-    <span class="name">libris</span>
+    <!-- The word "libris" is the first crumb already. Saying it twice — a brand label
+         and then the location that starts with the same word — is why the header read
+         as "libris libris / test / Sources". The tile is the brand; the crumbs spell it. -->
     <nav class="crumbs" aria-label="Breadcrumb">
       {#each crumbs as crumb, i (i)}
         {#if i > 0}<span class="sep">/</span>{/if}
@@ -89,8 +91,7 @@
     gap: 8px;
     min-width: 0;
   }
-  .brand > .mark,
-  .brand > .name {
+  .brand > .mark {
     flex-shrink: 0;
   }
   .mark {
@@ -105,14 +106,18 @@
     border-radius: var(--radius);
     cursor: pointer;
   }
-  .name {
-    font-family: var(--font-mono);
-    font-size: 15px;
-    font-weight: 600;
-    letter-spacing: -0.2px;
+  .mark {
+    transition: opacity 100ms ease;
   }
+  .mark:hover {
+    opacity: 0.8;
+  }
+  /* The separator is not a breadcrumb: it is air with a slash in it, so it stays behind
+     the labels it separates instead of competing with them. */
   .sep {
-    color: var(--border);
+    color: var(--fg-muted);
+    opacity: 0.4;
+    font-size: 13px;
   }
   .crumbs {
     display: flex;
@@ -142,23 +147,37 @@
     background: none;
     cursor: pointer;
   }
+  .crumb.link {
+    transition: background 80ms ease, color 80ms ease;
+  }
   .crumb.link:hover {
     color: var(--accent);
-    background: var(--canvas);
-    text-decoration: underline;
+    background: var(--hover);
+    text-decoration: none;
   }
+  /* A filled field with no border until it is wanted — the one cue borrowed from how
+     Google draws a search box, and the reason the header used to read as a row of
+     outlined boxes. */
   .search {
     display: flex;
     align-items: center;
     gap: 8px;
-    width: min(320px, 32vw);
-    height: 30px;
-    padding: 0 8px;
+    width: min(340px, 32vw);
+    height: 32px;
+    padding: 0 10px;
     margin-left: auto;
     color: var(--fg-muted);
     background: var(--canvas);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
+    border: 1px solid transparent;
+    border-radius: 8px;
+    transition: border-color 100ms ease, box-shadow 100ms ease;
+  }
+  .search:hover {
+    border-color: var(--border);
+  }
+  .search:focus-within {
+    border-color: var(--accent);
+    box-shadow: var(--focus-ring);
   }
   .search input {
     flex: 1;
@@ -173,12 +192,13 @@
     color: var(--fg-muted);
   }
   kbd {
-    padding: 0 4px;
+    padding: 0 5px;
     font-family: var(--font-mono);
     font-size: 11px;
-    line-height: 16px;
+    line-height: 17px;
     color: var(--fg-muted);
-    border: 1px solid var(--border);
+    background: var(--hover);
+    border: none;
     border-radius: var(--radius-sm);
   }
   .right {

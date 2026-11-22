@@ -16,7 +16,7 @@
 </script>
 
 <div class="empty">
-  <div class="icon"><Icon name={icon} size={24} /></div>
+  <div class="icon"><Icon name={icon} size={22} /></div>
   <h2>{title}</h2>
   <p>{description}</p>
   {#if children}
@@ -30,31 +30,34 @@
     flex-direction: column;
     align-items: center;
     text-align: center;
-    gap: 6px;
-    padding: 48px 24px;
+    gap: 4px;
+    padding: 40px 24px;
   }
+  /* An icon on its own, not an icon in a ring. Two of those, in two columns, at the
+     same size, is the one thing that made every empty screen look like the same
+    Bootstrap placeholder — and the circle adds a frame to a message about nothing. */
   .icon {
     display: grid;
     place-items: center;
-    width: 40px;
-    height: 40px;
-    margin-bottom: 6px;
+    width: 24px;
+    height: 24px;
+    margin-bottom: 8px;
     color: var(--fg-muted);
-    border: 1px solid var(--border);
-    border-radius: 50%;
-    background: var(--canvas);
+    opacity: 0.55;
   }
   h2 {
     font-size: 14px;
+    font-weight: 600;
   }
   p {
-    max-width: 420px;
+    max-width: 38ch;
     color: var(--fg-muted);
     font-size: 13px;
+    line-height: 1.55;
   }
   .actions {
     display: flex;
     gap: 8px;
-    margin-top: 10px;
+    margin-top: 14px;
   }
 </style>

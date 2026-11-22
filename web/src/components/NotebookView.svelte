@@ -202,17 +202,23 @@
     min-width: 0;
     min-height: 0;
   }
+  /* Tinted rather than outlined in red: a full 1px red box around a sentence makes the
+     page look broken, when what happened is one request failed. */
   .banner {
     display: flex;
     align-items: center;
     gap: 8px;
-    margin: 12px 16px 0;
+    margin: 12px 20px 0;
     padding: 10px 12px;
     font-size: 13px;
+    color: var(--fg);
+    border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--danger) 10%, transparent);
+  }
+  .banner :global(svg) {
+    flex-shrink: 0;
     color: var(--danger);
-    border: 1px solid var(--danger);
-    border-radius: var(--radius);
-    background: var(--canvas);
   }
   .dismiss {
     display: grid;

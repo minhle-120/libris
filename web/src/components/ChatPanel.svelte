@@ -45,6 +45,16 @@
   const searchable = $derived(sources.filter((s) => s.status === 'ready').length);
   const canSend = $derived(draft.trim().length > 0 && searchable > 0 && !running);
 
+  // The field grows with the question and stops at 12rem, so a long one scrolls inside
+  // the composer instead of pushing it off the bottom of the column.
+  $effect(() => {
+    void draft;
+    const el = input;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 192)}px`;
+  });
+
   // Opening a notebook loads its threads. The effect re-runs only when the notebook
   // actually changes, which is also the case that used to leave the previous
   // notebook's messages on screen.
@@ -365,28 +375,36 @@
   {/if}
 
   <footer class="composer">
-    {#if searchable === 0 && !running}
-      <p class="hint">No ready sources — nothing to answer from.</p>
-    {/if}
+    <!-- One card: the field, its caption and the round control that sends or stops. The
+         control keeps its place between the two states, so the thing under the thumb
+         while an answer is arriving is the thing that stopped it. -->
     <div class="entry">
-      <textarea
-        bind:this={input}
-        bind:value={draft}
-        onkeydown={onKeydown}
-        rows="1"
-        placeholder={searchable ? 'Ask a question about your sources' : 'Add a source first'}
-        aria-label="Question"
-      ></textarea>
-      {#if running}
-        <Button variant="default" size="md" title="Stop this question" onclick={stop}>
-          <Icon name="stop" size={15} /> Stop
-        </Button>
-      {:else}
-        <Button variant="primary" size="md" title="Ask" disabled={!canSend} onclick={send}>
-          <Icon name="send" size={15} /> Ask
-        </Button>
+      {#if searchable === 0 && !running}
+        <p class="hint"><Icon name="alert" size={13} /> No ready sources — nothing to answer from.</p>
       {/if}
+      <div class="row">
+        <textarea
+          bind:this={input}
+          bind:value={draft}
+          onkeydown={onKeydown}
+          rows="1"
+          placeholder={searchable ? 'Ask a question about your sources' : 'Add a source first'}
+          aria-label="Question"
+        ></textarea>
+        {#if running}
+          <Button class="btn-round" variant="default" iconOnly title="Stop this question" onclick={stop}>
+            <Icon name="stop" size={15} />
+          </Button>
+        {:else}
+          <Button class="btn-round" variant="primary" iconOnly title="Ask" disabled={!canSend} onclick={send}>
+            <Icon name="send" size={17} />
+          </Button>
+        {/if}
+      </div>
     </div>
+    {#if searchable > 0}
+      <p class="credit">Every answer comes from your sources, with the page or timestamp it came from.</p>
+    {/if}
   </footer>
 </section>
 
@@ -395,6 +413,7 @@
     display: flex;
     flex-direction: column;
     gap: 10px;
+    padding: 0 20px;
     /* The panel is a scroller of its own: the page owns the header and the composer,
        the thread owns the middle. Letting the page scroll instead would move the
        composer out from under the keyboard mid-question. */
@@ -406,6 +425,8 @@
     display: flex;
     align-items: center;
     gap: 8px;
+    height: 44px;
+    flex-shrink: 0;
   }
 
   .thread {
@@ -413,9 +434,12 @@
     flex: 1;
   }
 
+  /* The thread's name is context, not a heading: it used to shout as loudly as the
+     question underneath it. */
   .title {
-    font-size: 14px;
-    font-weight: 600;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--fg-muted);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -426,7 +450,7 @@
     max-width: 100%;
     font: inherit;
     font-size: 13px;
-    color: var(--ink);
+    color: var(--fg);
     background: var(--canvas-inset);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
@@ -436,6 +460,22 @@
   .actions {
     display: flex;
     gap: 4px;
+    flex-shrink: 0;
+  }
+
+  /* Deleting a thread is not a first-class action, so it waits for the pointer the way
+     the source rows' actions do. `New` stays: it is the one thing to press here. */
+  .actions :global(.btn[title='Delete this chat']) {
+    opacity: 0;
+  }
+  .bar:hover :global(.btn[title='Delete this chat']),
+  .bar:focus-within :global(.btn[title='Delete this chat']) {
+    opacity: 1;
+  }
+  @media (hover: none) {
+    .actions :global(.btn[title='Delete this chat']) {
+      opacity: 1;
+    }
   }
 
   .messages {
@@ -444,20 +484,23 @@
     overflow-y: auto;
     display: flex;
     flex-direction: column;
-    gap: 14px;
-    padding: 4px 2px;
+    gap: 20px;
+    padding: 4px 2px 16px;
   }
 
   .turn {
     max-width: 76ch;
   }
 
+  /* --canvas-inset is #010409, near black: a code block's well. The user's own message
+     is not a well, so it sits on the subtle plane with a soft corner instead. */
   .turn.user {
     align-self: flex-end;
-    background: var(--canvas-inset);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 8px 12px;
+    max-width: min(76ch, 82%);
+    background: var(--canvas-subtle);
+    border: 1px solid var(--border-muted);
+    border-radius: 14px 14px 4px 14px;
+    padding: 10px 14px;
   }
 
   .turn.user p {
@@ -468,8 +511,8 @@
 
   .turn.assistant p {
     margin: 0;
-    font-size: 14px;
-    line-height: 1.55;
+    font-size: 15px;
+    line-height: 1.65;
     white-space: pre-wrap;
   }
 
@@ -480,17 +523,21 @@
     margin-bottom: 6px;
   }
 
+  /* Tonal, not outlined: a chip is a thing to press, and a 1px box around fourteen
+     characters reads as a label. `--link` never existed, so until now these rendered in
+     the body colour and looked like part of the sentence. */
   .cite,
   .inline {
     display: inline-flex;
     align-items: center;
     gap: 4px;
     font: inherit;
-    color: var(--link);
-    background: var(--canvas-inset);
-    border: 1px solid var(--border);
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 13%, transparent);
+    border: none;
     border-radius: 999px;
     cursor: pointer;
+    transition: background 80ms ease;
   }
 
   .cite {
@@ -509,8 +556,8 @@
 
   .cite:hover:not(:disabled),
   .inline:hover {
-    border-color: var(--border-emphasis);
-    background: var(--canvas);
+    background: color-mix(in srgb, var(--accent) 24%, transparent);
+    text-decoration: none;
   }
 
   .cite:disabled {
@@ -522,14 +569,14 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    margin-top: 6px !important;
-    font-size: 12px;
-    color: var(--ink-muted);
+    margin-top: 10px !important;
+    font-size: 13px;
+    color: var(--fg-muted);
   }
 
   .reasoning {
     font-size: 12px;
-    color: var(--ink-muted);
+    color: var(--fg-muted);
     border-left: 2px solid var(--border);
     padding-left: 8px;
     margin-top: 6px !important;
@@ -540,7 +587,7 @@
     width: 7px;
     height: 1em;
     margin-left: 2px;
-    background: var(--ink-muted);
+    background: var(--fg-muted);
     vertical-align: -0.15em;
     animation: blink 1s steps(1) infinite;
   }
@@ -552,49 +599,86 @@
   }
 
   .composer {
-    border-top: 1px solid var(--border);
-    padding-top: 8px;
+    flex-shrink: 0;
+    padding: 4px 0 14px;
   }
 
+  /* The field is a card the whole width of the thread, and the page's bottom rule is
+     gone: a line above an input makes it look like a footer of the window rather than
+     the place where the next question starts. */
   .entry {
     display: flex;
-    gap: 8px;
+    flex-direction: column;
+    gap: 2px;
+    padding: 6px 6px 6px 14px;
+    background: var(--elevated);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    box-shadow: var(--shadow-pop);
+    transition: border-color 100ms ease;
+  }
+  .entry:focus-within {
+    border-color: var(--accent);
+  }
+
+  .row {
+    display: flex;
     align-items: flex-end;
+    gap: 10px;
   }
 
   textarea {
     flex: 1;
     resize: none;
     font: inherit;
-    font-size: 14px;
-    color: var(--ink);
-    background: var(--canvas);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 8px 10px;
+    font-size: 15px;
+    line-height: 1.5;
+    color: var(--fg);
+    background: none;
+    border: none;
+    padding: 8px 0;
     max-height: 12rem;
   }
+  textarea::placeholder {
+    color: var(--fg-muted);
+  }
 
-  textarea:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: -1px;
+  textarea:focus {
+    outline: none;
+    box-shadow: none;
   }
 
   .hint {
-    margin: 0 0 6px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 8px 0 0;
     font-size: 12px;
-    color: var(--ink-muted);
+    color: var(--attention);
+  }
+
+  .credit {
+    margin: 8px 0 0;
+    font-size: 11px;
+    text-align: center;
+    color: var(--fg-muted);
+    opacity: 0.7;
   }
 
   .banner {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 8px 10px;
+    padding: 9px 12px;
     font-size: 13px;
-    color: var(--danger);
-    border: 1px solid var(--danger);
+    color: var(--fg);
+    border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
     border-radius: var(--radius);
+    background: color-mix(in srgb, var(--danger) 10%, transparent);
+  }
+  .banner :global(svg) {
+    flex-shrink: 0;
+    color: var(--danger);
   }
 
   .dismiss {
@@ -619,7 +703,7 @@
 
   .pulse {
     animation: pulse 1.6s ease-in-out infinite;
-    color: var(--ink-muted);
+    color: var(--fg-muted);
     font-size: 14px;
   }
 

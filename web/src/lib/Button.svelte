@@ -8,6 +8,7 @@
     active = false,
     disabled = false,
     title = undefined,
+    class: extra = '',
     onclick = undefined,
     children
   }: {
@@ -17,6 +18,8 @@
     active?: boolean;
     disabled?: boolean;
     title?: string;
+    /** One of the shape modifiers in app.css (`btn-round`), not a scoped class. */
+    class?: string;
     onclick?: (e: MouseEvent) => void;
     children?: Snippet;
   } = $props();
@@ -28,7 +31,8 @@
       variant === 'ghost' && 'btn-ghost',
       size === 'sm' && 'btn-sm',
       iconOnly && 'btn-icon',
-      active && 'is-active'
+      active && 'is-active',
+      extra
     ]
       .filter(Boolean)
       .join(' ')

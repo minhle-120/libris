@@ -183,20 +183,20 @@
     flex-direction: column;
     flex-shrink: 0;
     border-right: 1px solid var(--border);
-    background: var(--canvas);
+    background: var(--canvas-subtle);
   }
   .sidebar.closed {
     align-items: stretch;
     padding-top: 8px;
   }
   .section {
-    padding: 16px 12px;
+    padding: 12px 8px;
   }
   .section-head {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0 4px 8px;
+    padding: 0 4px 8px 8px;
   }
   .section-head h2 {
     font-size: 12px;
@@ -223,19 +223,22 @@
   }
   .row:hover,
   .row:focus-within {
-    background: var(--canvas-subtle);
+    background: var(--hover);
   }
+  /* Raised, not tinted: on a subtle column the selected notebook has to come forward,
+     and the accent bar on its edge is the same mark the panel rail uses. */
   .row.active {
-    background: var(--canvas-subtle);
-    box-shadow: inset 2px 0 0 var(--accent);
+    background: var(--elevated);
+    box-shadow: inset 2px 0 0 var(--accent), var(--shadow-sm);
   }
   .item {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 9px;
     flex: 1;
     min-width: 0;
-    padding: 6px 8px;
+    height: 32px;
+    padding: 0 8px;
     font: inherit;
     font-size: 14px;
     color: var(--fg);
@@ -252,8 +255,21 @@
     flex: 1;
   }
   .count {
-    font-size: 12px;
+    display: inline-grid;
+    place-items: center;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1;
     color: var(--fg-muted);
+    background: color-mix(in srgb, var(--fg-muted) 18%, transparent);
+    border-radius: 999px;
+  }
+  .row.active .count {
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
+    color: var(--accent);
   }
   .rename-open {
     display: none;
@@ -316,12 +332,12 @@
   }
   .rail-item:hover {
     color: var(--fg);
-    background: var(--canvas-subtle);
+    background: var(--hover);
   }
   .rail-item.active {
     color: var(--fg);
-    background: var(--canvas-subtle);
-    box-shadow: inset 2px 0 0 var(--accent);
+    background: var(--elevated);
+    box-shadow: inset 2px 0 0 var(--accent), var(--shadow-sm);
   }
   .rail-toggle {
     display: grid;
@@ -337,7 +353,7 @@
   }
   .rail-toggle:hover {
     color: var(--fg);
-    background: var(--canvas-subtle);
+    background: var(--hover);
   }
   .closed .rail-toggle {
     align-self: center;

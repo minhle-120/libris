@@ -40,11 +40,19 @@ const checks = new Checks();
 const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ui-profile' }, async (ui) => {
   const boot = await ui.eval(`
     return {
-      brand: document.querySelector('.brand .name')?.textContent,
+      // The tile is the brand and the first crumb spells it; the header used to say
+      // "libris libris / …" with a brand label in front of a breadcrumb that starts
+      // with the same word.
+      mark: document.querySelector('.brand .mark')?.title,
+      crumb: document.querySelector('.crumbs .crumb')?.textContent,
       notebooks: document.querySelectorAll('.sidebar .list .item').length
     };
   `);
-  checks.check('app shell renders from the backend', boot.brand === 'libris', `brand=${boot.brand}`);
+  checks.check(
+    'app shell renders from the backend',
+    boot.mark === 'Notebooks' && boot.crumb === 'libris',
+    `mark=${boot.mark} crumb=${boot.crumb}`
+  );
 
   // ── create a notebook ──────────────────────────────────────────
   const before = boot.notebooks;

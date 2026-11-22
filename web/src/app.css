@@ -12,8 +12,17 @@
   --canvas-inset: #f6f8fa;
   --canvas-overlay: #ffffff;
 
+  /* Three planes rather than one: the reading surface is --canvas, the chrome around it
+     (header, the two columns) is --canvas-subtle, and everything the user acts on is
+     --elevated, lifted by a border and a shadow rather than by a louder colour. */
+  --elevated: #ffffff;
+  --hover: #eaeef2;
+
   --border: #d1d9e0;
   --border-muted: #e6eaef;
+  /* The border a control shows when it is hovered or focused. Without it every hover
+     state in the app silently inherited the previous one. */
+  --border-emphasis: #818b98;
 
   --fg: #1f2328;
   --fg-muted: #59636e;
@@ -32,6 +41,7 @@
 
   --shadow-sm: 0 1px 0 rgba(31, 35, 40, 0.04);
   --shadow-md: 0 3px 6px rgba(140, 149, 159, 0.15);
+  --shadow-pop: 0 10px 24px -14px rgba(31, 35, 40, 0.35);
   --focus-ring: 0 0 0 3px rgba(9, 105, 218, 0.3);
 
   --radius-sm: 4px;
@@ -49,8 +59,12 @@
   --canvas-inset: #010409;
   --canvas-overlay: #151b23;
 
+  --elevated: #1b222c;
+  --hover: #21282f;
+
   --border: #3d444d;
   --border-muted: #212830;
+  --border-emphasis: #656c76;
 
   --fg: #f0f6fc;
   --fg-muted: #9198a1;
@@ -69,6 +83,7 @@
 
   --shadow-sm: 0 1px 0 rgba(1, 4, 9, 0.4);
   --shadow-md: 0 3px 6px rgba(1, 4, 9, 0.5);
+  --shadow-pop: 0 12px 28px -14px rgba(1, 4, 9, 0.85);
   --focus-ring: 0 0 0 3px rgba(68, 147, 248, 0.3);
 }
 
@@ -167,12 +182,13 @@ p {
 }
 
 .btn:hover {
-  background: var(--canvas);
-  border-color: var(--fg-muted);
+  background: var(--hover);
+  border-color: var(--border-emphasis);
 }
 
 .btn:active {
   background: var(--canvas-subtle);
+  box-shadow: inset 0 1px 0 rgba(1, 4, 9, 0.1);
 }
 
 .btn:disabled {
@@ -187,12 +203,13 @@ p {
 .btn-primary {
   color: #ffffff;
   background: var(--success-emphasis);
-  border-color: rgba(31, 35, 40, 0.15);
+  border-color: transparent;
+  box-shadow: var(--shadow-sm);
 }
 
 .btn-primary:hover {
   background: var(--success);
-  border-color: rgba(31, 35, 40, 0.15);
+  border-color: transparent;
 }
 
 .btn-ghost {
@@ -224,6 +241,15 @@ p {
   padding: 0;
 }
 
+/* The composer's send and stop share one round slot at the trailing edge of the
+   field, so the control's position does not move when a turn starts. */
+.btn-round {
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border-radius: 9999px;
+}
+
 .input {
   height: 32px;
   width: 100%;
@@ -241,10 +267,28 @@ p {
 }
 
 .card {
-  background: var(--canvas);
+  background: var(--elevated);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow-sm);
+}
+
+/* A tonal pill rather than a bordered one: it reads as a label at a glance and does
+   not put a 1px outline around every coloured word in the app. */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 8px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  color: var(--fg-muted);
+  background: color-mix(in srgb, var(--fg-muted) 14%, transparent);
+  border: none;
+  border-radius: 9999px;
+  white-space: nowrap;
 }
 
 .mono {

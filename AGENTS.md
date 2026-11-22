@@ -282,10 +282,29 @@ PDFDPI int `key:"pdfDPI" group:"ingest" label:"PDF raster DPI" help:"…"
 
 - Primer/GitHub design language: 6px radii, `#1f883d` primary, `#d1d9e0` borders,
   `#fd8c73` accent underline, 56px header, 288px default sidebar; dark mode `#0d1117` /
-  `#3d444d` / `#4493f8`. Tokens live in `web/src/app.css`.
+  `#3d444d` / `#4493f8`. Tokens live in `web/src/app.css`, and a `var()` naming a token
+  that does not exist fails *silently* — the chat carried nine of them, which is why its
+  citation chips rendered in the body colour and its streaming caret was invisible.
+- Three planes, not one: `--canvas` is the reading surface (the chat), `--canvas-subtle`
+  is the chrome around it (header, both columns), `--elevated` is anything the user acts
+  on (source cards, the composer). Depth comes from that order plus a shadow, never from
+  a louder colour. `--canvas-inset` is `#010409`, a code block's well, not a message
+  bubble.
+- Google borrows cheaply here and stops there: filled borderless fields, tonal badges and
+  chips instead of outlined ones, a round send control inside the composer card, row
+  actions that arrive on hover. What stays Primer is the 6px control radius, the green
+  primary, the mono wordmark, and the accent bar marking a selection in both columns.
 - No dashed frames. Empty states are icon + sentence + button on the open canvas; a
   dotted box around "nothing here" is two boxes competing with the message. The one
   dashed affordance that earned its keep was drag-over, now a solid 2px accent outline.
+  The same reasoning took the ring off the empty-state icon — an icon in a bordered
+  circle is another box, and one per column made every empty screen look like the same
+  placeholder.
+- A row's actions arrive on hover or focus, and they arrive *over* the card corner rather
+  than in its flow: four 32px buttons in flow cost a filename 128px of width and left
+  seven characters to identify the file by. Hidden with `opacity`, never `display:none` —
+  they stay tab-reachable, and a harness clicking one programmatically is a user who
+  found it.
 - `#app` is exactly viewport height with `overflow:hidden`, so `<main>` is the page
   scroller for anything that wants one. A notebook takes `height:100%` and scrolls its
   two columns itself — the chat and the panel — because a transcript that grows the page
