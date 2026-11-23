@@ -1,0 +1,280 @@
+package app
+
+// The machine libris is running on.
+//
+// Everything else in this package is about the user's documents. This file is about the
+// computer: which llama.cpp build is on this disk, which one upstream would offer, how the
+// download went, and what the machine has to run a model on. They arrive together because a
+// person opens the settings page to answer one question — "will this work here" — and the
+// answer needs all four.
+//
+// Both halves are behind interfaces declared here, so the HTTP transport and the later MCP
+// server call the same implementation, and so a test can drive the whole page with a fake
+// that has no network and no GPU.
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	"os"
+	"time"
+
+	"libris/internal/config"
+	"libris/internal/deviceinfo"
+	"libris/internal/engine"
+)
+
+// deviceCacheAge bounds how long a device report stays reusable without asking again. The
+// fingerprint catches a reboot or a driver update; this catches everything a fingerprint
+// cannot see, and keeps the settings page from running a subprocess on every visit.
+const deviceCacheAge = 24 * time.Hour
+
+// EngineManager is what Host needs from the binary manager — the whole of it, because every
+// method here is a button on the page. engine.Manager satisfies it; a test does not have to.
+type EngineManager interface {
+	Status() (engine.Installed, bool)
+	Check(ctx context.Context, b engine.Backend, force bool) (engine.Release, engine.Asset, error)
+	Install(ctx context.Context, tag string, b engine.Backend) (engine.Installed, error)
+	Remove(ctx context.Context) error
+	Stop()
+	// SetProxy is on the interface because the proxy is a setting, and a download that used
+	// a proxy frozen at boot would make the settings page a lie — the same discipline as
+	// every other cached thing here (AGENTS §6).
+	SetProxy(prefix string)
+	Progress() engine.Progress
+	Dir() string
+	PartsBytes() int64
+	ClearParts() error
+}
+
+// HostOptions is the wiring. DeviceCache is a file path under the data directory; an empty
+// one means the report is produced every time and never remembered.
+type HostOptions struct {
+	Engine      EngineManager
+	Settings    Settings
+	DeviceCache string
+	Logger      *slog.Logger
+
+	// Probe runs the collectors. It is a field so the caching around it can be tested on a
+	// machine with neither a GPU nor permission to run anything; nil means the real one.
+	Probe func(context.Context, deviceinfo.Options) (deviceinfo.Report, error)
+}
+
+type Host struct {
+	engine   EngineManager
+	settings Settings
+	devCache string
+	probe    func(context.Context, deviceinfo.Options) (deviceinfo.Report, error)
+	log      *slog.Logger
+	now      func() time.Time
+}
+
+func NewHost(opts HostOptions) (*Host, error) {
+	if opts.Engine == nil {
+		return nil, errors.New("app: Host needs an EngineManager")
+	}
+	if opts.Settings == nil {
+		return nil, errors.New("app: Host needs Settings")
+	}
+	log := opts.Logger
+	if log == nil {
+		log = slog.Default()
+	}
+	probe := opts.Probe
+	if probe == nil {
+		probe = func(ctx context.Context, o deviceinfo.Options) (deviceinfo.Report, error) {
+			return deviceinfo.Detect(ctx, o), nil
+		}
+	}
+
+	return &Host{
+		engine:   opts.Engine,
+		settings: opts.Settings,
+		devCache: opts.DeviceCache,
+		probe:    probe,
+		log:      log,
+		now:      func() time.Time { return time.Now().UTC() },
+	}, nil
+}
+
+// EngineView is the page's whole answer about the binaries. It is a view rather than
+// engine.Manager's own types because the three questions the page asks do not line up with
+// the three the manager answers, and a frontend should not have to assemble them.
+type EngineView struct {
+	// Installed is the copy on this disk, or nil — which is the state a first run is in, and
+	// has to be able to say so out loud rather than as an empty object.
+	Installed *engine.Installed `json:"installed,omitempty"`
+	Backend   string            `json:"backend"`
+
+	// Latest is what upstream would offer for this platform. Absent when the machine is
+	// offline and nothing was cached: CheckError then says why in one sentence.
+	Latest     *engine.Release `json:"latest,omitempty"`
+	Asset      *engine.Asset   `json:"asset,omitempty"`
+	Update     bool            `json:"update_available"`
+	CheckError string          `json:"check_error,omitempty"`
+
+	Progress engine.Progress `json:"progress"`
+
+	// Dir and PartsBytes are shown so the space a download will use, and the space a
+	// cancelled one is still holding, are numbers on the screen rather than guesses.
+	Dir        string `json:"dir"`
+	PartsBytes int64  `json:"parts_bytes"`
+}
+
+// Engine reads the current state. force asks upstream even if the cached answer is young —
+// the difference between opening the page and pressing "Check".
+//
+// A failed update check is not an error here. The page's primary fact is what is installed,
+// and that is knowable offline; losing the whole panel because api.github.com did not answer
+// would be a worse page than one with a sentence where the update button was.
+func (h *Host) Engine(ctx context.Context, force bool) (*EngineView, error) {
+	cfg := h.settings.Get()
+	backend := engine.Backend(cfg.EngineBackend)
+	if backend == "" {
+		backend = engine.Vulkan
+	}
+
+	v := &EngineView{
+		Backend:    string(backend),
+		Dir:        h.engine.Dir(),
+		Progress:   h.engine.Progress(),
+		PartsBytes: h.engine.PartsBytes(),
+	}
+	if in, ok := h.engine.Status(); ok {
+		have := in
+		v.Installed = &have
+		v.Backend = string(in.Backend)
+	}
+
+	rel, asset, err := h.engine.Check(ctx, backend, force)
+	switch {
+	case err != nil && !errors.Is(err, engine.ErrNotFound):
+		v.CheckError = err.Error()
+	case err == nil:
+		v.Latest = &rel
+		v.Asset = &asset
+		// Comparison is numeric, not lexical: "b9999" sorts after "b12649" as a string and
+		// is the older build, and an app that offered that as an update would be offering a
+		// downgrade.
+		if v.Installed != nil && engine.CompareTags(v.Installed.Tag, rel.Tag) < 0 {
+			v.Update = true
+		}
+	default:
+		v.CheckError = err.Error()
+	}
+	return v, nil
+}
+
+// EngineInstall fetches a tag the page offered. An empty tag means "whatever is newest",
+// which is the label on the one button, so it is resolved here rather than in a browser that
+// cannot see the release list.
+func (h *Host) EngineInstall(ctx context.Context, tag string) (engine.Installed, error) {
+	cfg := h.settings.Get()
+	backend := engine.Backend(cfg.EngineBackend)
+	if backend == "" {
+		backend = engine.Vulkan
+	}
+	h.engine.SetProxy(cfg.EngineProxy)
+
+	if tag == "" {
+		rel, _, err := h.engine.Check(ctx, backend, false)
+		if err != nil {
+			return engine.Installed{}, err
+		}
+		tag = rel.Tag
+	}
+	in, err := h.engine.Install(ctx, tag, backend)
+	if err != nil {
+		return engine.Installed{}, err
+	}
+	// The engine is a device probe once it exists, so the cached report about the machine is
+	// now one source behind what is knowable.
+	h.invalidateDevices("engine installed")
+	return in, nil
+}
+
+// EngineStop interrupts a download. The partial file is kept on purpose — Stop is usually
+// "not now", and starting the 35 MB again is not what that means.
+func (h *Host) EngineStop() { h.engine.Stop() }
+
+// EngineRemove deletes the installed build. The error it returns is the one the page shows,
+// which matters because the interesting case is the refusal: a running llama-server holding
+// the files, where attempting the delete is worse than declining it.
+func (h *Host) EngineRemove(ctx context.Context) error {
+	err := h.engine.Remove(ctx)
+	if err != nil {
+		return err
+	}
+	h.invalidateDevices("engine removed")
+	return nil
+}
+
+// EngineDiscardParts throws away a stopped download's bytes — the button that means "I did
+// mean cancel", as distinct from Stop, which means "not now".
+func (h *Host) EngineDiscardParts() error { return h.engine.ClearParts() }
+
+// Devices reports what this machine can run a model on, from the cache if it still describes
+// the machine.
+//
+// The order is the cheap one: the cache key is computed from a reboot id and the PCI bus, so
+// a stale entry is recognised without running anything. Only then does anything get asked,
+// and the engine — once installed — is asked last and merged, because ggml knows which
+// backends that build can actually use.
+func (h *Host) Devices(ctx context.Context, refresh bool) (deviceinfo.Report, error) {
+	probe := deviceinfo.Options{EngineBin: h.engineBin()}
+	fp := deviceinfo.Fingerprint(probe)
+
+	if !refresh && h.devCache != "" {
+		if rep, ok := deviceinfo.Load(h.devCache, fp, deviceCacheAge, h.now); ok {
+			return rep, nil
+		}
+	}
+
+	rep, err := h.probe(ctx, probe)
+	if err != nil {
+		return deviceinfo.Report{}, err
+	}
+	// The stamp belongs here, not in the collectors. A probe reports what it saw; *when* it
+	// saw it, and which machine configuration the answer describes, are properties of the
+	// cache entry, and a collector that filled them in itself could not be tested against a
+	// clock.
+	rep.Fingerprint = fp
+	if rep.CheckedAt.IsZero() {
+		rep.CheckedAt = h.now()
+	}
+	if h.devCache != "" {
+		if err := deviceinfo.Save(h.devCache, rep); err != nil {
+			// A cache that cannot be written is not a failure of the question. The report is
+			// still the answer, and the next visit just asks again.
+			h.log.Debug("could not cache the device report", "path", h.devCache, "err", err)
+		}
+	}
+	return rep, nil
+}
+
+// engineBin is the installed engine's own path, which is the only probe worth running: the
+// same binary libris will later start, reporting the same backends it will start them with.
+func (h *Host) engineBin() string {
+	if in, ok := h.engine.Status(); ok {
+		return in.Path
+	}
+	return ""
+}
+
+func (h *Host) invalidateDevices(because string) {
+	if h.devCache == "" {
+		return
+	}
+	if err := os.Remove(h.devCache); err != nil && !errors.Is(err, os.ErrNotExist) {
+		h.log.Debug("could not invalidate the device cache", "because", because, "err", err)
+		return
+	}
+	h.log.Debug("device cache invalidated", "because", because)
+}
+
+// SettingsChanged reports whether a saved settings change means the engine view should be
+// refetched: the build selection decides which asset is offered next, so the page that saved
+// it must not still be showing the other one's size.
+func (h *Host) SettingsChanged(prev, next config.Config) bool {
+	return prev.EngineBackend != next.EngineBackend || prev.EngineProxy != next.EngineProxy
+}

@@ -19,14 +19,19 @@ const maxSettingsBody = 256 << 10
 
 type Options struct {
 	Settings *config.FileStore
-	App      API   // use cases; nil serves settings and the UI only
-	Assets   fs.FS // built frontend, rooted where index.html lives; may be nil
-	Logger   *slog.Logger
+	App      API // use cases; nil serves settings and the UI only
+	// Host is the machine's own state: the engine build on disk and the devices in the box.
+	// Nil-able like App, because neither depends on the database — and a settings page that
+	// cannot say what is installed is a worse page than one that omits the section.
+	Host   Host
+	Assets fs.FS // built frontend, rooted where index.html lives; may be nil
+	Logger *slog.Logger
 }
 
 type Server struct {
 	opts Options
 	app  API
+	host Host
 	log  *slog.Logger
 	mux  *http.ServeMux
 }
@@ -40,6 +45,7 @@ func New(opts Options) *Server {
 	s := &Server{opts: opts, log: log, mux: http.NewServeMux()}
 
 	s.addAppRoutes(opts.App)
+	s.addHostRoutes(opts.Host)
 
 	s.mux.HandleFunc("GET /api/health", s.handleHealth)
 	s.mux.HandleFunc("GET /api/settings", s.handleGetSettings)

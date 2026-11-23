@@ -426,14 +426,16 @@ func (m *Manager) install(ctx context.Context, tag string, b Backend) (Installed
 		return Installed{}, fmt.Errorf("engine: %s: %w", m.dir, err)
 	}
 
-	rel, asset, err := m.Check(ctx, b, false)
+	// Forced. The caller asked for a tag it read from a page that may itself be older than
+	// the cache, and answering "that is not the newest" from a cache nobody refreshed would
+	// be a download refused for a bookkeeping artefact. One API call per install is the price.
+	rel, asset, err := m.Check(ctx, b, true)
 	if err != nil {
 		return Installed{}, err
 	}
 	if rel.Tag != tag {
-		// The UI asked for a specific tag; answering with a different one because the
-		// cache aged out mid-visit is how a person ends up running a build they did not
-		// choose.
+		// Answering with a tag the caller did not ask for is how a person ends up running a
+		// build they never chose, so this is a refusal and not a substitution.
 		return Installed{}, fmt.Errorf("engine: asked for %s, the newest release is %s — reload and try again", tag, rel.Tag)
 	}
 	if asset.SHA256 == "" {
@@ -441,8 +443,18 @@ func (m *Manager) install(ctx context.Context, tag string, b Backend) (Installed
 	}
 	m.setProgress(func(p *Progress) { p.Asset, p.Total = asset.Name, asset.Size })
 
-	if have, ok := m.Status(); ok && have.Tag == tag && have.Backend == b {
-		return have, nil
+	if have, ok := m.Status(); ok {
+		if have.Tag == tag && have.Backend == b {
+			return have, nil // already what was asked for: not a download, not an error
+		}
+		// Replacing a build a server is executing is the same mistake the delete refuses, one
+		// step earlier: the running process keeps its old code while the directory beneath it
+		// becomes a different version, and the next crash is reported against files that no
+		// longer match what was loaded. Checked after the short-circuit above, so asking again
+		// for what is already installed stays harmless.
+		if running(have.Path) {
+			return Installed{}, fmt.Errorf("%w — cannot replace it while it runs: %s", ErrRunning, have.Path)
+		}
 	}
 	if free, ok := freeBytes(m.dir); ok && asset.Size > 0 {
 		// The archive, the unpacked tree and a little room to breathe. Unpacking a 35 MB
@@ -803,7 +815,7 @@ func (m *Manager) Remove(ctx context.Context) error {
 		return nil // nothing installed is not a failure
 	}
 	if running(in.Path) {
-		return errors.New("engine: llama-server is still running from that build — stop the model servers first")
+		return fmt.Errorf("%w — stop the model servers first: %s", ErrRunning, in.Path)
 	}
 	dir := filepath.Join(m.dir, in.Tag)
 	if err := os.RemoveAll(dir); err != nil {

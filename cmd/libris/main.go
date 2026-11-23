@@ -20,6 +20,7 @@ import (
 
 	"libris/internal/app"
 	"libris/internal/config"
+	"libris/internal/engine"
 	"libris/internal/httpapi"
 	"libris/internal/index"
 	"libris/internal/ingest"
@@ -124,6 +125,24 @@ func main() {
 
 	// The processor is built per job from the live settings, so a DPI change
 	// applies to the next upload without a restart.
+	// The machine itself: which llama.cpp build is on this disk, and what the box has to run
+	// one on. It reads settings per call, so changing the build selection takes effect on the
+	// next check rather than the next restart — the same discipline as every other cached
+	// thing in this process (AGENTS §6).
+	host, err := app.NewHost(app.HostOptions{
+		Engine:      engine.Open(filepath.Join(*dataDir, "bin"), log),
+		Settings:    settings,
+		DeviceCache: filepath.Join(*dataDir, "devices.json"),
+		Logger:      log,
+	})
+	if err != nil {
+		// Not fatal: the app answers questions without knowing what its own machine has. The
+		// settings page loses the download section and says so, rather than the app refusing
+		// to start on a machine where something in this feature is misconfigured.
+		log.Error("engine manager unavailable; the settings page will not offer downloads", "err", err)
+		host = nil
+	}
+
 	service, err := app.New(app.Options{
 		Store:    db,
 		Settings: settings,
@@ -158,8 +177,14 @@ func main() {
 	}
 
 	srv := &http.Server{
-		Addr:              *addr,
-		Handler:           httpapi.New(httpapi.Options{Settings: settings, App: service, Assets: assets, Logger: log}),
+		Addr: *addr,
+		Handler: httpapi.New(httpapi.Options{
+			Settings: settings,
+			App:      service,
+			Host:     host,
+			Assets:   assets,
+			Logger:   log,
+		}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 

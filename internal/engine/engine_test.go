@@ -49,6 +49,21 @@ type fakeUpstream struct {
 	assetRequests   int
 	failIfRequested bool
 	sentNotModified bool
+
+	// offerNewer adds a second nightly with binaries, one build ahead of the one the other
+	// tests install. Without it there is no way to ask for a *different* tag, and installing
+	// the tag already on disk is a no-op that must not be refused.
+	offerNewer bool
+}
+
+// newerTag is the build offered when offerNewer is set.
+func (f *fakeUpstream) newerTag() string { return "b12650" }
+
+func (f *fakeUpstream) newerAssetName() string {
+	if runtime.GOOS == "windows" {
+		return "llama-" + f.newerTag() + "-bin-win-vulkan-x64.zip"
+	}
+	return "llama-" + f.newerTag() + "-bin-ubuntu-vulkan-x64.tar.gz"
 }
 
 func newFake(t *testing.T) *fakeUpstream {
@@ -61,21 +76,34 @@ func newFake(t *testing.T) *fakeUpstream {
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/api"):
 			f.apiRequests++
-			if r.Header.Get("If-None-Match") == f.etag {
+			// The validator moves with the content. A fixture that served a different list
+			// under the same ETag would make a client that revalidates correctly look broken —
+			// which is the kind of bug that gets "fixed" in the client and shipped.
+			et := f.etag
+			if f.offerNewer {
+				et = f.etag + "-with-newer"
+			}
+			if r.Header.Get("If-None-Match") == et {
 				f.sentNotModified = true
 				w.WriteHeader(http.StatusNotModified)
 				return
 			}
-			w.Header().Set("ETag", f.etag)
+			w.Header().Set("ETag", et)
 			w.Header().Set("Content-Type", "application/json")
+			extra := ""
+			if f.offerNewer {
+				extra = fmt.Sprintf(`{"tag_name":%q,"published_at":"2026-11-24T04:00:00Z","html_url":"https://example.invalid/newer",
+				   "assets":[{"name":%q,"browser_download_url":"%s/asset","size":%d,"digest":"sha256:%s"}]},`,
+					f.newerTag(), f.newerAssetName(), f.addr, len(f.asset), f.digest())
+			}
 			fmt.Fprintf(w, `[
-			  {"tag_name":"v1.0.0","published_at":"2026-11-13T10:20:19Z","html_url":"https://example.invalid/v1",
+			  %s{"tag_name":"v1.0.0","published_at":"2026-11-13T10:20:19Z","html_url":"https://example.invalid/v1",
 			   "assets":[{"name":"nightly-tag.txt","browser_download_url":"%s/asset","size":12,"digest":"sha256:%s"}]},
 			  {"tag_name":"b12649","published_at":"2026-11-23T04:00:00Z","html_url":"https://example.invalid/b12649",
 			   "assets":[{"name":"llama-b12649-something-else.zip","browser_download_url":"%s/asset","size":9,"digest":""},
 			             {"name":"%s","browser_download_url":"%s/asset","size":%d,"digest":"sha256:%s"}]},
 			  {"tag_name":"b12648","published_at":"2026-11-22T04:00:00Z","html_url":"https://example.invalid/b12648","assets":[]}
-			]`, f.addr, strings.Repeat("0", 64), f.addr, f.assetName(), f.addr, len(f.asset), f.digest())
+			]`, extra, f.addr, strings.Repeat("0", 64), f.addr, f.assetName(), f.addr, len(f.asset), f.digest())
 
 		case r.URL.Path == "/asset":
 			f.assetRequests++

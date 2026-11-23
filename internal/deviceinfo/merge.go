@@ -6,7 +6,8 @@ import (
 	"strings"
 )
 
-// Options additions used only by the collectors, kept in one place.
+// readDir is os.ReadDir unless a test replaced it. It lives here rather than in
+// withDefaults because both the collectors and Fingerprint use it, and only those two.
 func (o Options) readDir(name string) ([]os.DirEntry, error) {
 	if o.ReadDir != nil {
 		return o.ReadDir(name)

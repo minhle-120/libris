@@ -22,6 +22,8 @@ export type Settings = {
 	rerankURL: string;
 	apiKey: string;
 	timeoutSeconds: number;
+	engineBackend: 'vulkan' | 'cpu';
+	engineProxy: string;
 	chatModel: string;
 	embedModel: string;
 	embedDimensions: string;
@@ -41,6 +43,35 @@ export type Settings = {
 };
 
 export const settingGroups: SettingGroup[] = [
+	{
+		"id": "engine",
+		"label": "Engine",
+		"help": "libris downloads and runs the llama.cpp build for this machine, into the data directory. Nothing is fetched until you ask.",
+		"fields": [
+			{
+				"key": "engineBackend",
+				"label": "Engine build",
+				"help": "Which llama.cpp build libris downloads. Vulkan is one build for NVIDIA, AMD and Intel; CPU only is the fallback when no Vulkan device will start.",
+				"kind": "enum",
+				"options": [
+					{
+						"value": "vulkan",
+						"label": "Vulkan (NVIDIA, AMD, Intel)"
+					},
+					{
+						"value": "cpu",
+						"label": "CPU only"
+					}
+				]
+			},
+			{
+				"key": "engineProxy",
+				"label": "Download mirror",
+				"help": "Optional prefix for the engine download, for networks that cannot reach github.com. The version check still goes to GitHub, because a file mirror rarely mirrors its API.",
+				"kind": "url"
+			}
+		]
+	},
 	{
 		"id": "connection",
 		"label": "llama.cpp servers",
@@ -245,6 +276,8 @@ export function defaultSettings(): Settings {
 		rerankURL: "http://127.0.0.1:8083",
 		apiKey: "",
 		timeoutSeconds: 300,
+		engineBackend: "vulkan",
+		engineProxy: "",
 		chatModel: "",
 		embedModel: "",
 		embedDimensions: "",

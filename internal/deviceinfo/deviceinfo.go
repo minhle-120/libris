@@ -144,7 +144,7 @@ func Detect(ctx context.Context, opts Options) Report {
 	rep.Devices = dedupe(rep.Devices)
 	rep.Warnings = append(rep.Warnings, warn(rep.Devices)...)
 
-	rep.Fingerprint = fingerprint(rep, opts)
+	rep.Fingerprint = Fingerprint(opts)
 	rep.CheckedAt = opts.Now().UTC()
 	return rep
 }
@@ -224,16 +224,43 @@ func warn(dev []Device) []string {
 	return w
 }
 
-// fingerprint is the cache key: a driver update, a reboot, or a card moving slot must
-// produce a different string, or a stale report would sit in front of a changed machine.
-func fingerprint(r Report, o Options) string {
-	parts := make([]string, 0, len(r.Devices)+2)
-	for _, d := range r.Devices {
-		parts = append(parts, fmt.Sprintf("%s/%s/%d/%s", d.Kind, d.Name, d.TotalBytes, d.Driver))
+// Fingerprint is the cache key, and it is computed from cheap inputs on purpose: boot id,
+// the display devices on the PCI bus with their vendor ids, and the NVIDIA driver version.
+// Nothing is run and no GPU is initialised, so a stale cache can be recognised before a
+// probe is paid for — which is the only order that makes a cache worth having.
+//
+// A driver update, a reboot, or a card moving slot each change it. What it cannot see is a
+// memory size changing on its own, which is why the cache also has an age (Load's maxAge):
+// on Windows and macOS, where there is no boot id to read, age is the only invalidation and
+// the fingerprint mostly just distinguishes one machine from another.
+func Fingerprint(o Options) string {
+	o = o.withDefaults()
+
+	var parts []string
+	if id := o.BootID(); id != "" {
+		parts = append(parts, "boot="+id)
+	}
+	if raw, err := o.ReadFile("/sys/module/nvidia/version"); err == nil {
+		parts = append(parts, "nv="+strings.Fields(string(raw))[0])
+	}
+	if entries, err := o.readDir("/sys/bus/pci/devices"); err == nil {
+		for _, e := range entries {
+			class, err := o.ReadFile("/sys/bus/pci/devices/" + e.Name() + "/class")
+			if err != nil || !isDisplayClass(string(class)) {
+				continue
+			}
+			vendor, _ := o.ReadFile("/sys/bus/pci/devices/" + e.Name() + "/vendor")
+			parts = append(parts, e.Name()+":"+strings.TrimSpace(string(vendor)))
+		}
 	}
 	sort.Strings(parts)
-	parts = append(parts, r.OS+"/"+r.Arch, "boot="+o.BootID())
+	parts = append(parts, runtime.GOOS+"/"+runtime.GOARCH)
 	return strings.Join(parts, "|")
+}
+
+func isDisplayClass(class string) bool {
+	class = strings.TrimPrefix(strings.TrimSpace(class), "0x")
+	return len(class) >= 2 && class[:2] == pciClassMask
 }
 
 // readBootID is a linuxism that is empty everywhere else, which is the honest answer: on

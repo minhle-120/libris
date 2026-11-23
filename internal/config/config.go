@@ -35,6 +35,14 @@ func Enums() map[string][]EnumValue {
 			{Value: string(PDFModeAlways), Label: "Text + page image"},
 			{Value: string(PDFModeFallback), Label: "Page image only when text is missing"},
 		},
+		// The engine builds upstream publishes for this platform. Vulkan is the one asset
+		// that runs on NVIDIA, AMD and Intel alike, so it is the default and the CPU build
+		// is the fallback for a machine whose driver cannot present a Vulkan device — not a
+		// "GPU off" toggle, which would be a claim about inference this app cannot make.
+		"engineBackends": {
+			{Value: "vulkan", Label: "Vulkan (NVIDIA, AMD, Intel)"},
+			{Value: "cpu", Label: "CPU only"},
+		},
 	}
 }
 
@@ -60,6 +68,14 @@ type Config struct {
 	RerankURL      string `key:"rerankURL" group:"connection" label:"Rerank server" help:"Optional. Degrades to vector order when unset." kind:"url"`
 	APIKey         string `key:"apiKey" group:"connection" label:"API key" help:"Sent as a bearer token to all three servers." kind:"password"`
 	TimeoutSeconds int    `key:"timeoutSeconds" group:"connection" label:"Request timeout" help:"Local CPU inference is slow. Lower it for GPU." min:"5" max:"3600" unit:"s"`
+
+	// ── engine ───────────────────────────────────────────────────
+	// What libris can apply: which prebuilt build to fetch, and where through. The
+	// version is not a setting because it is not a choice — the newest build with a binary
+	// for this platform is the answer, and the copy on disk is shown as a fact on the
+	// settings page. Nor is any capacity number here: -fit decides those (ADR 0011).
+	EngineBackend string `key:"engineBackend" group:"engine" label:"Engine build" help:"Which llama.cpp build libris downloads. Vulkan is one build for NVIDIA, AMD and Intel; CPU only is the fallback when no Vulkan device will start." kind:"enum" enum:"engineBackends"`
+	EngineProxy   string `key:"engineProxy" group:"engine" label:"Download mirror" help:"Optional prefix for the engine download, for networks that cannot reach github.com. The version check still goes to GitHub, because a file mirror rarely mirrors its API." kind:"url"`
 
 	// ── models ───────────────────────────────────────────────────
 	// Model names are what the user's own llama-server answers to. Libris ships no
@@ -91,6 +107,7 @@ type Config struct {
 // Group titles and copy. Presentation only; the fields themselves are above.
 func groups() []struct{ ID, Label, Help string } {
 	return []struct{ ID, Label, Help string }{
+		{"engine", "Engine", "libris downloads and runs the llama.cpp build for this machine, into the data directory. Nothing is fetched until you ask."},
 		{"connection", "llama.cpp servers", "One process per model. Separate ports keep embedding and chat from starving each other."},
 		{"models", "Models", "Names are what the server reports. Changing the embedder re-indexes every source."},
 		{"retrieval", "Retrieval", "Research loop budget. Every extra iteration costs one search round trip."},
@@ -100,6 +117,9 @@ func groups() []struct{ ID, Label, Help string } {
 
 func Default() Config {
 	return Config{
+		EngineBackend: "vulkan",
+		EngineProxy:   "",
+
 		ChatURL:        "http://127.0.0.1:8081",
 		EmbedURL:       "http://127.0.0.1:8082",
 		RerankURL:      "http://127.0.0.1:8083",
