@@ -13,17 +13,20 @@ export type SettingField = {
 	max?: number;
 	readonly?: boolean;
 	options?: SettingOption[];
+	/** Which engine mode this field means anything in; absent means both. */
+	mode?: 'managed' | 'external';
 };
 export type SettingGroup = { id: string; label: string; help: string; fields: SettingField[] };
 
 export type Settings = {
+	engineMode: 'managed' | 'external';
+	enginePort: number;
+	engineProxy: string;
 	chatURL: string;
 	embedURL: string;
 	rerankURL: string;
 	apiKey: string;
 	timeoutSeconds: number;
-	engineBackend: 'vulkan' | 'cpu';
-	engineProxy: string;
 	chatModel: string;
 	embedModel: string;
 	embedDimensions: string;
@@ -44,61 +47,67 @@ export type Settings = {
 
 export const settingGroups: SettingGroup[] = [
 	{
-		"id": "engine",
-		"label": "Engine",
-		"help": "libris downloads and runs the llama.cpp build for this machine, into the data directory. Nothing is fetched until you ask.",
+		"id": "servers",
+		"label": "Model servers",
+		"help": "Either libris runs llama.cpp for you, or it talks to servers you started. The switch decides which of these fields exist — libris does not ask for an address it is about to compute.",
 		"fields": [
 			{
-				"key": "engineBackend",
-				"label": "Engine build",
-				"help": "Which llama.cpp build libris downloads. Vulkan is one build for NVIDIA, AMD and Intel; CPU only is the fallback when no Vulkan device will start.",
+				"key": "engineMode",
+				"label": "Who runs them",
+				"help": "Libris can download llama.cpp, run it, and derive the addresses itself — or talk to servers you started. Not both.",
 				"kind": "enum",
 				"options": [
 					{
-						"value": "vulkan",
-						"label": "Vulkan (NVIDIA, AMD, Intel)"
+						"value": "managed",
+						"label": "Download and run llama.cpp"
 					},
 					{
-						"value": "cpu",
-						"label": "CPU only"
+						"value": "external",
+						"label": "Servers I run myself"
 					}
 				]
 			},
 			{
+				"key": "enginePort",
+				"label": "Server port",
+				"help": "The loopback port libris runs llama.cpp on. Chat, embeddings and reranking share it.",
+				"kind": "number",
+				"min": 1024,
+				"max": 65535,
+				"mode": "managed"
+			},
+			{
 				"key": "engineProxy",
 				"label": "Download mirror",
-				"help": "Optional prefix for the engine download, for networks that cannot reach github.com. The version check still goes to GitHub, because a file mirror rarely mirrors its API.",
-				"kind": "url"
-			}
-		]
-	},
-	{
-		"id": "connection",
-		"label": "llama.cpp servers",
-		"help": "One process per model. Separate ports keep embedding and chat from starving each other.",
-		"fields": [
+				"help": "Optional prefix for the llama.cpp download, for networks that cannot reach github.com. The version check still goes to GitHub, because a file mirror rarely mirrors its API.",
+				"kind": "url",
+				"mode": "managed"
+			},
 			{
 				"key": "chatURL",
 				"label": "Chat server",
 				"help": "Text, image and audio input.",
-				"kind": "url"
+				"kind": "url",
+				"mode": "external"
 			},
 			{
 				"key": "embedURL",
 				"label": "Embedding server",
 				"help": "Multimodal embeddings for text, page images and audio.",
-				"kind": "url"
+				"kind": "url",
+				"mode": "external"
 			},
 			{
 				"key": "rerankURL",
 				"label": "Rerank server",
 				"help": "Optional. Degrades to vector order when unset.",
-				"kind": "url"
+				"kind": "url",
+				"mode": "external"
 			},
 			{
 				"key": "apiKey",
 				"label": "API key",
-				"help": "Sent as a bearer token to all three servers.",
+				"help": "Sent as a bearer token to every server.",
 				"kind": "password"
 			},
 			{
@@ -121,13 +130,15 @@ export const settingGroups: SettingGroup[] = [
 				"key": "chatModel",
 				"label": "Chat model",
 				"help": "The name your chat server answers to. Must support tool calls for the research loop.",
-				"kind": "text"
+				"kind": "text",
+				"mode": "external"
 			},
 			{
 				"key": "embedModel",
 				"label": "Embedding model",
 				"help": "The name your embedding server answers to.",
-				"kind": "text"
+				"kind": "text",
+				"mode": "external"
 			},
 			{
 				"key": "embedDimensions",
@@ -140,7 +151,8 @@ export const settingGroups: SettingGroup[] = [
 				"key": "rerankModel",
 				"label": "Reranker",
 				"help": "The name your rerank server answers to; blank when reranking is off.",
-				"kind": "text"
+				"kind": "text",
+				"mode": "external"
 			},
 			{
 				"key": "rerankEnabled",
@@ -271,13 +283,14 @@ export const settingGroups: SettingGroup[] = [
 
 export function defaultSettings(): Settings {
 	return {
+		engineMode: "managed",
+		enginePort: 8080,
+		engineProxy: "",
 		chatURL: "http://127.0.0.1:8081",
 		embedURL: "http://127.0.0.1:8082",
 		rerankURL: "http://127.0.0.1:8083",
 		apiKey: "",
 		timeoutSeconds: 300,
-		engineBackend: "vulkan",
-		engineProxy: "",
 		chatModel: "",
 		embedModel: "",
 		embedDimensions: "",

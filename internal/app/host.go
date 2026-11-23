@@ -15,14 +15,17 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
 	"libris/internal/config"
 	"libris/internal/deviceinfo"
 	"libris/internal/engine"
+	"libris/internal/models"
 )
 
 // deviceCacheAge bounds how long a device report stays reusable without asking again. The
@@ -71,18 +74,26 @@ type HostOptions struct {
 	DeviceCache string
 	Logger      *slog.Logger
 
+	// Serve and ModelsDir are the managed half (ADR 0020): the supervisor that owns libris's
+	// own llama-server, and the directory its models come from. Either may be nil/empty in a
+	// build without a data directory; managed mode then says so rather than pretending.
+	Serve     *engine.Supervisor
+	ModelsDir string
+
 	// Probe asks the installed engine what it can run on. It is a field so the caching around it can be tested on a
 	// machine with neither a GPU nor permission to run anything; nil means the real one.
 	Probe func(context.Context, deviceinfo.Options) (deviceinfo.Report, error)
 }
 
 type Host struct {
-	engine   EngineManager
-	settings Settings
-	devCache string
-	probe    func(context.Context, deviceinfo.Options) (deviceinfo.Report, error)
-	log      *slog.Logger
-	now      func() time.Time
+	engine    EngineManager
+	settings  Settings
+	devCache  string
+	serve     *engine.Supervisor
+	modelsDir string
+	probe     func(context.Context, deviceinfo.Options) (deviceinfo.Report, error)
+	log       *slog.Logger
+	now       func() time.Time
 
 	// The update check is a background act, so its state is process state: one in flight, and
 	// the sentence from the last one that failed. Guarded because the page can be open in two
@@ -112,12 +123,14 @@ func NewHost(opts HostOptions) (*Host, error) {
 	}
 
 	return &Host{
-		engine:   opts.Engine,
-		settings: opts.Settings,
-		devCache: opts.DeviceCache,
-		probe:    probe,
-		log:      log,
-		now:      func() time.Time { return time.Now().UTC() },
+		engine:    opts.Engine,
+		settings:  opts.Settings,
+		devCache:  opts.DeviceCache,
+		serve:     opts.Serve,
+		modelsDir: opts.ModelsDir,
+		probe:     probe,
+		log:       log,
+		now:       func() time.Time { return time.Now().UTC() },
 	}, nil
 }
 
@@ -125,6 +138,29 @@ func NewHost(opts HostOptions) (*Host, error) {
 // engine.Manager's own types because the three questions the page asks do not line up with
 // the three the manager answers, and a frontend should not have to assemble them.
 type EngineView struct {
+	// Mode is which half of this section the page is showing: "managed" when libris runs
+	// llama.cpp, "external" when somebody else does. It is in the view because a page that
+	// inferred it from the settings response could disagree with the server about whether
+	// there is a device list to show at all (ADR 0020).
+	Mode string `json:"mode"`
+
+	// Endpoint, Port and Aliases are what managed mode derives instead of asking someone to
+	// type: one loopback address, one port, three names from the preset libris wrote. Served
+	// rather than stored, so the page cannot show an address that disagrees with the process.
+	Endpoint string   `json:"endpoint,omitempty"`
+	Port     int      `json:"port,omitempty"`
+	Aliases  []string `json:"aliases,omitempty"`
+
+	// Serve is libris's own llama-server. Absent in external mode, where there is nothing
+	// here to run — and saying "stopped" about a server this mode never starts is exactly
+	// the kind of field that made the old page confusing.
+	Serve *engine.Serving `json:"serve,omitempty"`
+
+	// Models are the GGUFs on this disk that libris knows how to use, in role order. A role
+	// with no file is absent rather than empty, so the page can offer the pattern to put one
+	// there.
+	Models []ModelView `json:"models,omitempty"`
+
 	// Installed is the copy on this disk, or nil — which is the state a first run is in, and
 	// has to be able to say so out loud rather than as an empty object.
 	Installed *engine.Installed `json:"installed,omitempty"`
@@ -158,16 +194,30 @@ type EngineView struct {
 // would be a worse page than one with a sentence where the update button was.
 func (h *Host) Engine(ctx context.Context, force bool) (*EngineView, error) {
 	cfg := h.settings.Get()
-	backend := engine.Backend(cfg.EngineBackend)
-	if backend == "" {
-		backend = engine.Vulkan
-	}
+	// One build for every machine: Vulkan presents itself on NVIDIA, AMD and Intel alike, and
+	// on pure CPU when no Vulkan device will open. There is no setting here because there is
+	// no choice to make (ADR 0020) — which is the same reason ADR 0019 made the engine the
+	// only device probe.
+	const backend = engine.Vulkan
 
 	v := &EngineView{
+		Mode:       string(cfg.EngineMode),
 		Backend:    string(backend),
+		Endpoint:   h.endpoint(cfg),
 		Dir:        h.engine.Dir(),
 		Progress:   h.engine.Progress(),
 		PartsBytes: h.engine.PartsBytes(),
+	}
+	if cfg.EngineMode == config.EngineManaged {
+		v.Port = cfg.EnginePort
+		v.Aliases = aliasNames
+		v.Models = h.modelViews()
+		if h.serve != nil {
+			srv := h.serve.Status()
+			v.Serve = &srv
+		} else {
+			v.Serve = &engine.Serving{Port: cfg.EnginePort, Error: "This build has no data directory to run an engine from."}
+		}
 	}
 	if in, ok := h.engine.Status(); ok {
 		have := in
@@ -257,10 +307,7 @@ func (h *Host) startCheck(b engine.Backend, force, needed bool) bool {
 // cannot see the release list.
 func (h *Host) EngineInstall(ctx context.Context, tag string) (engine.Installed, error) {
 	cfg := h.settings.Get()
-	backend := engine.Backend(cfg.EngineBackend)
-	if backend == "" {
-		backend = engine.Vulkan
-	}
+	const backend = engine.Vulkan
 	h.engine.SetProxy(cfg.EngineProxy)
 
 	if tag == "" {
@@ -371,9 +418,169 @@ func (h *Host) invalidateDevices(because string) {
 	h.log.Debug("device cache invalidated", "because", because)
 }
 
-// SettingsChanged reports whether a saved settings change means the engine view should be
-// refetched: the build selection decides which asset is offered next, so the page that saved
-// it must not still be showing the other one's size.
+// SettingsChanged reports whether a saved settings change means the machine section should be
+// refetched. The mode decides which half of the page is showing and the port decides what
+// libris would bind if it ran the server; the mirror decides which bytes a download fetches.
 func (h *Host) SettingsChanged(prev, next config.Config) bool {
-	return prev.EngineBackend != next.EngineBackend || prev.EngineProxy != next.EngineProxy
+	return prev.EngineMode != next.EngineMode ||
+		prev.EnginePort != next.EnginePort ||
+		prev.EngineProxy != next.EngineProxy
 }
+
+// ModelView is one GGUF on this disk, as the page shows it.
+type ModelView struct {
+	Role   string `json:"role"`
+	Alias  string `json:"alias"`
+	File   string `json:"file"`
+	Path   string `json:"path"`
+	Bytes  int64  `json:"bytes"`
+	MMProj string `json:"mmproj,omitempty"`
+}
+
+// aliasNames is what managed mode fills the model configuration in as. Three names libris
+// chose, rather than three fields asking a person to copy what the preset already says.
+var aliasNames = []string{
+	string(engine.AliasChat),
+	string(engine.AliasEmbed),
+	string(engine.AliasRerank),
+}
+
+// endpoint is the one address managed mode talks to. External mode has none: the three
+// addresses are in the settings the user typed, and inventing a single one there would be
+// the old confusion in a new place.
+func (h *Host) endpoint(cfg config.Config) string {
+	if cfg.EngineMode != config.EngineManaged {
+		return ""
+	}
+	return engine.Endpoint("127.0.0.1", cfg.EnginePort)
+}
+
+// modelViews reads the models directory. A directory that does not exist is not an error:
+// "no models yet, and here is where one would go" is a state the page has to be able to show.
+func (h *Host) modelViews() []ModelView {
+	if h.modelsDir == "" {
+		return nil
+	}
+	var out []ModelView
+	for _, m := range models.Scan(h.modelsDir) {
+		out = append(out, ModelView{
+			Role: string(m.Role), Alias: string(m.Alias), File: m.Name,
+			Path: m.Path, Bytes: m.Size, MMProj: m.MMProj,
+		})
+	}
+	return out
+}
+
+// ErrEngineMode is a request that belongs to the other half of the switch — a start asked for
+// while libris is configured to talk to someone else's servers. It is ErrInvalid-shaped
+// because the fix is a setting, not a retry.
+var ErrEngineMode = errors.New("app: libris is set to talk to servers you run yourself")
+
+// EngineServe starts libris's own llama-server: one router process, every model on disk, one
+// port (ADR 0020). It blocks until the router answers or the wait runs out, because a page
+// that said "running" about a process that dies while loading a GGUF would be a page that
+// lies — and the first load of a 3 GB model is exactly when it does.
+func (h *Host) EngineServeStart(ctx context.Context) (engine.Serving, error) {
+	cfg := h.settings.Get()
+	if cfg.EngineMode != config.EngineManaged {
+		return engine.Serving{}, ErrEngineMode
+	}
+	if h.serve == nil {
+		return engine.Serving{}, fmt.Errorf("%w: this build has no data directory", ErrEngineMode)
+	}
+	inst, ok := h.engine.Status()
+	if !ok {
+		return engine.Serving{}, fmt.Errorf("%w: download the engine first", ErrInvalid)
+	}
+
+	mods := models.Scan(h.modelsDir)
+	var specs []engine.Model
+	for _, m := range mods {
+		kind := engine.KindChat
+		switch m.Role {
+		case models.RoleEmbed:
+			kind = engine.KindEmbed
+		case models.RoleRerank:
+			kind = engine.KindRerank
+		}
+		specs = append(specs, engine.Model{Alias: m.Alias, Kind: kind, Path: m.Path, MMProj: m.MMProj})
+	}
+	if len(specs) == 0 {
+		return engine.Serving{}, fmt.Errorf("%w: no model in %s — a chat model named %s",
+			ErrInvalid, h.modelsDir, models.Pattern(models.RoleChat))
+	}
+
+	srv, err := h.serve.Start(ctx, engine.ServeOptions{
+		Bin:             inst.Path,
+		Port:            cfg.EnginePort,
+		Preset:          filepath.Join(h.engine.Dir(), "presets", "libris.ini"),
+		Log:             filepath.Join(h.engine.Dir(), "logs", "server.log"),
+		MemoryMarginMiB: memoryMarginMiB,
+	}, specs)
+	if err != nil {
+		h.log.Warn("engine serve", "err", err)
+		// A port conflict and a dead model are both the user's to fix, and both are
+		// sentences; only an unhandled one should read as a bug.
+		if errors.Is(err, engine.ErrAlreadyServing) || errors.Is(err, engine.ErrPortTaken) ||
+			errors.Is(err, context.DeadlineExceeded) {
+			return srv, fmt.Errorf("%w: %s", ErrBusy, srv.Error)
+		}
+		return srv, fmt.Errorf("%w: %s", ErrInvalid, srv.Error)
+	}
+	return srv, nil
+}
+
+// EngineAutostart brings the router up on boot when managed mode asked for a server and one
+// can be run. It is quiet by design — a debug line on success, a warning on failure — because
+// it runs beside the listener, and a machine that cannot start a model server still gets a
+// working app and a settings page that says what happened.
+func (h *Host) EngineAutostart(ctx context.Context) {
+	cfg := h.settings.Get()
+	if cfg.EngineMode != config.EngineManaged || h.serve == nil {
+		return
+	}
+	if cur := h.serve.Status(); cur.Running {
+		return
+	}
+	if _, ok := h.engine.Status(); !ok {
+		return // nothing downloaded; the page's download button is the answer
+	}
+	if len(models.Scan(h.modelsDir)) == 0 {
+		return // no model to run; the page names the file it is looking for
+	}
+	srv, err := h.EngineServeStart(ctx)
+	if err != nil {
+		h.log.Warn("engine: not running; the settings page says why", "err", err, "said", srv.Error)
+		return
+	}
+	h.log.Debug("engine: router up", "port", srv.Port, "models", len(srv.Models))
+}
+
+// EngineServeStop stops the process. Stopping is not the same act as cancelling a job or a
+// download (AGENTS §11, and the difference EngineStop above makes): the process is ours, and
+// the answer to "then stop it" is a signal. Not running is not an error — the button that
+// asked has already got the state it wanted.
+func (h *Host) EngineServeStop(ctx context.Context) error {
+	if h.serve == nil {
+		return fmt.Errorf("%w: this build has no data directory", ErrEngineMode)
+	}
+	if err := h.serve.Stop(); err != nil && !errors.Is(err, engine.ErrNotServing) {
+		return fmt.Errorf("app: stop the engine: %w", err)
+	}
+	return nil
+}
+
+// ServeStatus reports libris's own server, for the page that shows whether anything is
+// running at all.
+func (h *Host) ServeStatus() engine.Serving {
+	if h.serve == nil {
+		return engine.Serving{}
+	}
+	return h.serve.Status()
+}
+
+// memoryMarginMiB is what the router keeps free on each device before unloading the least
+// recently used model. It is a constant rather than a setting because it is not a preference
+// and not an ability libris applies — it is a number chosen for three models on a small card,
+// and a settings field would imply the page knows what the card can hold (ADR 0011).
+const memoryMarginMiB = 512

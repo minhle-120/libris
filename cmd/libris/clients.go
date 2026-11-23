@@ -28,6 +28,10 @@ type clientCache struct {
 // For returns a client built from cfg. Only the fields that change *how libris
 // connects* are part of the key: model names and the like travel per request.
 func (c *clientCache) For(cfg config.Config) (*llm.Client, error) {
+	// The address a request goes to is decided here and nowhere else. In managed mode it is
+	// the router libris runs; in external mode it is what the settings say (ADR 0020).
+	cfg = cfg.Served()
+
 	key := strings.Join([]string{
 		cfg.ChatURL, cfg.EmbedURL, cfg.RerankURL, cfg.APIKey,
 		strconv.Itoa(cfg.TimeoutSeconds),

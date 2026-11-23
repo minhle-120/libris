@@ -90,6 +90,19 @@ func (c *Config) applyJSON(b []byte, strict bool) ([]string, error) {
 		}
 		field.Set(target.Elem())
 	}
+
+	// A settings file written before engineMode existed was written by a libris that had
+	// exactly one mode — the one where the user runs the servers — so that is what it means.
+	// Defaulting such a file to managed would take a working setup and point it at a port
+	// nothing is listening on, with the URLs it was using hidden behind the switch.
+	if !strict && len(raw) > 0 {
+		if _, ok := raw["engineMode"]; !ok {
+			if i, ok := byKey["engineMode"]; ok {
+				val.Field(i).SetString(string(EngineExternal))
+			}
+		}
+	}
+
 	slices.Sort(dropped)
 	return dropped, c.Validate()
 }

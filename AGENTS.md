@@ -120,6 +120,7 @@ next one, so what each one settles, in the order an agent is likely to need it:
 | the notebook's columns, the panel, the breadcrumb, a conversation | 0012, 0014, 0015, 0017 | Sources and Activity are a panel beside the chat, not pages instead of it; the header ends at the chat you are reading; conversations are the second level of the notebook list, not a control in the composer; a window too narrow for both fixed columns closes the panel, never the chat |
 | how settings reach the browser | 0002 | settings are served and saved over HTTP |
 | whether llama.cpp ships with libris, or is fetched | 0018 | it is fetched, on demand, unpinned, verified against upstream's digest |
+| whether libris runs the model servers, or somebody else does | 0020 | one switch, exclusive: managed mode fetches the Vulkan build, runs one llama.cpp in router mode, and derives the addresses; the build was never a choice |
 | what libris is allowed to learn about the machine | 0018, 0019 | the engine's `--list-devices` is the *only* device probe — no `nvidia-smi`, no `lspci`, no WMI — so a machine with nothing installed is told it has not been asked, not that it has no GPU |
 
 ---
@@ -189,7 +190,8 @@ internal/
   app/                 use cases shared by both transports (+ ingest queue)
   httpapi/             browser transport: JSON, files, embedded SPA, the SSE ask stream
   events/              not built: status/token/job events
-  engine/              llama.cpp's own prebuilt releases: find, verify, unpack, stop, remove
+  engine/              llama.cpp's prebuilt releases: find, verify, unpack — and the one router process managed mode runs (serve.go: preset, start, stop, state)
+  models/              which GGUFs are on this disk and which role each one fills
   deviceinfo/          what the machine can run, asked of the installed engine and cached in <data>/devices.json
   mcpserver/           not built: MCP transport
 web/                   Svelte source, embed.go, and dist/ — committed, because go:embed bakes it in
@@ -216,9 +218,11 @@ Two rules the layout exists to enforce:
 `chat` takes evidence as *input* and must not call `retrieve` itself. Orchestration lives
 in `app` so both transports share one implementation.
 
-**Built:** settings and the generated settings UI, the machine's device report, and the
-on-demand download of llama.cpp's prebuilt binaries (`docs/llamacpp.md` has the release
-facts, ADR 0018 why they are fetched rather than shipped); ingest of text, PDFs (text +
+**Built:** settings and the generated settings UI — including the one switch that decides
+whether libris runs the model servers or talks to servers you started (ADR 0020), and the
+router process, its preset file and its derived addresses; the machine's device report, and
+the on-demand download of llama.cpp's prebuilt binaries (`docs/llamacpp.md` has the release
+facts and the router-mode flags, ADR 0018 why the build is fetched rather than shipped); ingest of text, PDFs (text +
 rasters), images and audio slices; embedding; recall, rerank and the registry; the
 research loop and synthesis; turn persistence in a chat that a question finds, starts, or
 deletes; the SSE ask stream; the web UI including the conversation tree, the chunk
@@ -229,7 +233,10 @@ inspector, and answers rendered as markdown with LaTeX (ADR 0016); `make check`,
 are empty directories, untracked); ingest progress events; audio transcription — slicing
 works, so audio is retrievable by embedding, but `Segment.Text` stays empty and the
 synthesiser cannot quote it; lexical recall; vector ANN (retrieval is a brute-force
-cosine scan); an eval set; model-server packaging; Office formats.
+cosine scan); an eval set; model-server packaging; Office formats; and the GGUF downloads —
+managed mode supervises a router over whatever `<data>/models` already holds, and the menu
+that fetches a model into it is the next thing (ADR 0020 defers which three, and at what
+quantisation, deliberately).
 
 ---
 
@@ -286,7 +293,7 @@ PDFDPI int `key:"pdfDPI" group:"ingest" label:"PDF raster DPI" help:"…"
   from the same tags.
 - `schema.go` reflects the struct into `web/src/lib/config.gen.ts`.
   `TestGeneratedSchemaIsCurrent` fails the build when that file is stale — run
-  `make generate`. **Never hand-edit it, never add a setting to the frontend.** 21
+  `make generate`. **Never hand-edit it, never add a setting to the frontend.** 24
   settings exist today — capacity is deliberately absent (rule 1 of the
   non-negotiables), and the three model names default to blank because a prefilled name
   is a guess about someone else's server that looks configured and fails anyway.
@@ -306,6 +313,13 @@ PDFDPI int `key:"pdfDPI" group:"ingest" label:"PDF raster DPI" help:"…"
   changes — model names are not part of the key, they travel per request. Anything new
   that caches a client, a pool or a path from settings must go through the same
   discipline, or the settings UI lies.
+- **Managed mode's addresses are derived, never stored.** `Config.Served()` is the one place
+  a stored value becomes a request: in managed mode the three URLs and the three model names
+  come from the port and the preset's aliases, and `settings.json` keeps holding whatever it
+  held (ADR 0020). Anything new that needs an endpoint calls `Served()` rather than reading
+  `ChatURL` — a derived value saved once is a second source of truth that goes stale the
+  moment the port changes. A settings file that predates the field means external mode,
+  because that is the only mode the file can have described.
 
 ---
 

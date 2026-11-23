@@ -131,3 +131,48 @@ func TestEnums(t *testing.T) {
 		}
 	}
 }
+
+// Managed mode is not a label on the same three URLs: the address and the model names are
+// facts about the process libris runs, so they are derived where a stored value becomes a
+// request, and never written back as settings (ADR 0020).
+func TestServedDerivesManagedMode(t *testing.T) {
+	c := Default()
+	if c.EngineMode != EngineManaged {
+		t.Fatalf("a new install should default to managed, got %q", c.EngineMode)
+	}
+	c.EnginePort = 9099
+	c.ChatModel = "something-somebody-typed"
+
+	got := c.Served()
+	for _, u := range []string{got.ChatURL, got.EmbedURL, got.RerankURL} {
+		if u != "http://127.0.0.1:9099" {
+			t.Errorf("managed URL = %q, want the loopback port libris binds", u)
+		}
+	}
+	if got.ChatModel != "libris-chat" || got.EmbedModel != "libris-embed" || got.RerankModel != "libris-rerank" {
+		t.Errorf("managed models = %q/%q/%q", got.ChatModel, got.EmbedModel, got.RerankModel)
+	}
+	// The stored config is untouched: a derived value that lands in settings.json is a
+	// second source of truth that goes stale the moment the port changes.
+	if c.ChatURL == got.ChatURL || c.ChatModel == got.ChatModel {
+		t.Error("Served wrote derived values back into the settings")
+	}
+}
+
+// External mode is the identity. The whole point of the switch is that the fields a person
+// typed are used exactly as typed.
+func TestServedIsTheIdentityInExternalMode(t *testing.T) {
+	c := Default()
+	c.EngineMode = EngineExternal
+	if got := c.Served(); got != c {
+		t.Errorf("external mode changed the config: %+v", got)
+	}
+}
+
+func TestEngineModeIsAnEnum(t *testing.T) {
+	c := Default()
+	c.EngineMode = "both"
+	if err := c.Validate(); err == nil {
+		t.Fatal("an engine mode that is neither managed nor external validated")
+	}
+}

@@ -8,6 +8,7 @@ package config
 
 import (
 	"fmt"
+	"libris/internal/engine"
 	"os"
 	"reflect"
 	"strconv"
@@ -35,16 +36,31 @@ func Enums() map[string][]EnumValue {
 			{Value: string(PDFModeAlways), Label: "Text + page image"},
 			{Value: string(PDFModeFallback), Label: "Page image only when text is missing"},
 		},
-		// The engine builds upstream publishes for this platform. Vulkan is the one asset
-		// that runs on NVIDIA, AMD and Intel alike, so it is the default and the CPU build
-		// is the fallback for a machine whose driver cannot present a Vulkan device — not a
-		// "GPU off" toggle, which would be a claim about inference this app cannot make.
-		"engineBackends": {
-			{Value: "vulkan", Label: "Vulkan (NVIDIA, AMD, Intel)"},
-			{Value: "cpu", Label: "CPU only"},
+		// There is no engine *build* choice: one Vulkan asset runs on NVIDIA, AMD and Intel
+		// alike, and on pure CPU when no Vulkan device will open (ADR 0020). What is a choice
+		// is where the models come from — and it is exclusive, so it is one enum rather than
+		// two toggles that can both be on.
+		"engineModes": {
+			{Value: string(EngineManaged), Label: "Download and run llama.cpp"},
+			{Value: string(EngineExternal), Label: "Servers I run myself"},
 		},
 	}
 }
+
+// EngineMode is the one answer to "where do the model servers come from", and it is
+// exclusive by construction: a machine either has libris fetching and running llama.cpp, or
+// it has servers somebody else started (ADR 0020). Both at once is what the settings page
+// used to offer, and every screen of it showed fields that belong to the other answer.
+type EngineMode string
+
+const (
+	// EngineManaged: libris downloads the Vulkan build, starts one llama-server in router
+	// mode on the loopback port below, and the endpoint and model names are derived from
+	// that process rather than typed into a field.
+	EngineManaged EngineMode = "managed"
+	// EngineExternal: the three URLs below are the whole configuration, as they always were.
+	EngineExternal EngineMode = "external"
+)
 
 // Config is flat on purpose: Go code reads cfg.PDFDPI, and the `group` tag
 // only affects how the generated UI arranges the rows.
@@ -54,38 +70,45 @@ func Enums() map[string][]EnumValue {
 //	key      JSON/TS property name (required)
 //	label    UI label
 //	help     UI description
-//	group    UI section: connection | models | retrieval | ingest
+//	group    UI section: servers | models | retrieval | ingest
 //	kind     text (default) | url | password | number | bool | enum
 //	enum     name in Enums()
 //	unit     suffix shown after the control
 //	min,max  range, validated by reflection
 //	required non-empty string
 //	readonly generated as a disabled control
+//	mode     "managed" — only means anything when libris runs the engine
+//	         "external" — only means anything when somebody else does
 type Config struct {
-	// ── llama.cpp servers ────────────────────────────────────────
-	ChatURL        string `key:"chatURL" group:"connection" label:"Chat server" help:"Text, image and audio input." kind:"url" required:"true"`
-	EmbedURL       string `key:"embedURL" group:"connection" label:"Embedding server" help:"Multimodal embeddings for text, page images and audio." kind:"url" required:"true"`
-	RerankURL      string `key:"rerankURL" group:"connection" label:"Rerank server" help:"Optional. Degrades to vector order when unset." kind:"url"`
-	APIKey         string `key:"apiKey" group:"connection" label:"API key" help:"Sent as a bearer token to all three servers." kind:"password"`
-	TimeoutSeconds int    `key:"timeoutSeconds" group:"connection" label:"Request timeout" help:"Local CPU inference is slow. Lower it for GPU." min:"5" max:"3600" unit:"s"`
+	// ── model servers ─────────────────────────────────────────────
+	// One group, because it is one question. The engine and the endpoints are not two
+	// topics a user has to reconcile: which mode is set decides which half of the group is
+	// shown, and the fields that are hidden are the ones libris derives.
+	EngineMode EngineMode `key:"engineMode" group:"servers" label:"Who runs them" help:"Libris can download llama.cpp, run it, and derive the addresses itself — or talk to servers you started. Not both." kind:"enum" enum:"engineModes" required:"true"`
 
-	// ── engine ───────────────────────────────────────────────────
-	// What libris can apply: which prebuilt build to fetch, and where through. The
-	// version is not a setting because it is not a choice — the newest build with a binary
-	// for this platform is the answer, and the copy on disk is shown as a fact on the
-	// settings page. Nor is any capacity number here: -fit decides those (ADR 0011).
-	EngineBackend string `key:"engineBackend" group:"engine" label:"Engine build" help:"Which llama.cpp build libris downloads. Vulkan is one build for NVIDIA, AMD and Intel; CPU only is the fallback when no Vulkan device will start." kind:"enum" enum:"engineBackends"`
-	EngineProxy   string `key:"engineProxy" group:"engine" label:"Download mirror" help:"Optional prefix for the engine download, for networks that cannot reach github.com. The version check still goes to GitHub, because a file mirror rarely mirrors its API." kind:"url"`
+	// The port libris binds its own server to. A setting because libris is the thing that
+	// binds it (ADR 0011: a setting is an ability the app can apply), and a loopback port
+	// rather than a URL because "which address" is not a choice when the process is ours.
+	EnginePort  int    `key:"enginePort" group:"servers" label:"Server port" help:"The loopback port libris runs llama.cpp on. Chat, embeddings and reranking share it." min:"1024" max:"65535" mode:"managed"`
+	EngineProxy string `key:"engineProxy" group:"servers" label:"Download mirror" help:"Optional prefix for the llama.cpp download, for networks that cannot reach github.com. The version check still goes to GitHub, because a file mirror rarely mirrors its API." kind:"url" mode:"managed"`
+
+	ChatURL        string `key:"chatURL" group:"servers" label:"Chat server" help:"Text, image and audio input." kind:"url" required:"true" mode:"external"`
+	EmbedURL       string `key:"embedURL" group:"servers" label:"Embedding server" help:"Multimodal embeddings for text, page images and audio." kind:"url" required:"true" mode:"external"`
+	RerankURL      string `key:"rerankURL" group:"servers" label:"Rerank server" help:"Optional. Degrades to vector order when unset." kind:"url" mode:"external"`
+	APIKey         string `key:"apiKey" group:"servers" label:"API key" help:"Sent as a bearer token to every server." kind:"password"`
+	TimeoutSeconds int    `key:"timeoutSeconds" group:"servers" label:"Request timeout" help:"Local CPU inference is slow. Lower it for GPU." min:"5" max:"3600" unit:"s"`
 
 	// ── models ───────────────────────────────────────────────────
-	// Model names are what the user's own llama-server answers to. Libris ships no
-	// guesses: a default that names a model nobody downloaded is a field that looks
-	// correct and fails anyway. Capacity is not here either — n_ctx and the GPU
-	// layer count belong to the server's command line (ADR 0011).
-	ChatModel     string `key:"chatModel" group:"models" label:"Chat model" help:"The name your chat server answers to. Must support tool calls for the research loop."`
-	EmbedModel    string `key:"embedModel" group:"models" label:"Embedding model" help:"The name your embedding server answers to."`
+	// Model names are what the server answers to. In managed mode they are the aliases in
+	// the preset libris writes, so they are not typed anywhere; in external mode they are
+	// what the user's own llama-server was started with. Libris ships no guesses either
+	// way: a default that names a model nobody downloaded is a field that looks correct and
+	// fails anyway. Capacity is not here either — n_ctx and the GPU layer count belong to
+	// the server's command line (ADR 0011), and in managed mode to its preset file.
+	ChatModel     string `key:"chatModel" group:"models" label:"Chat model" help:"The name your chat server answers to. Must support tool calls for the research loop." mode:"external"`
+	EmbedModel    string `key:"embedModel" group:"models" label:"Embedding model" help:"The name your embedding server answers to." mode:"external"`
 	EmbedDim      string `key:"embedDimensions" group:"models" label:"Embedding dimensions" help:"Probed once at startup and recorded with every segment." readonly:"true"`
-	RerankModel   string `key:"rerankModel" group:"models" label:"Reranker" help:"The name your rerank server answers to; blank when reranking is off."`
+	RerankModel   string `key:"rerankModel" group:"models" label:"Reranker" help:"The name your rerank server answers to; blank when reranking is off." mode:"external"`
 	RerankEnabled bool   `key:"rerankEnabled" group:"models" label:"Enable reranking" help:"Off means pure vector order."`
 
 	// ── retrieval ────────────────────────────────────────────────
@@ -107,8 +130,7 @@ type Config struct {
 // Group titles and copy. Presentation only; the fields themselves are above.
 func groups() []struct{ ID, Label, Help string } {
 	return []struct{ ID, Label, Help string }{
-		{"engine", "Engine", "libris downloads and runs the llama.cpp build for this machine, into the data directory. Nothing is fetched until you ask."},
-		{"connection", "llama.cpp servers", "One process per model. Separate ports keep embedding and chat from starving each other."},
+		{"servers", "Model servers", "Either libris runs llama.cpp for you, or it talks to servers you started. The switch decides which of these fields exist — libris does not ask for an address it is about to compute."},
 		{"models", "Models", "Names are what the server reports. Changing the embedder re-indexes every source."},
 		{"retrieval", "Retrieval", "Research loop budget. Every extra iteration costs one search round trip."},
 		{"ingest", "Ingest", "Extraction is a background job. An original is kept until no notebook uses it (ADR 0013)."},
@@ -117,8 +139,13 @@ func groups() []struct{ ID, Label, Help string } {
 
 func Default() Config {
 	return Config{
-		EngineBackend: "vulkan",
-		EngineProxy:   "",
+		// Managed is the default because it is the answer that needs nothing typed: libris
+		// fetches the build, runs it on the port below, and the addresses are derived. The
+		// three URLs and three names still have defaults, because external mode is a real
+		// mode and a saved config that validates in one mode must validate in the other.
+		EngineMode:  EngineManaged,
+		EnginePort:  8080,
+		EngineProxy: "",
 
 		ChatURL:        "http://127.0.0.1:8081",
 		EmbedURL:       "http://127.0.0.1:8082",
@@ -145,6 +172,25 @@ func Default() Config {
 		MaxFileMB:          512,
 		KeepOriginals:      true,
 	}
+}
+
+// Served returns the config as the answer path should read it. In managed mode the three
+// addresses and the three model names are not settings: they are facts about the single
+// router process libris runs, so they are derived here, at the one place where a stored
+// value turns into a request (ADR 0020). External mode is the identity, and that asymmetry
+// is the point — the fields a person typed are used exactly as typed, and the ones libris
+// derives are never stored, so there is nothing for a page to disagree with.
+func (c Config) Served() Config {
+	if c.EngineMode != EngineManaged {
+		return c
+	}
+	base := fmt.Sprintf("http://127.0.0.1:%d", c.EnginePort)
+	out := c
+	out.ChatURL, out.EmbedURL, out.RerankURL = base, base, base
+	out.ChatModel = string(engine.AliasChat)
+	out.EmbedModel = string(engine.AliasEmbed)
+	out.RerankModel = string(engine.AliasRerank)
+	return out
 }
 
 // MaxFileBytes is derived, never configured directly: one unit, one field.

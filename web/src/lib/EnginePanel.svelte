@@ -6,7 +6,9 @@
     getEngine,
     installEngine,
     removeEngine,
-    stopEngine
+    startEngineServe,
+    stopEngine,
+    stopEngineServe
   } from '../lib/api';
   import type { DeviceReport, EngineView } from '../lib/types';
   import { formatBytes, formatDate, formatSince } from '../lib/format';
@@ -25,16 +27,11 @@
    * follows: a destructive action asks first, and Cancel is the button Enter lands on.
    */
   let {
-    backend = 'vulkan',
     saved = 0
   }: {
-    /** The build selection, so a download fetches what the page says rather than what was
-     *  saved when the app booted. It is a prop, not a read of the settings state, because a
-     *  form field and a server fact must not be the same variable. */
-    backend?: string;
-    /** Bumped by the parent on every save, which is what makes this refetch: the build
-     *  selection decides which asset is offered next, so the section must not still be
-     *  showing the other one's size. */
+    /** Bumped by the parent on every save, which is what makes this refetch: the port and
+     *  the mode are settings, so the section must not still be showing the port that was
+     *  saved before the one being typed. */
     saved?: number;
   } = $props();
 
@@ -45,6 +42,11 @@
   let started = $state(false);
   let confirming = $state(false);
   let removing = $state(false);
+  // The start request is as long as the first model load, so this is the only thing between
+  // "Start" and an answer. The polling effect below keeps asking about the download state,
+  // not this one — the process is either up or it is not, and there is no percentage of a
+  // model load to show.
+  let serving = $state(false);
 
   const busy = $derived(
     view?.progress.state === 'downloading' ||
@@ -56,15 +58,9 @@
   // on its way and this section asks again. Collapsing the two is how an app teaches people
   // to press "check again" repeatedly while it is already working.
   const checking = $derived(view?.checking === true);
-  // The build selector above is a draft until it is saved, so the section can be looking at
-  // one build while the form is pointed at another. Saying so is cheaper than letting the
-  // next download be a surprise: the server decides which asset to offer from the *saved*
-  // value, not from this field.
-  const willChange = $derived(
-    !!installed && !!backend && installed.backend !== backend && view?.check_error === undefined
-  );
   const latest = $derived(view?.latest);
   const asset = $derived(view?.asset);
+  const serve = $derived(view?.serve);
   // The report always carries a CPU row, so "the machine has no GPU" is the *absence* of a
   // non-CPU row rather than an empty list — and the list length cannot be the test.
   const gpus = $derived((devices?.devices ?? []).filter((d) => d.kind !== 'cpu'));
@@ -155,6 +151,34 @@
     }
   }
 
+  async function startServe() {
+    actionError = '';
+    serving = true;
+    try {
+      await startEngineServe();
+    } catch (e) {
+      // The server already put the router's own complaint in the message — a port somebody
+      // else holds, a model that will not load — so it is shown, not paraphrased.
+      actionError = e instanceof Error ? e.message : String(e);
+    } finally {
+      serving = false;
+      await refresh(false);
+    }
+  }
+
+  async function stopServe() {
+    actionError = '';
+    serving = true;
+    try {
+      await stopEngineServe();
+    } catch (e) {
+      actionError = e instanceof Error ? e.message : String(e);
+    } finally {
+      serving = false;
+      await refresh(false);
+    }
+  }
+
   async function discard() {
     actionError = '';
     try {
@@ -222,10 +246,7 @@
       <dd>
         {#if installed}
           <span class="tag">{installed.tag}</span>
-          <span class="muted">{installed.backend} · {formatBytes(installed.bytes)}</span>
-          {#if willChange}
-            <span class="muted">the next download will fetch the {backend} build</span>
-          {/if}
+          <span class="muted">{formatBytes(installed.bytes)}</span>
         {:else}
           <span class="muted">Nothing downloaded yet</span>
         {/if}
@@ -262,6 +283,49 @@
       <dt>Stored in</dt>
       <dd class="path" title={view?.dir}>{view?.dir ?? '…'}</dd>
     </div>
+
+    {#if view}
+      <div>
+        <dt>Model server</dt>
+        <dd>
+          {#if !installed}
+            <span class="muted">nothing to run until the engine is downloaded below</span>
+          {:else if !serve}
+            <span class="muted">this build has no data directory to run one from</span>
+          {:else}
+            <span class="tag" title="One llama.cpp in router mode answers all three model roles (ADR 0020)">
+              {view.endpoint ?? `http://127.0.0.1:${serve.port}`}
+            </span>
+            {#if serve.running}
+              <span class="badge">running · pid {serve.pid}</span>
+            {:else if serve.error}
+              <span class="badge warn">did not start</span>
+            {:else}
+              <span class="muted">stopped</span>
+            {/if}
+            <p class="models">
+              {#each view.models ?? [] as model (model.path)}
+                <span class="device" title={model.path}>
+                  {model.alias}
+                  <span class="muted">{formatBytes(model.bytes)}</span>
+                </span>
+              {:else}
+                <span class="muted">
+                  no model in {view.dir.replace(/\/bin$/, '')}/models yet — a chat model named
+                  Qwen3.5-9B…-Q8_0.gguf
+                </span>
+              {/each}
+            </p>
+            {#if serve.error}
+              <p class="error" role="alert"><Icon name="alert" size={14} /> {serve.error}</p>
+            {/if}
+            {#if serve.log}
+              <p class="muted asof">the server writes what it did to {serve.log}</p>
+            {/if}
+          {/if}
+        </dd>
+      </div>
+    {/if}
 
     {#if devices}
       <div>
@@ -364,6 +428,26 @@
 
   {#if view}
   <div class="actions">
+    {#if installed && !busy}
+      {#if serve?.running}
+        <Button onclick={stopServe} disabled={serving} title="Stops libris's own llama-server">
+          <Icon name="stop" size={14} /> Stop the server
+        </Button>
+      {:else}
+        <Button
+          variant="primary"
+          onclick={startServe}
+          disabled={serving || !(view.models?.length)}
+          title={view.models?.length
+            ? `Run one llama.cpp on port ${view.port} with ${view.models?.length} model(s)`
+            : 'There is no model to run yet'}
+        >
+          <Icon name="pulse" size={14} />
+          {#if serving}Starting…{:else}Start the server{/if}
+        </Button>
+      {/if}
+    {/if}
+
     {#if busy}
       <Button onclick={stop} title="Keeps the bytes downloaded so far; the next attempt resumes">
         <Icon name="stop" size={14} /> Stop
@@ -475,6 +559,18 @@
     border-radius: var(--radius, 6px);
     background: var(--canvas-subtle);
     border: 1px solid var(--border-muted);
+  }
+  .models {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 6px 0 0;
+  }
+  /* A badge for a thing that failed, in the one red the app already has. */
+  .badge.warn {
+    color: var(--danger);
+    background: color-mix(in srgb, var(--danger) 12%, transparent);
+    border-color: color-mix(in srgb, var(--danger) 40%, transparent);
   }
   .badge {
     font-size: 11px;

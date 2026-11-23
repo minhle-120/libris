@@ -7,6 +7,7 @@ import type {
   Message,
   Notebook,
   Segment,
+  Serving,
   Source,
 } from "./types";
 import type { Settings } from "./config.gen";
@@ -339,6 +340,19 @@ export function removeEngine(): Promise<{ removed: boolean }> {
 /** The button that means "cancel": unlike Stop, this one frees the space. */
 export function discardEngineParts(): Promise<{ parts_removed: boolean }> {
   return request("/api/host/engine/parts", { method: "DELETE" });
+}
+
+/** Runs libris's own llama-server (ADR 0020). This request is as long as the first model
+ *  load: the server answers when the router is up, rather than pretending a process that dies
+ *  forty seconds later is running. Progress while it waits is polled from getEngine. */
+export function startEngineServe(): Promise<Serving> {
+  return request("/api/host/engine/serve", { method: "POST" });
+}
+
+/** Stops it. Deleting a server that was never running is not an error, so this answers with
+ *  the state rather than a failure. */
+export function stopEngineServe(): Promise<Serving> {
+  return request("/api/host/engine/serve", { method: "DELETE" });
 }
 
 export async function getDevices(refresh = false): Promise<DeviceReport> {

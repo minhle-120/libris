@@ -24,6 +24,10 @@ import (
 // the model name and vector length the vectors are keyed on.
 func modelSource(clients *clientCache, embedders *index.Supplier) app.ModelsFor {
 	return func(cfg config.Config) (app.Models, error) {
+		// Resolved once, so the names and the URLs cannot come from different modes
+		// (ADR 0020).
+		cfg = cfg.Served()
+
 		client, err := clients.For(cfg)
 		if err != nil {
 			return app.Models{}, err

@@ -168,8 +168,45 @@ export type InstalledEngine = {
 
 /** One round trip answers the whole section: what is here, what is new, how the
  *  download is going, and how much a stopped one is still holding. */
+/** libris's own llama-server, in router mode: one process, one port, every model on disk
+ *  (ADR 0020). Absent from an EngineView when libris is set to external servers, because
+ *  there is nothing here to run and "stopped" would be a field about a thing that does not
+ *  exist in that mode. */
+export type Serving = {
+  running: boolean;
+  pid?: number;
+  started_at?: string;
+  port: number;
+  models?: string[];
+  /** Where the server's own output went. A model that will not load says why there. */
+  log?: string;
+  /** The last start that failed, in one sentence. Cleared by a good one, so it cannot
+   *  outlive the port conflict that caused it. */
+  error?: string;
+};
+
+/** One GGUF on this disk that libris knows how to use. */
+export type EngineModel = {
+  role: string;
+  alias: string;
+  file: string;
+  path: string;
+  bytes: number;
+  mmproj?: string;
+};
+
 export type EngineView = {
   installed?: InstalledEngine;
+  /** Which half of the machine section this is. The server says it rather than the page
+   *  inferring it, so a device list cannot be shown for a mode that has no device to pick. */
+  mode: string;
+  /** What managed mode derives instead of asking for: one loopback address, one port, three
+   *  model names from the preset libris wrote. */
+  endpoint?: string;
+  port?: number;
+  aliases?: string[];
+  serve?: Serving;
+  models?: EngineModel[];
   backend: string;
   latest?: { tag: string; published: string; url?: string };
   asset?: { name: string; url: string; size: number; sha256?: string };

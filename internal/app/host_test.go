@@ -301,7 +301,6 @@ func TestEngineInstallResolvesTheTagAndCarriesTheSettings(t *testing.T) {
 	}
 	cfg := config.Default()
 	cfg.EngineProxy = "http://mirror.internal:3128"
-	cfg.EngineBackend = "cpu"
 	h, cache := newTestHost(t, eng, cfg)
 
 	// The install was asked for with no tag — the label on the button is "Download", not a
@@ -641,7 +640,7 @@ func TestSettingsChangedNoticesOnlyWhatMatters(t *testing.T) {
 		t.Error("saving unrelated settings asks the page to refetch the engine")
 	}
 	next := config.Default()
-	next.EngineBackend = "cpu"
+	next.EnginePort = 9090
 	if !h.SettingsChanged(prev, next) {
 		t.Error("changing the build selection did not, so the page keeps offering the other asset")
 	}
@@ -649,5 +648,60 @@ func TestSettingsChangedNoticesOnlyWhatMatters(t *testing.T) {
 	proxied.EngineProxy = "http://mirror:3128"
 	if !h.SettingsChanged(prev, proxied) {
 		t.Error("changing the mirror did not, and the size shown is the mirror's file")
+	}
+}
+
+// A start asked for while libris is configured to talk to somebody else's servers is refused
+// rather than obeyed: running a second llama.cpp because a stale page pressed a button is the
+// "both at once" state the switch exists to make impossible (ADR 0020).
+func TestEngineServeRespectsTheMode(t *testing.T) {
+	cfg := config.Default()
+	cfg.EngineMode = config.EngineExternal
+	h, _ := newTestHost(t, &fakeEngine{dir: t.TempDir()}, cfg)
+
+	if _, err := h.EngineServeStart(context.Background()); !errors.Is(err, ErrEngineMode) {
+		t.Fatalf("got %v, want ErrEngineMode", err)
+	}
+	if err := h.EngineServeStop(context.Background()); !errors.Is(err, ErrEngineMode) {
+		t.Fatalf("stop: got %v, want ErrEngineMode", err)
+	}
+}
+
+// Managed mode with nothing downloaded does not spawn anything. The page's answer is the
+// download button, and a start that got as far as exec would be a crash report instead.
+func TestEngineServeNeedsAnInstalledEngine(t *testing.T) {
+	cfg := config.Default()
+	cfg.EngineMode = config.EngineManaged
+	h, _ := newTestHost(t, &fakeEngine{dir: t.TempDir(), installed: nil}, cfg)
+	h.serve = engine.NewSupervisor(t.TempDir(), engine.Seams{})
+
+	if _, err := h.EngineServeStart(context.Background()); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("got %v, want ErrInvalid", err)
+	}
+}
+
+// The machine section is the page that changes when the mode changes, so a save that flipped
+// it must refetch it — otherwise external mode keeps showing a device list for a server
+// libris will never run.
+func TestSettingsChangedWatchesTheMode(t *testing.T) {
+	h, _ := newTestHost(t, &fakeEngine{dir: t.TempDir()}, config.Default())
+	prev := config.Default()
+
+	next := prev
+	next.EngineMode = config.EngineExternal
+	if !h.SettingsChanged(prev, next) {
+		t.Error("a mode change did not ask the machine section to refetch")
+	}
+
+	port := prev
+	port.EnginePort = 9100
+	if !h.SettingsChanged(prev, port) {
+		t.Error("a port change did not ask the machine section to refetch")
+	}
+
+	same := prev
+	same.ChatModel = "renamed"
+	if h.SettingsChanged(prev, same) {
+		t.Error("a model name change refetched the machine section for no reason")
 	}
 }

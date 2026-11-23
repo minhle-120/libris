@@ -24,6 +24,7 @@ import (
 	"libris/internal/httpapi"
 	"libris/internal/index"
 	"libris/internal/ingest"
+	"libris/internal/models"
 	"libris/internal/store/sqlite"
 	"libris/web"
 )
@@ -131,10 +132,21 @@ func main() {
 	// thing in this process (AGENTS §6).
 	host, err := app.NewHost(app.HostOptions{
 		Engine:      engine.Open(filepath.Join(*dataDir, "bin"), log),
+		Serve:       engine.NewSupervisor(filepath.Join(*dataDir, "bin"), engine.Seams{}),
+		ModelsDir:   models.Dir(*dataDir),
 		Settings:    settings,
 		DeviceCache: filepath.Join(*dataDir, "devices.json"),
 		Logger:      log,
 	})
+	if err == nil {
+		// Managed mode means libris runs the servers, so the question is asked here rather
+		// than in the answer path: a chat that fails with "connection refused" because nobody
+		// pressed a Start button is not a local-first app. Everything about the decision is
+		// the supervisor's (installed? models? already up?), and a failure is a log line and a
+		// settings page that says why — never a reason not to serve the UI.
+		go host.EngineAutostart(context.Background())
+	}
+
 	if err != nil {
 		// Not fatal: the app answers questions without knowing what its own machine has. The
 		// settings page loses the download section and says so, rather than the app refusing

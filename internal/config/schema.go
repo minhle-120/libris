@@ -28,6 +28,11 @@ type schemaField struct {
 	Max      *int        `json:"max,omitempty"`
 	Options  []EnumValue `json:"options,omitempty"`
 	Readonly bool        `json:"readonly,omitempty"`
+	// Mode is which engine mode a field means anything in, and it is empty for the fields
+	// that mean the same thing either way. It is generated rather than written in the
+	// frontend so "which fields does managed mode hide" cannot disagree with the struct
+	// that defines the settings (ADR 0001).
+	Mode string `json:"mode,omitempty"`
 }
 
 type schemaGroup struct {
@@ -86,6 +91,12 @@ func generateSchema(w io.Writer, cfg any) error {
 			Kind:     kind,
 			Unit:     f.Tag.Get("unit"),
 			Readonly: f.Tag.Get("readonly") == "true",
+			Mode:     f.Tag.Get("mode"),
+		}
+		switch sf.Mode {
+		case "", "managed", "external":
+		default:
+			return fmt.Errorf("config: field %s: bad mode %q (want managed or external)", f.Name, sf.Mode)
 		}
 		for tag, dst := range map[string]**int{"min": &sf.Min, "max": &sf.Max} {
 			if s := f.Tag.Get(tag); s != "" {
@@ -119,7 +130,7 @@ func generateSchema(w io.Writer, cfg any) error {
 	b.WriteString(GeneratedHeader)
 	b.WriteString("\nexport type SettingKind = 'text' | 'url' | 'password' | 'number' | 'bool' | 'enum';\n")
 	b.WriteString("export type SettingOption = { value: string; label: string };\n")
-	b.WriteString("export type SettingField = {\n\tkey: keyof Settings;\n\tlabel: string;\n\thelp: string;\n\tkind: SettingKind;\n\tunit?: string;\n\tmin?: number;\n\tmax?: number;\n\treadonly?: boolean;\n\toptions?: SettingOption[];\n};\n")
+	b.WriteString("export type SettingField = {\n\tkey: keyof Settings;\n\tlabel: string;\n\thelp: string;\n\tkind: SettingKind;\n\tunit?: string;\n\tmin?: number;\n\tmax?: number;\n\treadonly?: boolean;\n\toptions?: SettingOption[];\n\t/** Which engine mode this field means anything in; absent means both. */\n\tmode?: 'managed' | 'external';\n};\n")
 	b.WriteString("export type SettingGroup = { id: string; label: string; help: string; fields: SettingField[] };\n\n")
 
 	b.WriteString("export type Settings = {\n")

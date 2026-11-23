@@ -40,6 +40,9 @@ func configured(t *testing.T) (config.Config, *clientCache, *index.Supplier) {
 	supplier := index.NewSupplier(clients.For, testLogger(), nil)
 
 	cfg := config.Default()
+	// External mode: these tests name the servers and the model names on purpose, which is
+	// exactly what managed mode derives instead (ADR 0020).
+	cfg.EngineMode = config.EngineExternal
 	cfg.ChatURL = "http://127.0.0.1:1" // never dialled by these tests
 	cfg.EmbedURL = embed.URL
 	cfg.EmbedModel = "embeddinggemma-2"

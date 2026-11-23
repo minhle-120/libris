@@ -16,7 +16,7 @@ func TestGenerateRejectsBadTags(t *testing.T) {
 	}{
 		"no key": {
 			value: struct {
-				A string `group:"connection"`
+				A string `group:"servers"`
 			}{},
 			hint: "no key tag",
 		},
@@ -28,21 +28,30 @@ func TestGenerateRejectsBadTags(t *testing.T) {
 		},
 		"bad min": {
 			value: struct {
-				A int `key:"a" group:"connection" min:"lots"`
+				A int `key:"a" group:"servers" min:"lots"`
 			}{},
 			hint: "bad min",
 		},
 		"unknown enum": {
 			value: struct {
-				A string `key:"a" group:"connection" enum:"nope"`
+				A string `key:"a" group:"servers" enum:"nope"`
 			}{},
 			hint: "unknown enum",
 		},
 		"unsupported kind": {
 			value: struct {
-				A float64 `key:"a" group:"connection"`
+				A float64 `key:"a" group:"servers"`
 			}{},
 			hint: "unsupported kind",
+		},
+		// The engine-mode tag decides which half of the settings page a field belongs to,
+		// so a typo in it must be a build failure rather than a field that silently never
+		// shows up in either mode.
+		"bad mode": {
+			value: struct {
+				A string `key:"a" group:"servers" mode:"sometimes"`
+			}{},
+			hint: "bad mode",
 		},
 	}
 

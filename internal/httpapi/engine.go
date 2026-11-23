@@ -31,6 +31,12 @@ type Host interface {
 	EngineStop()
 	EngineRemove(ctx context.Context) error
 	EngineDiscardParts() error
+	// EngineServeStart blocks until libris's own llama-server answers, which is the whole
+	// first-load of a GGUF. The page polls GET /api/host/engine while it runs, so the wait
+	// is the request and the state stays visible.
+	EngineServeStart(ctx context.Context) (engine.Serving, error)
+	EngineServeStop(ctx context.Context) error
+	ServeStatus() engine.Serving
 	Devices(ctx context.Context, refresh bool) (deviceinfo.Report, error)
 }
 
@@ -49,6 +55,8 @@ func (s *Server) addHostRoutes(h Host) {
 	s.mux.HandleFunc("POST /api/host/engine/stop", s.handleEngineStop)
 	s.mux.HandleFunc("DELETE /api/host/engine", s.handleEngineRemove)
 	s.mux.HandleFunc("DELETE /api/host/engine/parts", s.handleEngineParts)
+	s.mux.HandleFunc("POST /api/host/engine/serve", s.handleEngineServe)
+	s.mux.HandleFunc("DELETE /api/host/engine/serve", s.handleEngineServeStop)
 	s.mux.HandleFunc("GET /api/host/devices", s.handleDevices)
 }
 
@@ -172,6 +180,39 @@ func (s *Server) handleEngineParts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"parts_removed": true})
+}
+
+// handleEngineServe runs the router (ADR 0020). Everything about the answer is the process's
+// own: the port it bound, the models it took, and — when it would not come up — the sentence
+// it wrote to its log, which app.Host already put in Serving.Error.
+func (s *Server) handleEngineServe(w http.ResponseWriter, r *http.Request) {
+	srv, err := s.host.EngineServeStart(r.Context())
+	if err != nil {
+		switch {
+		case errors.Is(err, app.ErrEngineMode), errors.Is(err, app.ErrInvalid):
+			writeError(w, http.StatusUnprocessableEntity, err.Error())
+		case errors.Is(err, app.ErrBusy):
+			writeError(w, http.StatusConflict, err.Error())
+		default:
+			s.fail(w, "engine", err)
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, srv)
+}
+
+// handleEngineServeStop stops it. Deleting something that was never running is not a 404:
+// the state the caller wanted is the state it gets.
+func (s *Server) handleEngineServeStop(w http.ResponseWriter, r *http.Request) {
+	if err := s.host.EngineServeStop(r.Context()); err != nil {
+		if errors.Is(err, app.ErrEngineMode) {
+			writeError(w, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
+		s.fail(w, "engine", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.host.ServeStatus())
 }
 
 // handleDevices reports the machine. The body is the stored deviceinfo.Report verbatim, so

@@ -115,6 +115,31 @@ themselves are not shipped either: `internal/engine` downloads upstream's prebui
 into the data directory on demand, and everything in `llm` still talks to a base URL, so
 "external OpenAI API" and "downloaded llama.cpp" stay interchangeable.
 
+## One process, many models: router mode
+
+Verified against `tools/server/README.md` ("Using multiple models"), and what ADR 0020 builds
+on. Start `llama-server` **without** a model and it becomes a router: it reads the `"model"`
+field of every request and keeps an instance per model behind one port.
+
+| flag | what it does |
+|---|---|
+| `--models-preset file.ini` | one `[section]` per model, keys are the CLI arguments without their dashes; a `[*]` section is shared by all |
+| `--models-dir DIR` | instead: every GGUF in a directory, by filename |
+| `--models-max N` | how many instances the router keeps (default 4) |
+| `--models-memory-margin N` | MiB kept free on each device; the least recently used model is unloaded until a new one fits |
+| `--no-ui` | no browser UI; the one thing a supervised process should not open |
+
+`GET /models` at router level lists every model with `status.value` (`measuring`, `loaded`,
+`unloaded`) and a memory measurement, and `POST /models/load|unload` take it from there. The
+preset keys that matter here are `embeddings = on`, `pooling = mean`, `reranking = on` and
+`mmproj` — checked against `common/arg.cpp` (`LLAMA_ARG_EMBEDDINGS`, `LLAMA_ARG_POOLING`,
+`LLAMA_ARG_RERANKING`), because a wrong key is a router that refuses to start and the only
+place it says so is its own log.
+
+The router answers `GET /models` before any model has finished loading, which is what makes a
+readiness probe short and honest: a model that will not load is a fact about that model, not a
+reason the process cannot report its state.
+
 ## Asking it what it can run on: `--list-devices`
 
 This is libris's only device probe (ADR 0019), so the flag is a wire contract like any

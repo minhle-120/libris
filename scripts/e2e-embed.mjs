@@ -91,6 +91,9 @@ const embedURL = await embed.listen();
 writeFileSync(
   join(dataDir, 'settings.json'),
   JSON.stringify({
+    // External mode: the fake answers at these URLs. Managed mode would derive both the
+    // address and the model names from a router libris runs itself (ADR 0020).
+    engineMode: 'external',
     chatURL: embedURL, // required by the settings schema; unused by this slice
     embedURL,
     embedModel: 'fake-embed-2'

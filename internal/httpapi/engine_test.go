@@ -19,12 +19,17 @@ import (
 // fakeHost is app.Host with no disk, no network and no GPU, so what is under test is the
 // mapping from a use case to a status code and a body — nothing else.
 type fakeHost struct {
-	view      *app.EngineView
-	viewErr   error
-	forced    bool
-	installs  chan string // the tag each install was started with
-	removeErr error
-	installed engine.Installed
+	serving      engine.Serving
+	serveErr     error
+	serveStopErr error
+	served       int
+	stoppedServe int
+	view         *app.EngineView
+	viewErr      error
+	forced       bool
+	installs     chan string // the tag each install was started with
+	removeErr    error
+	installed    engine.Installed
 
 	refreshed bool
 	devices   deviceinfo.Report
@@ -65,6 +70,12 @@ func (f *fakeHost) EngineInstall(ctx context.Context, tag string) (engine.Instal
 func (f *fakeHost) EngineStop()                        { f.stopped++ }
 func (f *fakeHost) EngineRemove(context.Context) error { return f.removeErr }
 func (f *fakeHost) EngineDiscardParts() error          { f.discarded++; return nil }
+func (f *fakeHost) EngineServeStart(context.Context) (engine.Serving, error) {
+	f.served++
+	return f.serving, f.serveErr
+}
+func (f *fakeHost) EngineServeStop(context.Context) error { f.stoppedServe++; return f.serveStopErr }
+func (f *fakeHost) ServeStatus() engine.Serving           { return f.serving }
 
 func (f *fakeHost) Devices(ctx context.Context, refresh bool) (deviceinfo.Report, error) {
 	f.refreshed = refresh
@@ -342,5 +353,51 @@ func TestEngineViewErrorsFollowTheSameRuleAsEveryOtherRoute(t *testing.T) {
 	}
 	if strings.Contains(body, "/home/user") {
 		t.Errorf("body = %s, leaked a filesystem path", body)
+	}
+}
+
+// The serve routes are the managed half of the settings page (ADR 0020). What is under test
+// is the mapping only — app.Host owns the process, and its fake here has no GPU and no
+// llama-server any more than the unit tests do.
+func TestEngineServeMapsTheFailuresAPageMustShow(t *testing.T) {
+	h := newFakeHost()
+	h.serving = engine.Serving{Running: true, Port: 8080, Models: []string{"libris-chat"}}
+	srv := hostServer(t, h)
+	code, body := hostCall(t, srv, http.MethodPost, "/api/host/engine/serve", "")
+	if code != http.StatusOK {
+		t.Fatalf("started: status = %d (%s)", code, body)
+	}
+	if !strings.Contains(body, "libris-chat") {
+		t.Errorf("started: body = %s, want the models the router took", body)
+	}
+
+	// A port somebody else holds is 409 with the router's own sentence, because the fix —
+	// change the port, or stop the other server — belongs to the person reading it.
+	h2 := newFakeHost()
+	h2.serving = engine.Serving{Port: 8080, Error: "Something else is already using port 8080."}
+	h2.serveErr = fmt.Errorf("%w: %s", app.ErrBusy, h2.serving.Error)
+	srv2 := hostServer(t, h2)
+	code, body = hostCall(t, srv2, http.MethodPost, "/api/host/engine/serve", "")
+	if code != http.StatusConflict {
+		t.Errorf("port taken: status = %d, want 409 (%s)", code, body)
+	}
+	if !strings.Contains(body, "using port 8080") {
+		t.Errorf("port taken: body = %s, want the sentence the user can act on", body)
+	}
+
+	// A start asked for in external mode is a 422: the request names a thing this mode does
+	// not have, and a retry will not help.
+	h3 := newFakeHost()
+	h3.serveErr = app.ErrEngineMode
+	srv3 := hostServer(t, h3)
+	if code, body := hostCall(t, srv3, http.MethodPost, "/api/host/engine/serve", ""); code != http.StatusUnprocessableEntity {
+		t.Errorf("wrong mode: status = %d, want 422 (%s)", code, body)
+	}
+
+	// Stopping what is not running answers with the state, not a 404.
+	h4 := newFakeHost()
+	srv4 := hostServer(t, h4)
+	if code, body := hostCall(t, srv4, http.MethodDelete, "/api/host/engine/serve", ""); code != http.StatusOK {
+		t.Errorf("stop idle: status = %d, want 200 (%s)", code, body)
 	}
 }

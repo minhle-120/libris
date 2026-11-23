@@ -21,6 +21,23 @@
   // the other build's file size.
   let savedToken = $state(0);
 
+  // Which half of the model-server group applies. It is one switch rather than two toggles
+  // that can both be on, and the fields it hides are the ones libris derives for itself
+  // (ADR 0020) — a form that asks for an address it is about to compute is how this page
+  // became confusing.
+  const mode = $derived(settings.engineMode);
+
+  function shown(field: { mode?: 'managed' | 'external' }): boolean {
+    return !field.mode || field.mode === mode;
+  }
+
+  // A group whose every field is hidden is a heading with nothing under it.
+  const sections = $derived(
+    settingGroups
+      .map((group) => ({ ...group, fields: group.fields.filter(shown) }))
+      .filter((group) => group.fields.length > 0 || group.id === 'servers')
+  );
+
   const snapshot = $derived(JSON.stringify(settings));
   const dirty = $derived(!loading && snapshot !== saved);
 
@@ -86,7 +103,7 @@
 
   <div class="grid">
     <nav class="subnav" aria-label="Settings sections">
-      {#each settingGroups as group (group.id)}
+      {#each sections as group (group.id)}
         <button
           type="button"
           class="nav-item"
@@ -130,14 +147,14 @@
         </div>
       </div>
 
-      {#each settingGroups as group (group.id)}
+      {#each sections as group (group.id)}
         <section class="card" id={group.id}>
           <header>
             <h2>{group.label}</h2>
             <p class="muted">{group.help}</p>
           </header>
 
-          {#each group.fields as field (field.key)}
+          {#each group.fields.filter(shown) as field (field.key)}
             <SettingRow label={field.label} description={field.help}>
               {#if field.kind === 'bool'}
                 <Toggle
@@ -188,8 +205,8 @@
           <!-- The machine is not a setting. What is installed, what is new, and what the box
                has in it are read from /api/host/*, and its buttons are verbs — so this lives
                under the group that names it rather than among the generated fields above. -->
-          {#if group.id === 'engine'}
-            <EnginePanel backend={str('engineBackend')} saved={savedToken} />
+          {#if group.id === 'servers' && mode === 'managed'}
+            <EnginePanel saved={savedToken} />
           {/if}
         </section>
       {/each}
@@ -258,7 +275,9 @@
   }
   section.card {
     overflow: hidden;
-    scroll-margin-top: 12px;
+    /* The save bar is sticky and roughly this tall; without the margin the section's own
+       heading arrives underneath it, which is what the subnav exists to bring you to. */
+    scroll-margin-top: 60px;
   }
   section header {
     padding: 14px 16px;

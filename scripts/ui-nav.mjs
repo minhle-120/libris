@@ -977,13 +977,54 @@ const code = await withBrowser(
       `${afterDiscard.buttons}`,
     );
 
-    // ── the machine section ──────────────────────────────────────
+    // ── the machine section ──────────────────────────────
+    // The harness boots in external mode, because that is the mode the fake servers answer
+    // and every ask/upload flow needs them. The machine section belongs to the other mode —
+    // managed is the only one with an engine to download, a port to bind and a device to
+    // show — so it is switched to, through the same control a person would use, and switched
+    // back once the checks are done. Saving rather than leaving a draft is deliberate: the
+    // server's own answer about the machine is what is asserted, and that follows the saved
+    // setting (ADR 0020).
+    const setMode = async (mode) =>
+      ui.eval(`
+        const sel = document.querySelector('#servers select');
+        sel.value = '${mode}';
+        sel.dispatchEvent(new Event('change', { bubbles: true }));
+        // The button is still disabled in the tick the select changed: Svelte re-renders the
+        // dirty flag a microtask later, and a click on a disabled button is nothing at all.
+        const find = () =>
+          [...document.querySelectorAll('.actions button')].find((b) =>
+            /^Save changes$/.test(b.textContent.trim())
+          );
+        const ready = Date.now() + 4000;
+        while (Date.now() < ready && (find() ?? { disabled: true }).disabled) {
+          await new Promise((r) => setTimeout(r, 100));
+        }
+        find()?.click();
+        const want = ${JSON.stringify(mode)};
+        const mounted = () => want === 'managed'
+          ? !!document.querySelector('#servers .engine')
+          : !document.querySelector('#servers .engine');
+        const deadline = Date.now() + 15000;
+        while (Date.now() < deadline) {
+          const status = document.querySelector('.actions .status')?.textContent.trim() ?? '';
+          if (!/Unsaved|Saving/.test(status) && mounted()) break;
+          await new Promise((r) => setTimeout(r, 150));
+        }
+        return document.querySelector('.actions .status')?.textContent.trim() ?? '';
+      `);
+    const savedManaged = await setMode('managed');
+    checks.check(
+      "managed mode is a saved choice, and it mounts the machine section",
+      /Saved/.test(savedManaged),
+      savedManaged,
+    );
     // The settings page is generated from the struct, so a new group proves itself; what a
     // browser alone can prove is the part that is *not* generated — the machine facts read
     // from /api/host/*, and the fact that a control for an absent thing is absent rather than
     // disabled. A click on any of it would download 35 MB, so every check here is a read.
     const engine = `
-      const card = document.getElementById('engine');
+      const card = document.getElementById('servers');
       const root = card?.querySelector('.engine');
       if (!root) return { present: false };
       const dd = (dt) => {
@@ -1005,8 +1046,16 @@ const code = await withBrowser(
         [...root.querySelectorAll('button')].find((b) => re.test(b.textContent.trim()));
       return {
         present: true,
-        // Generated from config.go: the build selector exists because the field does.
+        // Generated from config.go: the mode switch exists because the field does, and it is
+        // the only choice this group offers (ADR 0020).
         select: [...card.querySelectorAll('select')].map((sel) => sel.value).join(','),
+        // Addresses are what external mode types and managed mode derives. A managed page
+        // that still shows them is the confusion this rework was asked for.
+        addresses: [...card.querySelectorAll('input')]
+          .map((i) => i.value)
+          .filter((v) => v.startsWith('http'))
+          .join(','),
+        serve: dd('Model server'),
         installed: dd('On this machine'),
         stored: dd('Stored in'),
         storedDir: attr('Stored in', 'title'),
@@ -1063,9 +1112,19 @@ const code = await withBrowser(
       JSON.stringify(eng).slice(0, 80),
     );
     checks.check(
-      "the build selector is the generated enum",
-      eng.select === "vulkan",
+      "one switch decides where the servers come from, and it starts on managed",
+      eng.select === "managed",
       `selected=${eng.select}`,
+    );
+    checks.check(
+      "managed mode asks for no addresses",
+      eng.addresses === "",
+      eng.addresses,
+    );
+    checks.check(
+      "and says what it would run instead of leaving the row blank",
+      /nothing to run until the engine/i.test(eng.serve ?? ""),
+      (eng.serve ?? "").slice(0, 70),
     );
     // A fresh data directory: the honest first-run state is "nothing here", said in words.
     checks.check(
@@ -1124,6 +1183,55 @@ const code = await withBrowser(
       eng.footnote === true,
       String(eng.footnote),
     );
+
+    // The switch is the whole UX claim, so it is clicked rather than read: choosing the
+    // other mode must take the machine section away and put the three addresses back. A
+    // field that is merely hidden by CSS would pass a screenshot and fail this, which is the
+    // point — the old page showed a port for a server it never started.
+    const flipped = await ui.eval(`
+      const card = document.getElementById('servers');
+      const sel = card.querySelector('select');
+      sel.value = 'external';
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+      const deadline = Date.now() + 4000;
+      const httpFields = () =>
+        [...document.querySelectorAll('#servers input')].filter((i) =>
+          /^http/.test(i.value)
+        ).length;
+      while (Date.now() < deadline && httpFields() < 3) {
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      const after = {
+        panel: !!document.querySelector('#servers .engine'),
+        addresses: [...document.querySelectorAll('#servers input')]
+          .map((i) => i.value)
+          .filter((v) => v.startsWith('http')),
+        dirty: /Unsaved/.test(document.querySelector('.actions .status')?.textContent ?? ''),
+      };
+      // Leave the page as it was found: the save bar is shared with the checks below, and a
+      // stray draft would make a later assertion measure a form that was never saved.
+      const back = document.querySelector('#servers select');
+      back.value = 'managed';
+      back.dispatchEvent(new Event('change', { bubbles: true }));
+      return after;
+    `);
+    checks.check(
+      "external mode takes the machine section away",
+      flipped.panel === false,
+      `engine panel present=${flipped.panel}`,
+    );
+    checks.check(
+      "and puts the three addresses back",
+      flipped.addresses.length === 3,
+      flipped.addresses.join(' '),
+    );
+    checks.check(
+      "the switch is an unsaved change, not a live one",
+      flipped.dirty === true,
+      `dirty=${flipped.dirty}`,
+    );
+    // Back to the mode the rest of this harness — and the fake servers — are for.
+    await setMode('external');
 
     // The trap this file exists to catch: <main> is the scroller, not the window, and
     // the bar sticks to *its* top edge. Reaching for the header's height as the offset —

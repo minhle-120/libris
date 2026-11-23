@@ -59,7 +59,7 @@ ui: build
 # -open=false: a harness is headless by definition, and on a machine that happens to
 # have a desktop the default would raise a browser window mid-run.
 	@dir=$$(mktemp -d); \
-	printf '{"chatURL":"http://127.0.0.1:$(UI_EMBED_PORT)","embedURL":"http://127.0.0.1:$(UI_EMBED_PORT)","rerankURL":"http://127.0.0.1:$(UI_EMBED_PORT)","chatModel":"fake-chat","embedModel":"fake-embed-2","rerankModel":"fake-rerank"}' > $$dir/settings.json; \
+	printf '{"engineMode":"external","chatURL":"http://127.0.0.1:$(UI_EMBED_PORT)","embedURL":"http://127.0.0.1:$(UI_EMBED_PORT)","rerankURL":"http://127.0.0.1:$(UI_EMBED_PORT)","chatModel":"fake-chat","embedModel":"fake-embed-2","rerankModel":"fake-rerank"}' > $$dir/settings.json; \
 	node scripts/fake-embed.mjs $(UI_EMBED_PORT) >/tmp/libris-embed.log 2>&1 & embed=$$!; \
 	sleep 0.4; \
 	./libris -open=false -addr 127.0.0.1:$(UI_PORT) -data $$dir >/tmp/libris-ui.log 2>&1 & pid=$$!; \

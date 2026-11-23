@@ -123,3 +123,36 @@ func TestApplyStoredJSONStillValidatesKnownKeys(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// A settings file written by a libris that had one mode means that mode. Defaulting such a
+// file to managed would point a working setup at a port nothing listens on, with the URLs it
+// was using hidden behind a switch.
+func TestApplyStoredJSONKeepsAnOlderFileExternal(t *testing.T) {
+	var c Config
+	c = Default()
+	dropped, err := c.ApplyStoredJSON([]byte(`{"chatURL":"http://llm.local:8081","embedModel":"mine"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dropped) != 0 {
+		t.Fatalf("dropped %v", dropped)
+	}
+	if c.EngineMode != EngineExternal {
+		t.Errorf("engineMode = %q; an older settings file described external servers", c.EngineMode)
+	}
+	if c.ChatURL != "http://llm.local:8081" {
+		t.Errorf("chatURL = %q", c.ChatURL)
+	}
+}
+
+// A file that names a mode is a file from this vocabulary: the mode it says wins, including
+// a deliberate "managed".
+func TestApplyStoredJSONHonoursASavedMode(t *testing.T) {
+	c := Default()
+	if _, err := c.ApplyStoredJSON([]byte(`{"engineMode":"managed","enginePort":9100}`)); err != nil {
+		t.Fatal(err)
+	}
+	if c.EngineMode != EngineManaged || c.EnginePort != 9100 {
+		t.Errorf("got %q / %d", c.EngineMode, c.EnginePort)
+	}
+}
