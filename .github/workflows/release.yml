@@ -1,11 +1,12 @@
-# Publishing is the only thing in this repository that writes to GitHub, so it is
-# triggered by the one act that says "this commit is a release": a tag named v*.
-# An ordinary `git push` builds nothing and publishes nothing.
+# Publishing is the only thing in this repository that writes to GitHub, so
+# the trigger is the one act that says "this commit is a release": a tag named
+# v*. An ordinary `git push` builds nothing and publishes nothing.
 #
-# No tests run here. They run locally, before the tag is cut — `make check`, and
-# `make e2e` / `make ui` when the change reaches that far. What this workflow does
-# with a commit is compile it for two platforms and nothing more, so nothing in it
-# can fail for a reason the local gates would not already have caught.
+# No tests run here. They run locally, before the tag is cut — `make check`,
+# and `make e2e` / `make ui` where the change reaches that far. What this
+# workflow does with a commit is compile it for two platforms and nothing more,
+# so nothing in it can fail for a reason the local gates would not already have
+# caught.
 name: release
 
 on:
@@ -34,23 +35,29 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # `go build` and not `make`, on both legs: a Windows runner does not promise
-      # make on PATH, and one command line that works on either is one less thing
-      # that can differ between the two files being published.
+      # `go build` and not `make`, on both legs: a Windows runner does not
+      # promise make on PATH, and one command line that works on either is one
+      # less thing that can differ between the two files being published.
       #
-      # CGO_ENABLED=0 is what makes the download a download. The link is static, so
-      # the binary never asks a stranger's distribution for a glibc it may not have.
-      # -s -w drops the symbol and DWARF tables: 22 MB of binary becomes 14 MB of
-      # download. The web UI is not built, because web/dist is committed and
-      # go:embed reads the tree — which means the asset holds exactly the UI in the
-      # tag, and keeping that UI current is a local-commit responsibility.
+      # CGO_ENABLED=0 is what makes the download a download: the link is
+      # static, so the binary never asks a stranger's distribution for a glibc
+      # it may not have. -s -w drops the symbol and DWARF tables, 22 MB of
+      # binary into 14 MB of download.
+      #
+      # The web UI is not built either. web/dist is committed and go:embed
+      # reads the tree, so an asset holds exactly the UI in its own tag — and
+      # that is also why keeping that UI current is a local-commit
+      # responsibility. It is the one thing this workflow cannot see.
       - name: build
         env:
           CGO_ENABLED: '0'
+          TAG: ${{ github.ref_name }}
+          OS: ${{ matrix.goos }}
+          ARCH: ${{ matrix.goarch }}
+          EXT: ${{ matrix.ext }}
         run: >-
           go build -trimpath -ldflags "-s -w"
-          -o libris-${{ github.ref_name }}-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}
-          ./cmd/libris
+          -o "libris-$TAG-$OS-$ARCH$EXT" ./cmd/libris
 
       - uses: actions/upload-artifact@v4
         with:
@@ -58,9 +65,9 @@ jobs:
           path: libris-*
 
   release:
-    # One job assembles the release rather than each leg publishing its own file.
-    # Two jobs racing to create the same release leaves, when the race is lost, a
-    # published release holding one binary.
+    # One job assembles the release rather than each leg publishing its own
+    # file. Two jobs racing to create the same release leaves, when the race is
+    # lost, a published release holding one binary.
     needs: dist
     runs-on: ubuntu-latest
     permissions:
@@ -76,14 +83,16 @@ jobs:
       - name: checksums
         run: (cd dist && sha256sum libris-* > SHA256SUMS.txt)
 
+      # The tag is the version, and it is the version in the asset names too.
+      # Nothing else in the pipeline is told the number, so nothing else can
+      # disagree with it — and `libris -version` reports the revision a file
+      # was built from, which is what a bug report needs.
+      #
+      # No release notes, and that is a decision rather than an oversight: a
+      # body written once goes stale on the second release nobody remembered to
+      # edit. Add --notes-file here if a release ever needs prose.
       - name: publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # The tag is the version, and it is also the asset name's version. Nothing
-          # else in the pipeline is told the number, so nothing else can disagree
-          # with it; `libris -version` reports the revision it was built from.
           TAG: ${{ github.ref_name }}
-        run: >-
-          gh release create "$TAG" dist/*
-          --title "$TAG"
-          --notes-file docs/RELEASE_NOTES.md
+        run: gh release create "$TAG" dist/* --title "$TAG"

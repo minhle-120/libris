@@ -165,8 +165,9 @@ v0.1.0` runs `.github/workflows/release.yml`, which compiles static `linux/amd64
 before the tag (`make check`, and `make e2e`/`make ui` where they reach) — and it builds
 no frontend either, because `web/dist` is committed and `go:embed` reads the tree, so a
 release ships the UI in the tag and keeping that current is a local-commit responsibility.
-`docs/RELEASE_NOTES.md` is the release body. This workflow, and the issue tracker, are the
-only things here that write to GitHub.
+Releases carry no notes — a body written once goes stale on the second release nobody
+remembered to edit, and the binary names itself with `-version`. This workflow, and the
+issue tracker, are the only things here that write to GitHub.
 
 ---
 
