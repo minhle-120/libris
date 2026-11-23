@@ -51,6 +51,21 @@
   --header-h: 56px;
 }
 
+/* A scrollbar is chrome, not content. Thin, drawn in the border colour rather than the
+   operating system's, and invisible until the pointer is inside the thing that scrolls:
+   a bar that is always there is a permanent frame around content that is only sometimes
+   long. Both properties inherit, so this reaches the thread, both columns, and every
+   scroller inside an answer. The gutter itself stays reserved — an invisible bar must not
+   move the text when it appears. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+*:hover,
+*:focus-within {
+  scrollbar-color: var(--border) transparent;
+}
+
 :root[data-theme='dark'] {
   color-scheme: dark;
 
@@ -481,6 +496,11 @@ p {
 .md table {
   border-collapse: collapse;
   font-size: 14px;
+  /* No width here on purpose. A table is shrink-to-fit already — it takes the width its
+     content wants and gives way to the width its column has — and spelling that out with
+     `width: max-content; max-width: 100%` measured byte-for-byte the same at every width.
+     So a bar under a table means the column is narrower than the table's minimum content
+     width, which is a layout fact about the chat column and not something CSS here can fix. */
 }
 .md th,
 .md td {

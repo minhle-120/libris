@@ -386,6 +386,29 @@ An invented [[Chunk 99]] and a malformed [[chunk 3]] label.`;
       // align survives the sanitizer only because markdown.ts tells DOMPurify it is not an
       // address; every other allowed attribute's value is run through the URI regexp.
       align: [...(md.querySelector('tr')?.children ?? [])].map((c) => getComputedStyle(c).textAlign),
+      // A bar is only honest when something genuinely cannot fit. Table cells rearrange to
+      // the width the column has, so at this width the answer's table needs no bar.
+      tableBar: (() => {
+        const w = md.querySelector('.table-wrap') ?? md.querySelector('table');
+        const t = w.querySelector('table');
+        return {
+          over: Math.round(w.scrollWidth - w.clientWidth),
+          chat: Math.round(document.querySelector('.chat').getBoundingClientRect().width),
+          wrap: w.clientWidth,
+          table: Math.round(t.getBoundingClientRect().width),
+          rows: [...t.querySelectorAll('tr')].map((r) =>
+            [...r.children].map((c) => c.clientWidth + ':' + c.textContent.trim().slice(0, 10))
+          ),
+        };
+      })(),
+      // And the bar that is left is styled chrome, not the operating system's.
+      bar: (() => {
+        const scroller = [...document.querySelectorAll('*')].find(
+          (n) => n.scrollHeight - n.clientHeight > 200 && /auto|scroll/.test(getComputedStyle(n).overflowY)
+        );
+        const cs = getComputedStyle(scroller ?? document.documentElement);
+        return { w: cs.scrollbarWidth, c: cs.scrollbarColor, sel: scroller ? scroller.className.split(' ')[0] : 'root' };
+      })(),
       quote: !!cell('blockquote'),
       lang: cell('pre code')?.dataset.lang ?? '',
       tokens: md.querySelectorAll('pre .hljs-keyword, pre .hljs-title').length,
@@ -419,6 +442,11 @@ An invented [[Chunk 99]] and a malformed [[chunk 3]] label.`;
   // The writer's `|---:|` is the only alignment in the grammar, and it is the one thing
   // that can be deleted between the parser and the page without anything else noticing.
   checks.check('and the column it aligned stays aligned', (done?.align ?? []).join() === 'left,right', () => `align=${JSON.stringify(done?.align)}`);
+  checks.check(
+    'a scrollbar is styled chrome, not the operating system\'s',
+    done?.bar?.w === 'thin' && done?.bar?.sel === 'messages' && done?.bar?.c === 'rgba(0, 0, 0, 0) rgba(0, 0, 0, 0)',
+    () => JSON.stringify(done?.bar)
+  );
   checks.check('a quoted line reads as a quote', done?.quote === true, () => `blockquote=${done?.quote}`);
   checks.check('a fence is coloured by the language it names', done?.lang === 'go' && (done?.tokens ?? 0) > 0, () => `lang=${done?.lang} tokens=${done?.tokens}`);
   checks.check('math renders, inline and display', (done?.math ?? 0) >= 2, () => `katex=${done?.math}`);
@@ -468,6 +496,19 @@ An invented [[Chunk 99]] and a malformed [[chunk 3]] label.`;
         // One rect per line box: overflow-wrap: anywhere on the body reached into the
         // cells and let the column shrink to four characters, breaking every word in it.
         headLines: range ? range.getClientRects().length : 0,
+        tableBar: (() => {
+          const w = md?.querySelector('.table-wrap') ?? md;
+          const t = w?.querySelector('table');
+          return {
+            over: Math.round((w?.scrollWidth ?? 0) - (w?.clientWidth ?? 0)),
+            chat: Math.round(document.querySelector('.chat')?.getBoundingClientRect().width ?? -1),
+            cols: t ? [...(t.querySelectorAll('tr')?.[0]?.children ?? [])].map((c) => c.clientWidth) : [],
+          };
+        })(),
+        bar: (() => {
+          const el = document.querySelector('.messages');
+          return el ? getComputedStyle(el).scrollbarWidth + '/' + getComputedStyle(el).scrollbarColor : '';
+        })(),
         body: Math.round(md?.getBoundingClientRect().width ?? 0),
         client: s.clientWidth,
         fits: (md?.getBoundingClientRect().width ?? 1e9) <= s.clientWidth + 1,
@@ -491,8 +532,17 @@ An invented [[Chunk 99]] and a malformed [[chunk 3]] label.`;
         () => `headLines=${fits?.headLines}`
       );
     }
+    // The scroller is a last resort, so what gets asserted is that it stays unused: at any
+    // width where the chat has room, nothing in the answer scrolls sideways.
+    if (width >= 1180) {
+      checks.check(
+        `the table needs no bar of its own at ${width}px`,
+        (fits?.tableBar?.over ?? 99) <= 1,
+        () => JSON.stringify({ ...fits?.tableBar, bar: fits?.bar })
+      );
+    }
     checks.check(
-      `everything wide in it scrolls where it stands at ${width}px`,
+      `whatever still cannot fit stays inside the answer at ${width}px`,
       fits?.parts === 3 &&
         (fits?.scrollers ?? []).every((o) => o === 'auto') &&
         fits?.codeScrolls === true,

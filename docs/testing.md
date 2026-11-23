@@ -53,7 +53,7 @@ text, and that `ready` is backed by rows.
 Builds, starts the binary against a throwaway data directory, and runs
 `scripts/ui-upload.mjs`, `ui-drop.mjs`, `ui-ask.mjs` and `ui-nav.mjs` over CDP
 (`scripts/cdp.mjs`, no dependencies). They assert on DOM state — computed text and
-counts — not screenshots. 214 checks across four harnesses (50 upload, 23 drop, 73 ask,
+counts — not screenshots. 216 checks across four harnesses (50 upload, 23 drop, 75 ask,
 68 nav) cover create-notebook (with
 a name) from both the sidebar and the landing state, rename, resize and collapse of both
 columns, the breadcrumb — including that it names the chat and refuses to name the panel,

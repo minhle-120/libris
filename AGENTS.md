@@ -325,6 +325,18 @@ PDFDPI int `key:"pdfDPI" group:"ingest" label:"PDF raster DPI" help:"…"
   The same reasoning took the ring off the empty-state icon — an icon in a bordered
   circle is another box, and one per column made every empty screen look like the same
   placeholder.
+- A scrollbar is chrome, not content: thin, coloured from `--border`, and transparent until
+   the pointer is inside the region that scrolls (`*:hover`, `*:focus-within`). The gutter
+   stays reserved, so an invisible bar cannot shift text when it arrives. In a notebook the
+   scroller is `.messages`, and the harness asserts its computed `scrollbar-width`/
+   `scrollbar-color` rather than a screenshot, because a bar that only exists under the
+   pointer is exactly the thing a still image gets wrong in both directions.
+- A scrollbar is chrome, not content: thin, coloured from `--border`, and transparent until
+  the pointer is inside the region that scrolls (`*:hover`, `*:focus-within`). The gutter
+  stays reserved, so an invisible bar cannot shift text when it arrives. In a notebook the
+  scroller is `.messages`, and the harness asserts its computed `scrollbar-width` and
+  `scrollbar-color` rather than a screenshot, because a bar that exists only under the
+  pointer is exactly what a still image gets wrong in both directions.
 - A row's actions arrive on hover or focus, and they arrive *over* the card corner rather
   than in its flow: four 32px buttons in flow cost a filename 128px of width and left
   seven characters to identify the file by. Hidden with `opacity`, never `display:none` —
@@ -635,6 +647,14 @@ Found the hard way. Browser-harness and fixture traps are in `docs/testing.md`.
 - Two fixed columns either side of one flexible middle means the middle dies first: at
   the default 288 + 340 the chat is 272 px at a 900 px window and 12 px at 640, with no
   horizontal scroll to show for it. Measure the columns, do not eyeball them (ADR 0012).
+- A table is shrink-to-fit already. Adding `width: max-content; max-width: 100%` to
+  `.md table` measured byte-for-byte identical at 1468 / 1180 / 900 / 640, so the bar under a
+  narrow table means the chat column is narrower than the table's minimum content width —
+  a layout fact about the column, which CSS on the table cannot fix. Two of these fixes were
+  written before the measurement; only the scrollbar one survived it.
+- A probe run after a viewport loop measures whatever the last screenshot left behind. The
+  first per-width numbers here were taken at the 640px pass and reported a 40px chat column
+  as if it were the layout; per-width numbers need the viewport set *inside* the loop.
 - Grid items with `align-items: start` do not stretch, so a sticky sub-nav needs its
   containing row to be tall. Check layout at 640 / 900 / 1180 px before declaring a
   settings-style page done.
