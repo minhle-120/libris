@@ -13,6 +13,7 @@ import (
 	"libris/internal/config"
 	"libris/internal/deviceinfo"
 	"libris/internal/engine"
+	"libris/internal/models"
 )
 
 // fakeEngine is the manager without a network, a disk, or a GPU. Every branch the page can
@@ -170,11 +171,26 @@ func (h *hostSettings) Get() config.Config { return h.cfg }
 
 func newTestHost(t *testing.T, eng EngineManager, cfg config.Config) (*Host, string) {
 	t.Helper()
+	h, cache := newTestHostWith(t, eng, cfg, HostOptions{})
+	return h, cache
+}
+
+// newTestHostWith is the same host with the managed half switched on: a models directory, a
+// fake downloader, a fake server. Those three are what every managed-mode decision in this
+// file is about, and none of them needed to be real to test it.
+func newTestHostWith(t *testing.T, eng EngineManager, cfg config.Config, extra HostOptions) (*Host, string) {
+	t.Helper()
 	dir := t.TempDir()
 	cache := filepath.Join(dir, "devices.json")
+	if extra.ModelsDir == "" {
+		extra.ModelsDir = filepath.Join(dir, "models")
+	}
 	h, err := NewHost(HostOptions{
 		Engine:      eng,
 		Settings:    &hostSettings{cfg: cfg},
+		Serve:       extra.Serve,
+		Downloads:   extra.Downloads,
+		ModelsDir:   extra.ModelsDir,
 		DeviceCache: cache,
 		Probe: func(context.Context, deviceinfo.Options) (deviceinfo.Report, error) {
 			return deviceinfo.Report{
@@ -686,5 +702,281 @@ func TestSettingsChangedWatchesTheMode(t *testing.T) {
 	same.ChatModel = "renamed"
 	if h.SettingsChanged(prev, same) {
 		t.Error("a model name change refetched the machine section for no reason")
+	}
+}
+
+// fakeFetch is the model downloader without a network. What it records is what the use cases
+// are judged on: which entry was asked for, and whether a stop or a discard went to the right
+// one.
+type fakeFetch struct {
+	mu        sync.Mutex
+	started   []string
+	stopped   int
+	discarded []string
+	progress  models.Progress
+	startErr  error
+}
+
+func (f *fakeFetch) Start(e models.Entry) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.startErr != nil {
+		return f.startErr
+	}
+	f.started = append(f.started, e.ID)
+	return nil
+}
+
+func (f *fakeFetch) Stop() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.stopped++
+}
+
+func (f *fakeFetch) Discard(e models.Entry) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.discarded = append(f.discarded, e.ID)
+	return nil
+}
+
+func (f *fakeFetch) Progress() models.Progress {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.progress
+}
+
+func (f *fakeFetch) seen() (started []string, stopped int, discarded []string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.started...), f.stopped, append([]string(nil), f.discarded...)
+}
+
+// fakeServer is libris's own llama-server, without the process.
+type fakeServer struct {
+	status  engine.Serving
+	starts  int
+	specs   []engine.Model
+	stopErr error
+}
+
+func (s *fakeServer) Start(_ context.Context, _ engine.ServeOptions, mods []engine.Model) (engine.Serving, error) {
+	s.starts++
+	s.specs = mods
+	return s.status, nil
+}
+
+func (s *fakeServer) Stop() error { return s.stopErr }
+
+func (s *fakeServer) Status() engine.Serving { return s.status }
+
+// The catalogue is the page. An empty disk still has to produce the two rows, their sizes and
+// where they would go, because that is the screen a person sees before they have downloaded
+// anything, and a card that renders nothing explains nothing about the 2.4 GB it wants.
+// assertDescribed is what every row of the card must satisfy, whether or not anything has
+// been downloaded: enough words and numbers to decide what to press.
+func assertDescribed(t *testing.T, e ModelEntryView) {
+	t.Helper()
+	if e.ID == "" || e.Label == "" || e.Quant == "" || e.Note == "" || e.Repo == "" {
+		t.Errorf("an entry the page cannot describe: %+v", e)
+	}
+	if e.Dir == "" || len(e.Parts) == 0 {
+		t.Errorf("%s: no folder, no files: %+v", e.ID, e)
+	}
+	for _, p := range e.Parts {
+		if p.Name == "" || p.Bytes <= 0 {
+			t.Errorf("%s: a file with no size: %+v", e.ID, p)
+		}
+	}
+}
+
+func TestModelCatalogListsTheCatalogueOnAnEmptyDisk(t *testing.T) {
+	fetch := &fakeFetch{}
+	h, _ := newTestHostWith(t, &fakeEngine{}, config.Default(), HostOptions{Downloads: fetch})
+
+	v := h.ModelCatalog()
+	if len(v.Entries) != len(models.Catalog()) {
+		t.Fatalf("%d entries, want the whole catalogue", len(v.Entries))
+	}
+
+	var total int64
+	for _, e := range v.Entries {
+		assertDescribed(t, e)
+		if e.Complete || e.Verified {
+			t.Errorf("%s: an empty disk is neither complete nor verified", e.ID)
+		}
+		for _, p := range e.Parts {
+			if p.Present {
+				t.Errorf("%s/%s: present on an empty disk", e.ID, p.Name)
+			}
+		}
+		total += e.Bytes
+	}
+	if v.BytesTotal != total {
+		t.Errorf("BytesTotal = %d, want %d", v.BytesTotal, total)
+	}
+
+	// The ids are what the POST sends, so this is the round trip that has to agree.
+	if _, err := h.ModelInstall(v.Entries[0].ID); err != nil {
+		t.Errorf("installing an entry the view just listed: %v", err)
+	}
+	started, _, _ := fetch.seen()
+	if len(started) != 1 || started[0] != v.Entries[0].ID {
+		t.Errorf("started %v, want the one id the view named", started)
+	}
+}
+
+// The progress bar belongs to one row. A card that marked every row busy on the strength of
+// one download would be showing the reader two progress bars for one of them.
+func TestModelCatalogMarksOnlyTheRowThatIsDownloading(t *testing.T) {
+	running := models.Progress{ID: models.Catalog()[0].ID, State: models.StateDownloading, Done: 4 << 20, Total: 1 << 30}
+	fetch := &fakeFetch{progress: running}
+	h, _ := newTestHostWith(t, &fakeEngine{}, config.Default(), HostOptions{Downloads: fetch})
+
+	v := h.ModelCatalog()
+	if !v.Entries[0].Downloading {
+		t.Error("the entry being downloaded does not say so")
+	}
+	for _, e := range v.Entries[1:] {
+		if e.Downloading {
+			t.Errorf("%s claims the download that belongs to %s", e.ID, running.ID)
+		}
+	}
+	if v.Progress.State != models.StateDownloading || v.Progress.Done != running.Done {
+		t.Errorf("the card lost the progress: %+v", v.Progress)
+	}
+
+	// The same fetcher, having finished: nothing is running, so no row has a bar — the bytes
+	// it left are reported as bytes instead, by the next test.
+	fetch.progress = models.Progress{ID: running.ID, State: models.StateIdle, Done: running.Done}
+	for _, e := range h.ModelCatalog().Entries {
+		if e.Downloading {
+			t.Errorf("%s still shows a bar after the download ended", e.ID)
+		}
+	}
+}
+
+// A page can only ask for a model that exists. This is the boundary where a typo in the
+// frontend becomes a sentence rather than a 500.
+func TestModelUseCasesRejectAnUnknownID(t *testing.T) {
+	fetch := &fakeFetch{}
+	h, _ := newTestHostWith(t, &fakeEngine{}, config.Default(), HostOptions{Downloads: fetch})
+
+	for name, call := range map[string]func() error{
+		"install": func() error { _, err := h.ModelInstall("not-in-the-catalogue"); return err },
+		"discard": func() error { _, err := h.ModelDiscard("not-in-the-catalogue"); return err },
+		"remove":  func() error { _, err := h.ModelRemove("not-in-the-catalogue"); return err },
+	} {
+		if err := call(); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: %v, want ErrInvalid", name, err)
+		}
+	}
+	started, _, discarded := fetch.seen()
+	if len(started) != 0 || len(discarded) != 0 {
+		t.Errorf("an unknown id reached the downloader anyway: %v %v", started, discarded)
+	}
+}
+
+// Two downloads at once is a busy answer, not a bug: the fetcher says so, and the page needs
+// the 429 rather than a red box.
+func TestModelInstallPassesBusyThrough(t *testing.T) {
+	fetch := &fakeFetch{startErr: models.ErrBusy}
+	h, _ := newTestHostWith(t, &fakeEngine{}, config.Default(), HostOptions{Downloads: fetch})
+
+	if _, err := h.ModelInstall(models.Catalog()[0].ID); !errors.Is(err, ErrBusy) {
+		t.Fatalf("%v, want ErrBusy", err)
+	}
+}
+
+// A download with no data directory to write into is the build's problem, not the user's, and
+// it must not read as a missing model.
+func TestModelInstallWithoutADownloader(t *testing.T) {
+	h, _ := newTestHostWith(t, &fakeEngine{}, config.Default(), HostOptions{})
+	if _, err := h.ModelInstall(models.Catalog()[0].ID); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("%v, want an ErrInvalid-shaped sentence", err)
+	}
+}
+
+// Deleting a model the running server has open is refused. The reason is the same one the
+// engine gives for the same refusal, and the answer names the act that would make it safe.
+func TestModelRemoveRefusesWhileTheServerRuns(t *testing.T) {
+	srv := &fakeServer{status: engine.Serving{Running: true, PID: 4242, Port: 8080}}
+	h, _ := newTestHostWith(t, &fakeEngine{}, config.Default(), HostOptions{Serve: srv})
+
+	id := models.Catalog()[0].ID
+	if _, err := h.ModelRemove(id); !errors.Is(err, ErrBusy) {
+		t.Fatalf("%v, want ErrBusy naming the server", err)
+	}
+	if _, err := os.Stat(filepath.Join(models.Catalog()[0].Dir(h.modelsDir))); !os.IsNotExist(err) {
+		t.Error("the refusal deleted the model anyway")
+	}
+}
+
+// With the server down, the same call removes the whole folder — partial bytes and the digest
+// records included, because a removal that leaves debris behind is a removal the user has to
+// finish by hand.
+func TestModelRemoveDeletesTheWholeFolder(t *testing.T) {
+	h, _ := newTestHostWith(t, &fakeEngine{}, config.Default(), HostOptions{Serve: &fakeServer{}})
+
+	e := models.Catalog()[0]
+	dir := e.Dir(h.modelsDir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	part := models.PartPath(filepath.Join(dir, e.Model.Name))
+	if err := os.WriteFile(part, []byte("half a model"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := h.ModelRemove(e.ID); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Errorf("the folder survived: %v", err)
+	}
+}
+
+// A model that arrived while the router was up is not loaded by it: the preset is read at
+// start. The page has to say so, or the row claims a model nothing is serving.
+func TestModelCatalogSaysWhenTheServerMustBeRestarted(t *testing.T) {
+	e := models.Catalog()[0]
+	dir := t.TempDir()
+	for _, p := range e.Parts() {
+		path := e.Path(dir, p)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		f, err := os.Create(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Sparse: the sizes are the point, the bytes are not.
+		if err := f.Truncate(p.Bytes); err != nil {
+			t.Fatal(err)
+		}
+		f.Close()
+	}
+
+	srv := &fakeServer{status: engine.Serving{Running: true, PID: 1, Port: 8080, Models: []string{}}}
+	h, _ := newTestHostWith(t, &fakeEngine{}, config.Default(),
+		HostOptions{Serve: srv, ModelsDir: dir})
+
+	v := h.ModelCatalog()
+	var mine *ModelEntryView
+	for i := range v.Entries {
+		if v.Entries[i].ID == e.ID {
+			mine = &v.Entries[i]
+		}
+	}
+	if mine == nil || !mine.Complete {
+		t.Fatalf("the entry I just placed on disk does not read as complete: %+v", v.Entries)
+	}
+	if !v.NeedsRestart {
+		t.Error("a running server that loaded nothing does not ask for a restart")
+	}
+
+	srv.status.Models = []string{string(e.Role.Alias())}
+	if h.ModelCatalog().NeedsRestart {
+		t.Error("every complete model loaded, and it still wants a restart")
 	}
 }

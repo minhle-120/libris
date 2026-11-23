@@ -119,6 +119,28 @@ ground under the feet rather than a step up.
 that source was cut into and why. It replaces the list rather than floating over it, so
 the answer that cited it stays on screen beside it.
 
+## The machine
+
+Words the engine and model cards are built from. They are facts read from the machine, never
+settings (ADR 0011), so the page states them and its buttons are verbs.
+
+**Engine** — the downloaded `llama-server`: a program, replaceable by a newer one. **Model** —
+a GGUF and its projector: weights, and *load-bearing*, because every stored vector is a
+function of the embedder that made it (ADR 0021).
+
+**Catalogue** — the models libris offers, pinned in Go by repository, commit and digest.
+**Entry** — one of them, and the folder its files live in (`<data>/models/<id>/`). There is no
+choice of quantisation to make, so nothing in the UI can disagree with the catalogue.
+
+**Download · Stop · Discard · Remove** — four verbs, four states. Stop is "not now" and keeps
+the bytes; Discard throws away a stopped download; Remove deletes a finished entry and is
+refused while the server has it open.
+
+**Installed** — every file present and hashed by libris. **Unverified** — the right size, but
+somebody else put it there and nothing has checked its digest: a weaker claim, said out loud
+rather than rounded up. A file that hashes clean is adopted and recorded, which is the only
+difference between the two words.
+
 ## Library
 
 **Notebook** — a workspace: it owns its chats and its source memberships. Sources are

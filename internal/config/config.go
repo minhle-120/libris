@@ -129,7 +129,7 @@ type Config struct {
 func groups() []struct{ ID, Label, Help string } {
 	return []struct{ ID, Label, Help string }{
 		{"servers", "Model servers", "Either libris runs llama.cpp for you, or it talks to servers you started. The switch decides which of these fields exist — libris does not ask for an address it is about to compute."},
-		{"models", "Models", "Names are what the server reports. Changing the embedder re-indexes every source."},
+		{"models", "Models", "The model that answers, and the one that finds. Changing the embedder re-indexes every source."},
 		{"retrieval", "Retrieval", "Research loop budget. Every extra iteration costs one search round trip."},
 		{"ingest", "Ingest", "Extraction is a background job. An original is kept until no notebook uses it (ADR 0013)."},
 	}

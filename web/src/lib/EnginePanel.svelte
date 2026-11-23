@@ -311,8 +311,8 @@
                 </span>
               {:else}
                 <span class="muted">
-                  no model in {view.dir.replace(/\/bin$/, '')}/models yet — a chat model named
-                  Qwen3.5-9B…-Q8_0.gguf
+                  nothing loaded yet — download one under
+                  <a href="#models">Models</a>
                 </span>
               {/each}
             </p>

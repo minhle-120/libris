@@ -109,7 +109,7 @@ export const settingGroups: SettingGroup[] = [
 	{
 		"id": "models",
 		"label": "Models",
-		"help": "Names are what the server reports. Changing the embedder re-indexes every source.",
+		"help": "The model that answers, and the one that finds. Changing the embedder re-indexes every source.",
 		"fields": [
 			{
 				"key": "chatModel",

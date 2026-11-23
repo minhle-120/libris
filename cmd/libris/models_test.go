@@ -30,6 +30,12 @@ func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
+// installed answers the only question managed mode asks about a reranker: is the file on this
+// disk? Tests that do not care answer true; the one that cares says no.
+func installed(onDisk bool) func() bool {
+	return func() bool { return onDisk }
+}
+
 func configured(t *testing.T) (config.Config, *clientCache, *index.Supplier) {
 	t.Helper()
 
@@ -64,7 +70,7 @@ func TestModelsPassTheRerankerName(t *testing.T) {
 	cfg, clients, supplier := configured(t)
 	cfg.RerankURL = rerank.URL
 
-	m, err := modelSource(clients, supplier)(cfg)
+	m, err := modelSource(clients, supplier, installed(true))(cfg)
 	if err != nil {
 		t.Fatalf("models: %v", err)
 	}
@@ -93,18 +99,31 @@ func TestModelsPassTheRerankerName(t *testing.T) {
 	}
 }
 
-// Reranking is off in two different ways — the switch is off, or no server is set —
-// and both mean vector order rather than an error on every question.
+// Reranking is off in three different ways — the switch is off, no server is set, or managed
+// mode has no reranker on disk — and all of them mean vector order rather than an error on
+// every question.
 func TestModelsRerankIsOptional(t *testing.T) {
-	for name, mut := range map[string]func(*config.Config){
-		"switch off":  func(c *config.Config) { c.RerankEnabled = false },
-		"no server":   func(c *config.Config) { c.RerankURL = "" },
-		"both absent": func(c *config.Config) { c.RerankURL = ""; c.RerankEnabled = false },
-	} {
+	cases := map[string]struct {
+		mut      func(*config.Config)
+		reranker bool // whether a reranker is on this disk
+	}{
+		"switch off": {func(c *config.Config) { c.RerankEnabled = false }, true},
+		"no server":  {func(c *config.Config) { c.RerankURL = "" }, true},
+		"both absent": {func(c *config.Config) {
+			c.RerankURL = ""
+			c.RerankEnabled = false
+		}, true},
+		// In managed mode the address is derived from the port, so it is never blank and
+		// the setting is never what stands in the way — only the file that is not there.
+		"managed, nothing installed": {
+			func(c *config.Config) { c.EngineMode = config.EngineManaged }, false,
+		},
+	}
+	for name, tc := range cases {
 		cfg, clients, supplier := configured(t)
-		mut(&cfg)
+		tc.mut(&cfg)
 
-		m, err := modelSource(clients, supplier)(cfg)
+		m, err := modelSource(clients, supplier, installed(tc.reranker))(cfg)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
@@ -120,7 +139,7 @@ func TestModelsRerankIsOptional(t *testing.T) {
 func TestProbeIdentityFollowsTheSettings(t *testing.T) {
 	cfg, clients, supplier := configured(t)
 
-	first, err := modelSource(clients, supplier)(cfg)
+	first, err := modelSource(clients, supplier, installed(true))(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +151,7 @@ func TestProbeIdentityFollowsTheSettings(t *testing.T) {
 	}
 
 	cfg.EmbedModel = "something-else"
-	second, err := modelSource(clients, supplier)(cfg)
+	second, err := modelSource(clients, supplier, installed(true))(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

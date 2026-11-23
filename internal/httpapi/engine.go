@@ -38,6 +38,15 @@ type Host interface {
 	EngineServeStop(ctx context.Context) error
 	ServeStatus() engine.Serving
 	Devices(ctx context.Context, refresh bool) (deviceinfo.Report, error)
+
+	// The models the catalogue offers, and the four things a person can do to one. Each of
+	// the answering calls returns the whole view, so a 202 carries the state it just caused
+	// rather than an acknowledgment the client has to go and re-read (AGENTS §11).
+	ModelCatalog() *app.ModelsView
+	ModelInstall(id string) (*app.ModelsView, error)
+	ModelStop() *app.ModelsView
+	ModelDiscard(id string) (*app.ModelsView, error)
+	ModelRemove(id string) (*app.ModelsView, error)
 }
 
 // maxInstallBody is the whole request: an optional tag. The cap exists so a handler that
@@ -58,6 +67,12 @@ func (s *Server) addHostRoutes(h Host) {
 	s.mux.HandleFunc("POST /api/host/engine/serve", s.handleEngineServe)
 	s.mux.HandleFunc("DELETE /api/host/engine/serve", s.handleEngineServeStop)
 	s.mux.HandleFunc("GET /api/host/devices", s.handleDevices)
+
+	s.mux.HandleFunc("GET /api/host/models", s.handleModels)
+	s.mux.HandleFunc("POST /api/host/models", s.handleModelInstall)
+	s.mux.HandleFunc("POST /api/host/models/stop", s.handleModelStop)
+	s.mux.HandleFunc("POST /api/host/models/discard", s.handleModelDiscard)
+	s.mux.HandleFunc("DELETE /api/host/models/{id}", s.handleModelRemove)
 }
 
 // handleEngine is one round trip for the whole page: what is installed, what is new, how the
@@ -227,4 +242,113 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, rep)
+}
+
+// ── the model catalogue ──────────────────────────────────────────────────────
+
+// handleModels is the card's whole read: every entry the catalogue offers, which of its files
+// are here, how much a stopped download is holding, and what the running server has loaded.
+func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.host.ModelCatalog())
+}
+
+// modelRequest names one catalogue entry. The id is the only handle the page has, and it is
+// the server that says whether it names anything — a frontend cannot make an entry exist.
+type modelRequest struct {
+	ID string `json:"id"`
+}
+
+// modelID reads the id out of a body, or answers false. The caller writes the 400: every one
+// of these handlers wants the same sentence, and a request that names nothing is a client bug
+// rather than a user's mistake.
+func modelID(w http.ResponseWriter, r *http.Request) (string, bool) {
+	var req modelRequest
+	if r.ContentLength > 0 {
+		if err := json.NewDecoder(io.LimitReader(r.Body, maxInstallBody)).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "body must be a JSON object with an id")
+			return "", false
+		}
+	}
+	id := strings.TrimSpace(req.ID)
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "this request names no model")
+		return "", false
+	}
+	return id, true
+}
+
+// handleModelInstall starts a download and answers immediately.
+//
+// This is not a long request held open for a gigabyte and a half: the only way to cancel is a
+// different endpoint, and if the download rode this request then a laptop closing its lid, a
+// proxy idle-timeout or a closed tab would be the act that stopped it. So the work runs with
+// its own context and the answer is the state this request caused.
+func (s *Server) handleModelInstall(w http.ResponseWriter, r *http.Request) {
+	id, ok := modelID(w, r)
+	if !ok {
+		return
+	}
+	view, err := s.host.ModelInstall(id)
+	if err != nil {
+		switch {
+		case errors.Is(err, app.ErrBusy):
+			writeError(w, http.StatusConflict, err.Error())
+		case errors.Is(err, app.ErrInvalid):
+			writeError(w, http.StatusUnprocessableEntity, err.Error())
+		default:
+			s.fail(w, "models", err)
+		}
+		return
+	}
+	// The bytes arrive after this response. What the answer carries is the row that says so.
+	writeJSON(w, http.StatusAccepted, view)
+}
+
+// handleModelStop interrupts the running download. The bytes stay: stop is "not now", and
+// handleModelDiscard is the button that means the other thing.
+func (s *Server) handleModelStop(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.host.ModelStop())
+}
+
+func (s *Server) handleModelDiscard(w http.ResponseWriter, r *http.Request) {
+	id, ok := modelID(w, r)
+	if !ok {
+		return
+	}
+	view, err := s.host.ModelDiscard(id)
+	if err != nil {
+		s.reportModel(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
+// handleModelRemove deletes an entry's files. 409 is the interesting answer: the running
+// server has the model open, and pulling the ground out from under a process is not what a
+// delete button means.
+func (s *Server) handleModelRemove(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "this request names no model")
+		return
+	}
+	view, err := s.host.ModelRemove(id)
+	if err != nil {
+		s.reportModel(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
+// reportModel maps the two statuses a model call can mean on their own, and hands the rest to
+// the shared mapping.
+func (s *Server) reportModel(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, app.ErrBusy):
+		writeError(w, http.StatusConflict, err.Error())
+	case errors.Is(err, app.ErrInvalid):
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+	default:
+		s.fail(w, "models", err)
+	}
 }

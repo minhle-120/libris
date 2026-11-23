@@ -7,6 +7,7 @@
   import Button from '../lib/Button.svelte';
   import Icon from '../lib/Icon.svelte';
   import EnginePanel from '../lib/EnginePanel.svelte';
+  import ModelPanel from '../lib/ModelPanel.svelte';
 
   // Values come from the backend; labels, help, ranges and enums come from the
   // generated schema. Nothing in this file defines a setting.
@@ -207,6 +208,14 @@
                under the group that names it rather than among the generated fields above. -->
           {#if group.id === 'servers' && mode === 'managed'}
             <EnginePanel saved={savedToken} />
+          {/if}
+
+          <!-- The model files a managed engine loads are not settings — nothing in this card
+               is a choice libris can apply, so `internal/config` defines none of it (§2.2) —
+               but they belong under the group that names them, next to the reranker switch
+               and the probed dimensions, which are the two model facts that are settings. -->
+          {#if group.id === 'models' && mode === 'managed'}
+            <ModelPanel saved={savedToken} />
           {/if}
         </section>
       {/each}

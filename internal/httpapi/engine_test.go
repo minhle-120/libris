@@ -35,6 +35,15 @@ type fakeHost struct {
 	devices   deviceinfo.Report
 
 	stopped, discarded int
+
+	// The model half: the view every answering call returns, and what each use case was told.
+	modelsView     *app.ModelsView
+	installID      string
+	installErr     error
+	removed        []string
+	modelRemoveErr error
+	discarded2     []string
+	modelStops     int
 }
 
 func newFakeHost() *fakeHost {
@@ -80,6 +89,30 @@ func (f *fakeHost) ServeStatus() engine.Serving           { return f.serving }
 func (f *fakeHost) Devices(ctx context.Context, refresh bool) (deviceinfo.Report, error) {
 	f.refreshed = refresh
 	return f.devices, nil
+}
+
+func (f *fakeHost) ModelCatalog() *app.ModelsView {
+	if f.modelsView == nil {
+		f.modelsView = &app.ModelsView{Dir: "/data/models", BytesTotal: 1 << 30}
+	}
+	return f.modelsView
+}
+
+func (f *fakeHost) ModelInstall(id string) (*app.ModelsView, error) {
+	f.installID = id
+	return f.ModelCatalog(), f.installErr
+}
+
+func (f *fakeHost) ModelStop() *app.ModelsView { f.modelStops++; return f.ModelCatalog() }
+
+func (f *fakeHost) ModelDiscard(id string) (*app.ModelsView, error) {
+	f.discarded2 = append(f.discarded2, id)
+	return f.ModelCatalog(), nil
+}
+
+func (f *fakeHost) ModelRemove(id string) (*app.ModelsView, error) {
+	f.removed = append(f.removed, id)
+	return f.ModelCatalog(), f.modelRemoveErr
 }
 
 func hostServer(t *testing.T, h Host) *Server {
@@ -399,5 +432,116 @@ func TestEngineServeMapsTheFailuresAPageMustShow(t *testing.T) {
 	srv4 := hostServer(t, h4)
 	if code, body := hostCall(t, srv4, http.MethodDelete, "/api/host/engine/serve", ""); code != http.StatusOK {
 		t.Errorf("stop idle: status = %d, want 200 (%s)", code, body)
+	}
+}
+
+// ── the model catalogue ──────────────────────────────────────────────────────
+
+func TestModelsGETIsTheCard(t *testing.T) {
+	h := newFakeHost()
+	h.modelsView = &app.ModelsView{
+		Dir:        "/data/models",
+		BytesTotal: 2586360320,
+		Entries: []app.ModelEntryView{
+			{ID: "lfm3-vl-2b", Label: "LFM3-VL 2B", Bytes: 1428611680, Complete: true, Verified: true,
+				Parts: []app.ModelPartView{{Name: "LFM3-VL-2B-QAD-Q4_0.gguf", Bytes: 1049615648, Present: true}}},
+		},
+		NeedsRestart: true,
+	}
+	srv := hostServer(t, h)
+
+	code, body := hostCall(t, srv, http.MethodGet, "/api/host/models", "")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d: %s", code, body)
+	}
+	var v app.ModelsView
+	if err := json.Unmarshal([]byte(body), &v); err != nil {
+		t.Fatalf("body is not a ModelsView: %v\n%s", err, body)
+	}
+	if v.BytesTotal != 2586360320 || !v.NeedsRestart || len(v.Entries) != 1 || !v.Entries[0].Verified {
+		t.Errorf("the card lost something: %+v", v)
+	}
+}
+
+// A 202 that only says "accepted" makes the client re-read the card to find out what its own
+// click did. It carries the view instead (AGENTS §11).
+func TestModelInstallAnswersWithTheStateItCaused(t *testing.T) {
+	h := newFakeHost()
+	h.modelsView = &app.ModelsView{Dir: "/data/models", Entries: []app.ModelEntryView{
+		{ID: "embeddinggemma-2", Downloading: true},
+	}}
+	srv := hostServer(t, h)
+
+	code, body := hostCall(t, srv, http.MethodPost, "/api/host/models", `{"id":"embeddinggemma-2"}`)
+	if code != http.StatusAccepted {
+		t.Fatalf("status = %d: %s", code, body)
+	}
+	if h.installID != "embeddinggemma-2" {
+		t.Errorf("the use case was told %q", h.installID)
+	}
+	var v app.ModelsView
+	if err := json.Unmarshal([]byte(body), &v); err != nil || len(v.Entries) != 1 || !v.Entries[0].Downloading {
+		t.Errorf("202 body is not the card that says so: %v %s", err, body)
+	}
+}
+
+// Two at once, and a name that is not in the catalogue, are the two answers the page has to
+// distinguish: one is "wait for the other bar", the other is a bug in this frontend.
+func TestModelInstallStatuses(t *testing.T) {
+	for _, tc := range []struct {
+		what string
+		err  error
+		body string
+		want int
+	}{
+		{"started", nil, `{"id":"x"}`, http.StatusAccepted},
+		{"already busy", app.ErrBusy, `{"id":"x"}`, http.StatusConflict},
+		{"unknown id", app.ErrInvalid, `{"id":"nope"}`, http.StatusUnprocessableEntity},
+		{"no id", nil, `{}`, http.StatusBadRequest},
+		{"not json", nil, `not json`, http.StatusBadRequest},
+	} {
+		h := newFakeHost()
+		h.installErr = tc.err
+		srv := hostServer(t, h)
+
+		code, _ := hostCall(t, srv, http.MethodPost, "/api/host/models", tc.body)
+		if code != tc.want {
+			t.Errorf("%s: status = %d, want %d", tc.what, code, tc.want)
+		}
+	}
+}
+
+// Stop keeps its bytes and answers with the card; remove answers 409 while the server is up,
+// and 200 with the card otherwise. The bodies are the point as much as the codes: the page
+// re-renders from them rather than guessing.
+func TestModelStopDiscardRemove(t *testing.T) {
+	h := newFakeHost()
+	srv := hostServer(t, h)
+
+	code, body := hostCall(t, srv, http.MethodPost, "/api/host/models/stop", "")
+	if code != http.StatusOK || !strings.Contains(body, `"dir"`) {
+		t.Errorf("stop: %d %s", code, body)
+	}
+	if h.modelStops != 1 {
+		t.Errorf("stop reached the fetcher %d times", h.modelStops)
+	}
+
+	code, _ = hostCall(t, srv, http.MethodPost, "/api/host/models/discard", `{"id":"lfm3-vl-2b"}`)
+	if code != http.StatusOK {
+		t.Errorf("discard: %d", code)
+	}
+	if len(h.discarded2) != 1 || h.discarded2[0] != "lfm3-vl-2b" {
+		t.Errorf("discard went to %v", h.discarded2)
+	}
+
+	code, _ = hostCall(t, srv, http.MethodDelete, "/api/host/models/embeddinggemma-2", "")
+	if code != http.StatusOK || len(h.removed) != 1 || h.removed[0] != "embeddinggemma-2" {
+		t.Errorf("remove: %d %v", code, h.removed)
+	}
+
+	h.modelRemoveErr = app.ErrBusy
+	code, body = hostCall(t, srv, http.MethodDelete, "/api/host/models/embeddinggemma-2", "")
+	if code != http.StatusConflict {
+		t.Errorf("remove while serving: %d %s, want 409 and the sentence", code, body)
 	}
 }

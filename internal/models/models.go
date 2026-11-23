@@ -1,20 +1,27 @@
-// Package models knows which GGUF files are on this disk and what each one is for.
+// Package models is the catalogue of what libris can run, and the record of which of it is
+// on this disk.
 //
-// It is deliberately small: a catalogue of filename patterns, a directory scan, and the
-// pairing of a multimodal model with its projector. It does not download, does not read
-// metadata, and holds no settings — the catalogue is the same one ADR 0020 records, in code
-// rather than in prose, because a list that exists twice is two lists.
+// A catalogue entry is not a suggestion: it names one file, at one revision of one
+// repository, with the digest upstream gives it. That is what makes a downloaded model the
+// same model twice, which a glob over a directory never was — and it is why this package,
+// not a settings field, decides which models exist at all. It does not read GGUF metadata,
+// holds no settings, and does not start anything.
 package models
 
 import (
 	"os"
 	"path/filepath"
-	"strings"
 
 	"libris/internal/engine"
 )
 
-// Dir is where a user's own GGUFs go, and where a future downloader would put them.
+// Dir is the folder under the data directory where the catalogue is kept. Each entry gets a
+// subfolder of its own rather than sharing one flat directory, and the reason is
+// mmproj-BF16.gguf: upstream names a projector after its *precision*, not its model, so two
+// entries can want that exact filename and only one can have it. A shared directory would
+// answer that collision by silently pairing a chat model with another model's vision tower —
+// an answer that cites the wrong picture. One folder per entry makes the collision impossible
+// and a removal one rmdir.
 func Dir(dataDir string) string { return filepath.Join(dataDir, "models") }
 
 // Role is what a model is for. The three are exactly the three roles the answer path has:
@@ -27,108 +34,298 @@ const (
 	RoleRerank Role = "rerank"
 )
 
-// pattern is one catalogue entry: the role it fills, and a case-insensitive glob the file
-// name has to match. Globs rather than names so a quantisation or a build date in the name
-// does not make a downloaded model invisible.
-type pattern struct {
-	role  Role
-	glob  string
-	alias engine.Alias
-}
-
-var catalogue = []pattern{
-	{RoleChat, "qwen3.5-9b-uncensored-holo2.5*-q8_0.gguf", engine.AliasChat},
-	{RoleEmbed, "embeddinggemma-300m-*it*.gguf", engine.AliasEmbed},
-	{RoleRerank, "rerank-gemma-*it*.gguf", engine.AliasRerank},
-}
-
-// Roles lists what libris knows how to use, in the order a settings page would show them.
-// Paired with Pattern, it lets the page say "no chat model yet — a file named
-// Qwen3.5-9B…-Q8_0.gguf in <data>/models" instead of a bare "nothing found".
-func Roles() []Role {
-	out := make([]Role, 0, len(catalogue))
-	for _, p := range catalogue {
-		out = append(out, p.role)
+// Alias is the name this model is given in the router's preset, and therefore the name libris
+// sends in the "model" field of a request. engine owns the type because the preset is
+// engine's file format; the mapping lives here because which model fills a role is this
+// package's decision.
+func (r Role) Alias() engine.Alias {
+	switch r {
+	case RoleEmbed:
+		return engine.AliasEmbed
+	case RoleRerank:
+		return engine.AliasRerank
+	default:
+		return engine.AliasChat
 	}
-	return out
 }
 
-// Pattern returns the filename pattern libris looks for a role, or "" for a role it does not
-// know.
-func Pattern(role Role) string {
-	for _, p := range catalogue {
-		if p.role == role {
-			return p.glob
-		}
-	}
-	return ""
+// Part is one file: the name upstream gives it, how big it must be, and its digest.
+//
+// The digest is not paranoia about a corrupted byte. It is the only thing that says the file
+// a person is running is the file the catalogue describes, and Hugging Face serves the same
+// value itself (x-linked-etag) for files under LFS.
+type Part struct {
+	Name   string
+	Bytes  int64
+	SHA256 string
 }
 
-// Model is one GGUF on disk that libris knows what to do with.
-type Model struct {
+// Entry is one model in the catalogue: what it is called, what it is for, and the two files
+// that make it run.
+type Entry struct {
+	ID    string
 	Role  Role
-	Alias engine.Alias
-	Path  string
-	Name  string
-	Size  int64
-	// MMProj is the vision projector paired with this model, empty when there is none. The
-	// pairing is by filename prefix because that is the convention upstream publishes under
-	// (…-Q8_0.gguf next to …-mmproj-F32.gguf) and there is no metadata that says it.
-	MMProj string
+	Label string // what the settings page calls it
+	Quant string // how the weights were squeezed, in upstream's own shorthand
+	Note  string // why this one, in a sentence the page can show
+
+	// Repo and Rev are the pinned source. Rev is a commit sha rather than "main" because
+	// main moves, and a model that changes underneath a saved corpus silently invalidates
+	// every vector in it (index/supplier.go compares dimensions, not meanings).
+	Repo string
+	Rev  string
+
+	Model  Part
+	MMProj Part // empty for a model with no vision tower
 }
 
-// Scan lists the models in dir that the catalogue recognises. A file nobody recognises is
-// left out on purpose: an unrecognised GGUF is not a model libris can name to a router, and
-// a list containing it would be a promise the answer path cannot keep.
-func Scan(dir string) []Model {
-	paths := listGGUF(dir)
-	var out []Model
-	for _, p := range catalogue {
-		for _, path := range paths {
-			name := filepath.Base(path)
-			ok, err := filepath.Match(p.glob, strings.ToLower(name))
-			if err != nil || !ok {
-				continue
+// catalog is everything libris offers. Two models, one chat and one embedding, because that
+// is what the answer path needs before it needs anything else, and a menu of twelve quants is
+// a way of asking somebody to guess (ADR 0021). The reranker is deliberately absent: without
+// one, retrieval stays in vector order, which is a documented degradation rather than a lie.
+var catalog = []Entry{
+	{
+		ID:    "lfm3-vl-2b",
+		Role:  RoleChat,
+		Label: "LFM3-VL 2B",
+		Quant: "Q4_0 (QAD)",
+		Note:  "Chat and synthesis. Vision-language, so it reads a page raster as well as its text.",
+		Repo:  "LiquidAI/LFM3-VL-2B-GGUF",
+		Rev:   "1add221a5ea6c047fcf1eaaf2d247939d7cf8849",
+		Model: Part{
+			Name:   "LFM3-VL-2B-QAD-Q4_0.gguf",
+			Bytes:  1049615648,
+			SHA256: "621c455376cb96a20891697deb9975c6fb47dd5ea98ed3ad1f3b7e8f24f0b1e6",
+		},
+		MMProj: Part{
+			Name:   "mmproj-LFM3-VL-2B-BF16.gguf",
+			Bytes:  378996032,
+			SHA256: "8e75a88afc0e6a3bcd637becbe720447ea0794934b7b417a1f42d5cfe0d9c288",
+		},
+	},
+	{
+		ID:    "embeddinggemma-2",
+		Role:  RoleEmbed,
+		Label: "EmbeddingGemma 2",
+		Quant: "Q4_K_XL (UD)",
+		Note:  "Recall. Multimodal, so a page image is searchable by what it shows.",
+		Repo:  "unsloth/embeddinggemma-2-GGUF",
+		Rev:   "031f0d4b35536f69ab3509d4893c923264fcf253",
+		Model: Part{
+			Name:   "embeddinggemma-2-UD-Q4_K_XL.gguf",
+			Bytes:  175673856,
+			SHA256: "ea905fd08e8061db77a0031cbb5096d459d7cfd2bdd0ad2ba66e483f16719493",
+		},
+		MMProj: Part{
+			Name:   "mmproj-BF16.gguf",
+			Bytes:  982074880,
+			SHA256: "995aaa56e88b9b631f651861d659b728a625ccc02a238be37cff56cf11dc0032",
+		},
+	},
+}
+
+// Catalog returns what libris offers, in the order a page should show them.
+func Catalog() []Entry { return catalog }
+
+// Look finds an entry by id. The id is what the API sends, so this is the one place that
+// decides whether a request names a model that exists.
+func Look(id string) (Entry, bool) {
+	for _, e := range catalog {
+		if e.ID == id {
+			return e, true
+		}
+	}
+	return Entry{}, false
+}
+
+// Parts returns the files an entry needs, model first and projector second — the order a
+// download goes in, because the projector is useless without the model beside it.
+func (e Entry) Parts() []Part {
+	if e.MMProj.Name == "" {
+		return []Part{e.Model}
+	}
+	return []Part{e.Model, e.MMProj}
+}
+
+// Bytes is everything the entry costs on disk.
+func (e Entry) Bytes() int64 {
+	var n int64
+	for _, p := range e.Parts() {
+		n += p.Bytes
+	}
+	return n
+}
+
+// URL is where one part is fetched from. resolve/<sha>/ rather than resolve/main/ because the
+// revision is pinned; a file whose name is under the same commit is the file the digest was
+// read from.
+func (e Entry) URL(p Part) string {
+	return "https://huggingface.co/" + e.Repo + "/resolve/" + e.Rev + "/" + p.Name
+}
+
+// Dir is the entry's folder inside a models directory.
+func (e Entry) Dir(modelsDir string) string { return filepath.Join(modelsDir, e.ID) }
+
+// Path is where one part belongs on disk.
+func (e Entry) Path(modelsDir string, p Part) string {
+	return filepath.Join(e.Dir(modelsDir), p.Name)
+}
+
+// Status is one catalogue entry as the machine knows it: which files are here, how much of
+// anything is missing, and whether what is here is what libris verified.
+type Status struct {
+	Entry
+
+	// Where this entry lives: its folder, and the two files inside it. Computed once, here,
+	// so a page and a router reading the same list cannot disagree about a path.
+	Folder     string `json:"folder"`
+	Path       string `json:"path"`
+	MMProjPath string `json:"mmprojPath,omitempty"`
+
+	// Have and Missing are part names, so a page can say "the model is here, its projector is
+	// not" rather than "incomplete".
+	Have []string
+	// Missing lists the parts that are absent or the wrong size.
+	Missing []string
+	// PartialBytes is what a stopped download is holding in this entry's folder.
+	PartialBytes int64
+	// Verified says every present file was written by libris and hashed on the way in. A
+	// file a person copied here with the right name and size is present but unverified —
+	// which is true and worth showing, because the alternative is claiming a digest libris
+	// never computed. Hashing 1.4 GB to find that out is not a page load.
+	Verified bool
+	// Complete is true when every part is present at the right size.
+	Complete bool
+}
+
+// StatusOf reports one entry for a given models directory. It stats; it never hashes.
+func StatusOf(modelsDir string, e Entry) Status {
+	st := Status{
+		Entry:      e,
+		Folder:     e.Dir(modelsDir),
+		Path:       e.Path(modelsDir, e.Model),
+		MMProjPath: e.Path(modelsDir, e.MMProj),
+		Verified:   true,
+	}
+	for _, p := range e.Parts() {
+		path := e.Path(modelsDir, p)
+		sz, part := statFile(path)
+		switch {
+		case sz == p.Bytes:
+			st.Have = append(st.Have, p.Name)
+			if _, err := os.Stat(path + verifiedSuffix); err != nil {
+				st.Verified = false
 			}
-			m := Model{Role: p.role, Alias: p.alias, Path: path, Name: name, Size: sizeOf(path)}
-			if proj := pairMMProj(paths, path); proj != "" {
-				m.MMProj = proj
-			}
-			out = append(out, m)
-			break // one file per role: the first match wins, and two chat models is a choice
+		case sz > 0 || part > 0:
+			st.Missing = append(st.Missing, p.Name)
+			st.PartialBytes += part
+			st.Verified = false
+		default:
+			st.Missing = append(st.Missing, p.Name)
+			st.Verified = false
+		}
+	}
+	st.Complete = len(st.Missing) == 0
+	return st
+}
+
+// Statuses reports the whole catalogue, in catalogue order. This is the one read of the disk
+// a caller needs: everything below is a pure function over its result, so a page that shows
+// the list and a router that starts from it cannot disagree about what is installed.
+func Statuses(modelsDir string) []Status {
+	out := make([]Status, 0, len(catalog))
+	for _, e := range catalog {
+		out = append(out, StatusOf(modelsDir, e))
+	}
+	return out
+}
+
+// RolesOf lists the roles these statuses can fill right now. It is what makes "reranking is
+// available" a fact about the machine rather than a setting that promises a model nobody
+// downloaded (ADR 0021).
+func RolesOf(statuses []Status) []Role {
+	var out []Role
+	for _, s := range statuses {
+		if s.Complete {
+			out = append(out, s.Role)
 		}
 	}
 	return out
 }
 
-// pairMMProj finds the projector that belongs to model. It looks for a sibling whose name is
-// the model's stem plus "mmproj", which is the shape Hugging Face uploads come in.
-func pairMMProj(paths []string, model string) string {
-	stem := strings.ToLower(strings.TrimSuffix(filepath.Base(model), ".gguf"))
-	cut := stem
-	if i := strings.LastIndex(stem, "-"); i > 0 {
-		cut = stem[:i]
+// HasRole reports whether any complete status fills the role.
+func HasRole(statuses []Status, role Role) bool {
+	for _, r := range RolesOf(statuses) {
+		if r == role {
+			return true
+		}
 	}
-	for _, p := range paths {
-		n := strings.ToLower(filepath.Base(p))
-		if !strings.Contains(n, "mmproj") {
+	return false
+}
+
+// verifiedSuffix marks a file libris wrote and hashed. It is a sibling rather than a field in
+// a database because the data directory has to stay right when copied, moved, or emptied by
+// hand — the same reason the engine keeps its own record beside the binaries.
+const verifiedSuffix = ".libris-sha256"
+
+// MarkVerified records that a file was written by libris and matched its digest.
+func MarkVerified(path, sum string) error {
+	return os.WriteFile(path+verifiedSuffix, []byte(sum+"\n"), 0o600)
+}
+
+// Models turns statuses into what the router needs: an alias, a path, and the projector beside
+// it. An incomplete entry is skipped rather than half-served, because a preset naming a
+// missing file is a server that refuses to start, and the sentence llama.cpp prints is worse
+// than the one this app can print.
+func Models(statuses []Status) []engine.Model {
+	var out []engine.Model
+	for _, s := range statuses {
+		if !s.Complete {
 			continue
 		}
-		if strings.HasPrefix(n, cut) {
-			return p
-		}
+		out = append(out, engine.Model{
+			Alias:  s.Role.Alias(),
+			Kind:   kindOf(s.Role),
+			Path:   s.Path,
+			MMProj: s.MMProjPath,
+		})
 	}
-	return ""
+	return out
 }
 
-func listGGUF(dir string) []string {
-	paths, _ := filepath.Glob(filepath.Join(dir, "*.gguf"))
-	return paths
+func kindOf(r Role) engine.ModelKind {
+	switch r {
+	case RoleEmbed:
+		return engine.KindEmbed
+	case RoleRerank:
+		return engine.KindRerank
+	default:
+		return engine.KindChat
+	}
 }
 
-func sizeOf(path string) int64 {
+// Delete removes an entry's whole folder, record files and partial bytes included. A folder
+// that is not there is not an error: the button that asked has already got the state it wants.
+func Delete(modelsDir string, e Entry) error {
+	err := os.RemoveAll(e.Dir(modelsDir))
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+// statFile returns the size of a finished file and the size of its partial twin. A part file
+// counts as nothing for "present" and everything for "how much room is this using".
+func statFile(path string) (size, partial int64) {
 	if st, err := os.Stat(path); err == nil {
-		return st.Size()
+		size = st.Size()
 	}
-	return 0
+	if st, err := os.Stat(PartPath(path)); err == nil {
+		partial = st.Size()
+	}
+	return size, partial
 }
+
+// PartPath is where a download in progress lives, beside the file it will become. Keeping it
+// beside its destination is what makes "how much room is this using" one stat.
+func PartPath(final string) string { return final + ".part" }

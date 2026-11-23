@@ -62,6 +62,31 @@ type EngineManager interface {
 	ClearParts() error
 }
 
+// ModelFetcher is what Host needs of the model downloader — four methods, because those are
+// the four things the page can do to a download. models.Fetcher satisfies it. It is declared
+// here rather than used as a concrete type for the same reason EngineManager is: a test of
+// the settings page must not need a 2.4 GB network (AGENTS §2.11).
+type ModelFetcher interface {
+	Start(models.Entry) error
+	Stop()
+	Discard(models.Entry) error
+	Progress() models.Progress
+}
+
+// Server is what Host needs of the thing that owns libris's own llama-server: start it, stop
+// it, and ask what it says. engine's Supervisor satisfies it.
+//
+// It is declared here rather than used as a concrete type because every managed-mode decision
+// in this file is a decision *about* that process — which mode may start one, whether a model
+// file may be deleted underneath it, whether the preset on disk still describes what is
+// loaded — and with the concrete type in the struct, none of them could be tested without a
+// llama.cpp binary and a GPU.
+type Server interface {
+	Start(ctx context.Context, o engine.ServeOptions, models []engine.Model) (engine.Serving, error)
+	Stop() error
+	Status() engine.Serving
+}
+
 // HostOptions is the wiring. DeviceCache is a file path under the data directory; an empty
 // one means the report is produced every time and never remembered.
 type HostOptions struct {
@@ -70,11 +95,13 @@ type HostOptions struct {
 	DeviceCache string
 	Logger      *slog.Logger
 
-	// Serve and ModelsDir are the managed half (ADR 0020): the supervisor that owns libris's
-	// own llama-server, and the directory its models come from. Either may be nil/empty in a
-	// build without a data directory; managed mode then says so rather than pretending.
-	Serve     *engine.Supervisor
+	// Serve, ModelsDir and Downloads are the managed half (ADR 0020): the supervisor that owns
+	// libris's own llama-server, the directory its models come from, and the thing that fills
+	// that directory. Any of them may be nil/empty in a build without a data directory;
+	// managed mode then says so rather than pretending.
+	Serve     Server
 	ModelsDir string
+	Downloads ModelFetcher
 
 	// Probe asks the installed engine what it can run on. It is a field so the caching around it can be tested on a
 	// machine with neither a GPU nor permission to run anything; nil means the real one.
@@ -85,7 +112,8 @@ type Host struct {
 	engine    EngineManager
 	settings  Settings
 	devCache  string
-	serve     *engine.Supervisor
+	serve     Server
+	fetch     ModelFetcher
 	modelsDir string
 	probe     func(context.Context, deviceinfo.Options) (deviceinfo.Report, error)
 	log       *slog.Logger
@@ -123,6 +151,7 @@ func NewHost(opts HostOptions) (*Host, error) {
 		settings:  opts.Settings,
 		devCache:  opts.DeviceCache,
 		serve:     opts.Serve,
+		fetch:     opts.Downloads,
 		modelsDir: opts.ModelsDir,
 		probe:     probe,
 		log:       log,
@@ -448,20 +477,215 @@ func (h *Host) endpoint(cfg config.Config) string {
 	return engine.Endpoint("127.0.0.1", cfg.EnginePort)
 }
 
-// modelViews reads the models directory. A directory that does not exist is not an error:
-// "no models yet, and here is where one would go" is a state the page has to be able to show.
+// modelViews is what the router would load right now: one row per complete entry. A directory
+// that does not exist is not an error — "nothing here yet, and here is where it would go" is
+// a state the page has to be able to show.
 func (h *Host) modelViews() []ModelView {
 	if h.modelsDir == "" {
 		return nil
 	}
 	var out []ModelView
-	for _, m := range models.Scan(h.modelsDir) {
+	for _, st := range models.Statuses(h.modelsDir) {
+		if !st.Complete {
+			continue
+		}
 		out = append(out, ModelView{
-			Role: string(m.Role), Alias: string(m.Alias), File: m.Name,
-			Path: m.Path, Bytes: m.Size, MMProj: m.MMProj,
+			Role: string(st.Role), Alias: string(st.Role.Alias()), File: filepath.Base(st.Path),
+			Path: st.Path, Bytes: st.Bytes(), MMProj: st.MMProjPath,
 		})
 	}
 	return out
+}
+
+// ModelPartView is one file of an entry: the weights, or the vision projector beside them.
+type ModelPartView struct {
+	Name    string `json:"name"`
+	Bytes   int64  `json:"bytes"`
+	Present bool   `json:"present"`
+}
+
+// ModelEntryView is one catalogue entry as the page shows it. The catalogue is what makes the
+// download button possible at all: without it the page would be asking a person to paste a
+// URL and hope the file is the one their corpus was embedded with (ADR 0021).
+type ModelEntryView struct {
+	ID       string          `json:"id"`
+	Role     string          `json:"role"`
+	Label    string          `json:"label"`
+	Quant    string          `json:"quant"`
+	Note     string          `json:"note"`
+	Repo     string          `json:"repo"`
+	Revision string          `json:"revision"`
+	Bytes    int64           `json:"bytes"`
+	Dir      string          `json:"dir"`
+	Parts    []ModelPartView `json:"parts"`
+
+	// Complete is "every file is here at the right size". Verified is the stronger claim —
+	// that libris wrote them and hashed them on the way in — and the difference is not
+	// pedantic: a file copied in by hand with a truncated tail would otherwise be called
+	// ready, and the router is the thing that would notice.
+	Complete bool `json:"complete"`
+	Verified bool `json:"verified"`
+
+	// PartialBytes is what a stopped download of *this* entry is holding.
+	PartialBytes int64 `json:"partialBytes"`
+	// Downloading marks the entry a download is running for, so the row can show one bar
+	// rather than the whole card claiming to be busy.
+	Downloading bool `json:"downloading"`
+}
+
+// ModelsView is the model half of the settings page.
+type ModelsView struct {
+	Dir          string           `json:"dir"`
+	Entries      []ModelEntryView `json:"entries"`
+	BytesTotal   int64            `json:"bytesTotal"`
+	PartialBytes int64            `json:"partialBytes"`
+
+	// Progress is the running download, or the last one's failure. It names its entry, so a
+	// row knows whether the bar belongs to it.
+	Progress models.Progress `json:"progress"`
+	Serve    *engine.Serving `json:"serve,omitempty"`
+
+	// NeedsRestart says what it sounds like: something complete on disk is not loaded by the
+	// running server. Repeating the preset is not enough — the router reads it at start.
+	NeedsRestart bool `json:"needsRestart"`
+}
+
+// ModelCatalog reads the disk and reports. It is a stat over four files, so it is a page load
+// rather than a job: nothing here hashes, and nothing here asks a server anything.
+func (h *Host) ModelCatalog() *ModelsView {
+	statuses := models.Statuses(h.modelsDir)
+	v := &ModelsView{Dir: h.modelsDir, BytesTotal: 0}
+
+	prog := models.Progress{}
+	if h.fetch != nil {
+		prog = h.fetch.Progress()
+	}
+	v.Progress = prog
+
+	for _, st := range statuses {
+		e := ModelEntryView{
+			ID: st.ID, Role: string(st.Role), Label: st.Label, Quant: st.Quant, Note: st.Note,
+			Repo: st.Repo, Revision: st.Rev, Bytes: st.Bytes(), Dir: st.Folder,
+			Complete: st.Complete, Verified: st.Verified, PartialBytes: st.PartialBytes,
+			Downloading: prog.Running() && prog.ID == st.ID,
+		}
+		present := map[string]bool{}
+		for _, name := range st.Have {
+			present[name] = true
+		}
+		for _, p := range st.Parts() {
+			e.Parts = append(e.Parts, ModelPartView{Name: p.Name, Bytes: p.Bytes, Present: present[p.Name]})
+		}
+		v.Entries = append(v.Entries, e)
+		v.BytesTotal += e.Bytes
+		v.PartialBytes += e.PartialBytes
+	}
+
+	if h.serve != nil {
+		srv := h.serve.Status()
+		v.Serve = &srv
+		if srv.Running {
+			loaded := map[string]bool{}
+			for _, m := range srv.Models {
+				loaded[m] = true
+			}
+			for _, st := range statuses {
+				if st.Complete && !loaded[string(st.Role.Alias())] {
+					v.NeedsRestart = true
+					break
+				}
+			}
+		}
+	}
+	return v
+}
+
+// ErrNoModelsDir is a managed-mode request that this build cannot carry out, because nothing
+// pointed it at a data directory. It is phrased as a fact about the build, not about the user.
+var ErrNoModelsDir = errors.New("app: this build has no models directory")
+
+// ModelInstall starts a download and answers immediately, with the state it just caused.
+//
+// It does not hold the request open for the length of the download. A 1.4 GB body over a
+// hotel wifi is an hour, and an hour is longer than any proxy, browser tab or HTTP/2 idle
+// timeout is patient about — and a dropped request must not be what stops the bytes, because
+// that would make closing a tab the same act as pressing Cancel. So the page polls the
+// catalogue instead, which is the arrangement the ingest queue already uses.
+func (h *Host) ModelInstall(id string) (*ModelsView, error) {
+	e, ok := models.Look(id)
+	if !ok {
+		return h.ModelCatalog(), fmt.Errorf("%w: no model named %q", ErrInvalid, id)
+	}
+	if h.fetch == nil {
+		return h.ModelCatalog(), fmt.Errorf("%w: download the engine first", ErrInvalid)
+	}
+	// Downloading is allowed in external mode on purpose. These are files in libris's own
+	// data directory; what the mode decides is whether libris *runs* them. Refusing here
+	// would make the switch decide whether a person may fill their own disk.
+	if err := h.fetch.Start(e); err != nil {
+		if errors.Is(err, models.ErrBusy) {
+			return h.ModelCatalog(), fmt.Errorf("%w: another model is still downloading", ErrBusy)
+		}
+		return h.ModelCatalog(), fmt.Errorf("%w: %s", ErrInvalid, err)
+	}
+	return h.ModelCatalog(), nil
+}
+
+// ModelStop interrupts the running download and keeps its bytes. Stop is "not now"; the
+// button that means "throw them away" is ModelDiscard, and the difference is the whole point
+// of having two.
+func (h *Host) ModelStop() *ModelsView {
+	if h.fetch != nil {
+		h.fetch.Stop()
+	}
+	return h.ModelCatalog()
+}
+
+// ModelDiscard throws away a stopped download's partial bytes for one entry.
+func (h *Host) ModelDiscard(id string) (*ModelsView, error) {
+	e, ok := models.Look(id)
+	if !ok {
+		return h.ModelCatalog(), fmt.Errorf("%w: no model named %q", ErrInvalid, id)
+	}
+	if h.fetch == nil {
+		return h.ModelCatalog(), ErrNoModelsDir
+	}
+	if err := h.fetch.Discard(e); err != nil {
+		return h.ModelCatalog(), fmt.Errorf("app: discard the partial download: %w", err)
+	}
+	return h.ModelCatalog(), nil
+}
+
+// ModelRemove deletes an entry's files.
+//
+// It refuses while the server is up, for the same reason removing the engine does: the running
+// llama-server has the file open, and deleting the ground out from under a process is not a
+// thing to do because a button was pressed. The answer names the act that would make it
+// possible rather than doing it quietly.
+func (h *Host) ModelRemove(id string) (*ModelsView, error) {
+	e, ok := models.Look(id)
+	if !ok {
+		return h.ModelCatalog(), fmt.Errorf("%w: no model named %q", ErrInvalid, id)
+	}
+	if h.modelsDir == "" {
+		return h.ModelCatalog(), ErrNoModelsDir
+	}
+	if h.serve != nil && h.serve.Status().Running {
+		return h.ModelCatalog(), fmt.Errorf("%w: the model server is running and has %s open — stop it first",
+			ErrBusy, e.Label)
+	}
+	// A download of this entry has to be interrupted first, or the fetcher would recreate the
+	// folder the moment the delete finished.
+	if h.fetch != nil {
+		if p := h.fetch.Progress(); p.Running() && p.ID == id {
+			h.fetch.Stop()
+		}
+	}
+	if err := models.Delete(h.modelsDir, e); err != nil {
+		return h.ModelCatalog(), fmt.Errorf("app: remove %s: %w", e.ID, err)
+	}
+	h.log.Debug("model removed", "id", e.ID, "dir", e.Dir(h.modelsDir))
+	return h.ModelCatalog(), nil
 }
 
 // ErrEngineMode is a request that belongs to the other half of the switch — a start asked for
@@ -486,21 +710,10 @@ func (h *Host) EngineServeStart(ctx context.Context) (engine.Serving, error) {
 		return engine.Serving{}, fmt.Errorf("%w: download the engine first", ErrInvalid)
 	}
 
-	mods := models.Scan(h.modelsDir)
-	var specs []engine.Model
-	for _, m := range mods {
-		kind := engine.KindChat
-		switch m.Role {
-		case models.RoleEmbed:
-			kind = engine.KindEmbed
-		case models.RoleRerank:
-			kind = engine.KindRerank
-		}
-		specs = append(specs, engine.Model{Alias: m.Alias, Kind: kind, Path: m.Path, MMProj: m.MMProj})
-	}
+	specs := models.Models(models.Statuses(h.modelsDir))
 	if len(specs) == 0 {
-		return engine.Serving{}, fmt.Errorf("%w: no model in %s — a chat model named %s",
-			ErrInvalid, h.modelsDir, models.Pattern(models.RoleChat))
+		return engine.Serving{}, fmt.Errorf("%w: nothing to run in %s — download a model first",
+			ErrInvalid, h.modelsDir)
 	}
 
 	srv, err := h.serve.Start(ctx, engine.ServeOptions{
@@ -538,8 +751,8 @@ func (h *Host) EngineAutostart(ctx context.Context) {
 	if _, ok := h.engine.Status(); !ok {
 		return // nothing downloaded; the page's download button is the answer
 	}
-	if len(models.Scan(h.modelsDir)) == 0 {
-		return // no model to run; the page names the file it is looking for
+	if len(models.Models(models.Statuses(h.modelsDir))) == 0 {
+		return // no complete model to run; the page names what is missing
 	}
 	srv, err := h.EngineServeStart(ctx)
 	if err != nil {

@@ -122,6 +122,7 @@ next one, so what each one settles, in the order an agent is likely to need it:
 | whether llama.cpp ships with libris, or is fetched | 0018 | it is fetched, on demand, unpinned, verified against upstream's digest |
 | whether libris runs the model servers, or somebody else does | 0020 | one switch, exclusive: managed mode fetches the Vulkan build, runs one llama.cpp in router mode, and derives the addresses; the build was never a choice |
 | what libris is allowed to learn about the machine | 0018, 0019 | the engine's `--list-devices` is the *only* device probe — no `nvidia-smi`, no `lspci`, no WMI — so a machine with nothing installed is told it has not been asked, not that it has no GPU |
+| which GGUFs libris downloads, and at what quantisation | 0021 | the catalogue is pinned in Go by repo, commit and digest; the page offers no choice, because a different embedder silently invalidates every vector already stored |
 
 ---
 
@@ -191,7 +192,7 @@ internal/
   httpapi/             browser transport: JSON, files, embedded SPA, the SSE ask stream
   events/              not built: status/token/job events
   engine/              llama.cpp's prebuilt releases: find, verify, unpack — and the one router process managed mode runs (serve.go: preset, start, stop, state)
-  models/              which GGUFs are on this disk and which role each one fills
+  models/              the pinned GGUF catalogue, what is on this disk and which role each fills (+ download.go: resume, digest-as-you-go, adopted files)
   deviceinfo/          what the machine can run, asked of the installed engine and cached in <data>/devices.json
   mcpserver/           not built: MCP transport
 web/                   Svelte source, embed.go, and dist/ — committed, because go:embed bakes it in
@@ -220,9 +221,11 @@ in `app` so both transports share one implementation.
 
 **Built:** settings and the generated settings UI — including the one switch that decides
 whether libris runs the model servers or talks to servers you started (ADR 0020), and the
-router process, its preset file and its derived addresses; the machine's device report, and
-the on-demand download of llama.cpp's prebuilt binaries (`docs/llamacpp.md` has the release
-facts and the router-mode flags, ADR 0018 why the build is fetched rather than shipped); ingest of text, PDFs (text +
+router process, its preset file and its derived addresses; the machine's device report, the
+on-demand download of llama.cpp's prebuilt binaries (`docs/llamacpp.md` has the release facts
+and the router-mode flags, ADR 0018 why the build is fetched rather than shipped) and the
+model downloads under the Models group (ADR 0021: two pinned entries, resumed and hashed as
+they arrive); ingest of text, PDFs (text +
 rasters), images and audio slices; embedding; recall, rerank and the registry; the
 research loop and synthesis; turn persistence in a chat that a question finds, starts, or
 deletes; the SSE ask stream; the web UI including the conversation tree, the chunk
@@ -233,10 +236,11 @@ inspector, and answers rendered as markdown with LaTeX (ADR 0016); `make check`,
 are empty directories, untracked); ingest progress events; audio transcription — slicing
 works, so audio is retrievable by embedding, but `Segment.Text` stays empty and the
 synthesiser cannot quote it; lexical recall; vector ANN (retrieval is a brute-force
-cosine scan); an eval set; model-server packaging; Office formats; and the GGUF downloads —
-managed mode supervises a router over whatever `<data>/models` already holds, and the menu
-that fetches a model into it is the next thing (ADR 0020 defers which three, and at what
-quantisation, deliberately).
+cosine scan); an eval set; model-server packaging; Office formats; a reranker in the
+catalogue (reranking stays a fact about the machine — the preset has no rerank section until a
+reranker is complete, ADR 0021); and a per-embedder fingerprint on segments, which is what
+would make "you removed the model these vectors were made with" precise instead of warned
+about.
 
 ---
 
@@ -457,6 +461,14 @@ PDFDPI int `key:"pdfDPI" group:"ingest" label:"PDF raster DPI" help:"…"
 - The panel's tabs are Sources · Activity. The chat is not one of them: it is the middle
   column, and the composer's send button is still titled Ask because there it is a verb,
   not a place.
+- The Models group holds two kinds of thing and says so by construction: the settings
+  `internal/config` defines (`rerankEnabled`, the probed `embedDimensions`), and
+  `ModelPanel.svelte`, which defines none — model downloads are not choices libris can apply
+  at a moment's notice (ADR 0011). The card renders only in managed mode, and its four verbs
+  mean four things: download, stop (keep the bytes), discard (throw them away), remove (a
+  finished entry, refused while the router has it open). A stopped bar and a failed bar are
+  different sentences, and "unverified" is a badge about a digest nobody checked rather than a
+  quieter form of "installed".
 - One New control per screen. The header's New button is gone: with the sidebar's `+`
   and the landing empty state already creating notebooks, a third was three ways to
   find the same dialog and three ways for one to be wired wrong — the landing button
@@ -573,9 +585,13 @@ a ticket, or that a ticket would only restate.
    (captions, transcripts), or both. `Segment.Text` is empty for images today.
 6. **Whether the research/synthesis split survives.** Built as the spec has it, with
    `tool_choice: "required"` and the prose fallback, so it can be re-litigated against
-   real transcripts rather than in the abstract. Still unverified: whether local models
-   obey `tool_choice: "required"` under load, and whether the spec's iteration budget and
-   phrasing suit the models installed here — `maxIterations` and `historyMessages` are
+   real transcripts rather than in the abstract. One data point, measured 2026-11-23 on the
+   catalogue's own pair through a b12651 router: `tool_choice: "required"` is obeyed
+   (a clean `query_knowledge_base` call, no prose), and the embedder answers at 768 dims.
+   LFM3-VL 2B is a **reasoning** model — it filled `reasoning_content` with 925 characters
+   before saying "ok" — so whatever the transcripts show, the thinking is already costing
+   tokens on every research turn. Still unverified: obedience under load, and whether the
+   spec's iteration budget and phrasing suit it — `maxIterations` and `historyMessages` are
    settings, so both are measurable without a rebuild.
 7. **Vector search.** Brute-force cosine in Go for now; `sqlite-vec` once the corpus is
    big enough to care.
@@ -673,6 +689,13 @@ Found the hard way. Browser-harness and fixture traps are in `docs/testing.md`.
 - A probe after a viewport loop measures whatever the last screenshot left behind: the first
   per-width numbers here came from the 640px pass and read as the desktop layout. Set the
   viewport *inside* the loop.
+- A router libris started does not die with it. `srv.Shutdown` closes sockets, not processes,
+  and llama.cpp's router forks **one `llama-server` child per loaded model**, so signalling the
+  pid the supervisor recorded would leave two model instances holding a port and a GPU.
+  `Supervisor.Stop` signals the *negative* pid — the process group `Start` made — and
+  `cmd/libris` has to call it on the way out: the first build that did not left three
+  `llama-server` processes running after libris was gone, invisible to a page that reads its
+  state from a process record nobody cleared.
 - Grid items with `align-items: start` do not stretch, so a sticky sub-nav needs its
   containing row to be tall. Check layout at 640 / 900 / 1180 px before declaring a
   settings-style page done.

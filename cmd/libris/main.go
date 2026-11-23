@@ -97,9 +97,9 @@ func main() {
 	defer db.Close()
 
 	// One client for chat, embeddings and reranking: libris talks to llama.cpp
-	// servers that speak the OpenAI wire format, and one API key covers all
-	// three. Read from the settings store rather than the environment-only base,
-	// or a key saved through the UI would be ignored.
+	// servers that speak the OpenAI wire format. Read from the settings store
+	// rather than the environment-only base, so a change saved through the UI
+	// takes effect on the next call rather than the next restart.
 	// One client for chat, embeddings and reranking, rebuilt whenever the settings
 	// that decide how libris connects stop matching the one it built. Resolved per
 	// job rather than once at boot: a URL or API key saved through the UI has to
@@ -130,10 +130,12 @@ func main() {
 	// one on. It reads settings per call, so changing the build selection takes effect on the
 	// next check rather than the next restart — the same discipline as every other cached
 	// thing in this process (AGENTS §6).
+	modelsDir := models.Dir(*dataDir)
 	host, err := app.NewHost(app.HostOptions{
 		Engine:      engine.Open(filepath.Join(*dataDir, "bin"), log),
 		Serve:       engine.NewSupervisor(filepath.Join(*dataDir, "bin"), engine.Seams{}),
-		ModelsDir:   models.Dir(*dataDir),
+		ModelsDir:   modelsDir,
+		Downloads:   models.NewFetcher(modelsDir, models.Seams{}),
 		Settings:    settings,
 		DeviceCache: filepath.Join(*dataDir, "devices.json"),
 		Logger:      log,
@@ -169,9 +171,11 @@ func main() {
 		// The answer path. Chats and Search are the same database the sources live
 		// in — one process owns the directory — and the models are resolved per
 		// question for the same reason the embedder is.
-		Chats:     db,
-		Search:    db,
-		Models:    modelSource(&clients, embedders),
+		Chats:  db,
+		Search: db,
+		Models: modelSource(&clients, embedders, func() bool {
+			return models.HasRole(models.Statuses(modelsDir), models.RoleRerank)
+		}),
 		Originals: filepath.Join(*dataDir, "originals"),
 		Assets:    filepath.Join(*dataDir, "assets"),
 		Logger:    log,
@@ -226,6 +230,17 @@ func main() {
 	defer cancel()
 	if err := srv.Shutdown(shutdown); err != nil {
 		log.Warn("http shutdown", "err", err)
+	}
+
+	// The router is a process, not a connection, so an HTTP shutdown does not reach it: a
+	// libris that exits with llama-server holding a GPU leaves an orphan the settings page
+	// cannot stop and the next start cannot claim (ADR 0020 named this as the cost of owning
+	// a server). After srv.Shutdown, because an ask still streaming would otherwise be writing
+	// to a store that is about to close. Stop waits for the group, children included.
+	if host != nil {
+		if err := host.EngineServeStop(shutdown); err != nil {
+			log.Warn("engine stop", "err", err)
+		}
 	}
 	service.Close()
 }

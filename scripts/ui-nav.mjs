@@ -1184,6 +1184,67 @@ const code = await withBrowser(
       String(eng.footnote),
     );
 
+    // ── the models card ──────────────────────────────────────────
+    // The catalogue is served rather than compiled in, so this asserts shape rather than
+    // content: the entries the server named each arrive as a row, one that is missing its
+    // files offers a download named by size, and the card states what it pins. Sizes are not
+    // asserted beyond a unit, because they are upstream's numbers to change.
+    const models = await ui.eval(`
+      const sec = document.getElementById('models');
+      if (!sec) return { present: false };
+      const li = [...sec.querySelectorAll('ul > li')];
+      const card = sec.querySelector('.models');
+      const style = card ? getComputedStyle(card) : null;
+      return {
+        present: true,
+        entries: li.length,
+        // Two backslashes on purpose: the eval body is a template literal, so one of them is
+        // eaten by the template on the way to the page, and /\s+/g would arrive as /s+/g.
+        first: li[0] ? li[0].querySelector('.actions button')?.textContent.trim().replace(/\\s+/g, ' ') : '',
+        // textContent is the raw word; the uppercase shown on screen is text-transform.
+        roles: li.map((x) => x.querySelector('.role')?.textContent.trim().toLowerCase()),
+        summary: sec.querySelector('.summary')?.textContent.trim().replace(/\\s+/g, ' '),
+        footnote: /Pinned to one commit/.test(sec.querySelector('.footnote')?.textContent ?? ''),
+        inset: style ? style.paddingLeft + ' ' + style.borderTopWidth : '',
+      };
+    `);
+    checks.check(
+      "the models card is on the page",
+      models.present === true,
+      `present=${models.present}`,
+    );
+    checks.check(
+      "every catalogue entry the server named is a row",
+      models.entries >= 2,
+      `${models.entries} entries`,
+    );
+    checks.check(
+      "a model that is not here offers its download, named by size",
+      /^Download [\d.]+ [KMGT]B$/.test(models.first),
+      models.first,
+    );
+    checks.check(
+      "each row says which role it fills",
+      models.roles.length === models.entries &&
+        models.roles.every((r) => ['chat', 'embed', 'rerank'].includes(r)),
+      JSON.stringify(models.roles),
+    );
+    checks.check(
+      "the summary counts what is installed against the whole catalogue",
+      /^\d+ of \d+ installed · .* on disk$/.test(models.summary),
+      models.summary,
+    );
+    checks.check(
+      "the card states what it pins, and why",
+      models.footnote === true,
+      String(models.footnote),
+    );
+    checks.check(
+      "entries are inset to the row padding, not flush with the card border",
+      models.inset === '16px 1px',
+      models.inset,
+    );
+
     // The switch is the whole UX claim, so it is clicked rather than read: choosing the
     // other mode must take the machine section away and put the three addresses back. A
     // field that is merely hidden by CSS would pass a screenshot and fail this, which is the
@@ -1203,6 +1264,7 @@ const code = await withBrowser(
       }
       const after = {
         panel: !!document.querySelector('#servers .engine'),
+        models: !!document.querySelector('#models .models'),
         addresses: [...document.querySelectorAll('#servers input')]
           .map((i) => i.value)
           .filter((v) => v.startsWith('http')),
@@ -1219,6 +1281,11 @@ const code = await withBrowser(
       "external mode takes the machine section away",
       flipped.panel === false,
       `engine panel present=${flipped.panel}`,
+    );
+    checks.check(
+      "and takes the model downloads with it, since nothing here would load them",
+      flipped.models === false,
+      `models card present=${flipped.models}`,
     );
     checks.check(
       "and puts the three addresses back",

@@ -185,6 +185,59 @@ export type Serving = {
   error?: string;
 };
 
+/** One file of a catalogue entry: the weights, or the vision projector beside them. */
+export type ModelPart = {
+  name: string;
+  bytes: number;
+  present: boolean;
+};
+
+/** One model libris offers to download. The catalogue is server-side and pinned — repo,
+ *  commit, digest — because a model that changes underneath a saved corpus silently
+ *  invalidates every vector in it (ADR 0021). */
+export type ModelEntry = {
+  id: string;
+  role: string;
+  label: string;
+  quant: string;
+  note: string;
+  repo: string;
+  revision: string;
+  bytes: number;
+  dir: string;
+  parts: ModelPart[];
+  complete: boolean;
+  /** Every byte was fetched by libris and hashed on the way in. Weaker than `complete`, and
+   *  the difference is real: a file copied in by hand can be the right size and the wrong
+   *  file. */
+  verified: boolean;
+  partialBytes: number;
+  downloading: boolean;
+};
+
+/** A model download, as the card sees it. The bar covers one entry's weights and projector
+ *  together, because a bar that restarts when the projector begins reads as a failure. */
+export type ModelProgress = {
+  id: string;
+  state: 'idle' | 'downloading' | 'verifying' | 'failed';
+  part?: string;
+  done: number;
+  total: number;
+  error?: string;
+};
+
+export type ModelsView = {
+  dir: string;
+  entries: ModelEntry[];
+  bytesTotal: number;
+  partialBytes: number;
+  progress: ModelProgress;
+  serve?: Serving;
+  /** Something complete on disk is not loaded by the running server. The preset is read at
+   *  start, so a model that arrived while it was up needs a restart to be usable. */
+  needsRestart: boolean;
+};
+
 /** One GGUF on this disk that libris knows how to use. */
 export type EngineModel = {
   role: string;

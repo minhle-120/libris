@@ -83,9 +83,15 @@ type Model struct {
 // libris claiming a number it cannot measure (ADR 0011, and the reason ADR 0019's device
 // report stops at reporting).
 //
-// Per-kind choices are not style: an embedding model needs --embeddings with a pooling mode,
-// a reranker needs --reranking, and neither is useful as a chat model. cache-ram = 0 on the
-// two small models keeps them from holding host memory the chat model needs.
+// Per-kind choices are not style: an embedding model needs --embeddings, a reranker needs
+// --reranking, and neither is useful as a chat model. cache-ram = 0 on the two small models
+// keeps them from holding host memory the chat model needs.
+//
+// Pooling is deliberately absent. --pooling's own help says "use model default if
+// unspecified" (common/arg.cpp, LLAMA_ARG_POOLING), and the default is read out of the GGUF —
+// so naming one here would override the answer that shipped inside the file, and an embedder
+// pooled the wrong way still returns numbers of the right length. That is the quiet kind of
+// retrieval bug: nothing fails, the vectors are just wrong.
 func Preset(path string, models []Model) error {
 	var b strings.Builder
 	b.WriteString("; Written by libris. Do not add a model here and expect it to stay:\n")
@@ -111,7 +117,7 @@ func Preset(path string, models []Model) error {
 		}
 		switch m.Kind {
 		case KindEmbed:
-			b.WriteString("embeddings = on\npooling = mean\ncache-ram = 0\nctx-size = 2048\n")
+			b.WriteString("embeddings = on\ncache-ram = 0\nctx-size = 2048\n")
 		case KindRerank:
 			b.WriteString("reranking = on\ncache-ram = 0\nctx-size = 2048\n")
 		default:

@@ -22,7 +22,7 @@ import (
 //
 // The probe embedder is resolved here rather than once at boot because it carries
 // the model name and vector length the vectors are keyed on.
-func modelSource(clients *clientCache, embedders *index.Supplier) app.ModelsFor {
+func modelSource(clients *clientCache, embedders *index.Supplier, rerankerInstalled func() bool) app.ModelsFor {
 	return func(cfg config.Config) (app.Models, error) {
 		// Resolved once, so the names and the URLs cannot come from different modes
 		// (ADR 0020).
@@ -42,11 +42,23 @@ func modelSource(clients *clientCache, embedders *index.Supplier) app.ModelsFor 
 		// Reranking is optional by configuration and by capability: the setting is
 		// off, or no server is set, and retrieval stays in vector order. That is a
 		// documented degradation, so it is not reported as a failure per question.
-		if cfg.RerankEnabled && cfg.RerankURL != "" {
+		if cfg.RerankEnabled && cfg.RerankURL != "" && rerankReady(cfg, rerankerInstalled) {
 			m.Rerank = reranker{client: client, model: cfg.RerankModel}
 		}
 		return m, nil
 	}
+}
+
+// rerankReady is whether the reranker a configuration names can answer. External mode's
+// answer is the address the person typed. Managed mode's is whether the file is on this disk:
+// the address there is derived from the port, so it is always well-formed, and a well-formed
+// address for a model nobody downloaded makes every question pay a 400 for a feature that was
+// never installed (ADR 0021). Retrieval staying in vector order is the documented fallback.
+func rerankReady(cfg config.Config, installed func() bool) bool {
+	if cfg.EngineMode != config.EngineManaged {
+		return true
+	}
+	return installed != nil && installed()
 }
 
 // reranker is the adapter between the name the consumer chose for this method and

@@ -134,14 +134,33 @@ field of every request and keeps an instance per model behind one port.
 
 `GET /models` at router level lists every model with `status.value` (`measuring`, `loaded`,
 `unloaded`) and a memory measurement, and `POST /models/load|unload` take it from there. The
-preset keys that matter here are `embeddings = on`, `pooling = mean`, `reranking = on` and
-`mmproj` — checked against `common/arg.cpp` (`LLAMA_ARG_EMBEDDINGS`, `LLAMA_ARG_POOLING`,
-`LLAMA_ARG_RERANKING`), because a wrong key is a router that refuses to start and the only
-place it says so is its own log.
+preset keys that matter here are `embeddings = on`, `reranking = on` and `mmproj`. The first
+two were checked against `common/arg.cpp` (`LLAMA_ARG_EMBEDDINGS`, `LLAMA_ARG_RERANKING`),
+and `--mmproj` has no `LLAMA_ARG_*` enum of its own (`common/arg.cpp:2550`) — a wrong key is
+a router that refuses to start, and the only place it says so is its own log.
+
+`pooling` is **absent on purpose**: `--pooling`'s help says “use model default if
+unspecified” (`common/arg.cpp:2286`), and forcing `mean` onto an embedder whose default is
+something else quietly changes the vector space. It was in the first version of the preset on
+the strength of a different project's flag list.
 
 The router answers `GET /models` before any model has finished loading, which is what makes a
 readiness probe short and honest: a model that will not load is a fact about that model, not a
 reason the process cannot report its state.
+
+## The GGUFs it loads: pinned files on Hugging Face
+
+ADR 0021 decides *which* models, and `internal/models/models.go` is the only list — this page
+records the two network facts the fetcher is built on, because both were checked rather than
+assumed.
+
+| | |
+|---|---|
+| `https://huggingface.co/<repo>/resolve/<commit>/<file>` | `resolve` (not `blob`) is the byte stream. A commit, not a branch or a tag: the same URL must name the same bytes in a year |
+| `Range: bytes=<n>-` answers **206** with `accept-ranges: bytes` | verified against both pinned files. This is what makes resume real rather than a `.part` file that gets thrown away |
+| `x-linked-etag` on that response **is the file's sha256** | which is where the catalogue's digests came from — read off the pinned URL, not copied from a README that may describe another revision |
+| a vision model is two files | the GGUF, and its projector (`mmproj-*.gguf`) beside it, loaded by the `mmproj` preset key. "Download the embedder" is therefore two files and one progress bar, because a bar that restarts when the projector begins reads as a failure |
+| the server answers `GET /models` with the file it *cannot* open in `status.value` | a missing or truncated GGUF is a per-model state, not a dead process — so a start that partly works still reports itself |
 
 ## Asking it what it can run on: `--list-devices`
 

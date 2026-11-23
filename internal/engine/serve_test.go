@@ -31,12 +31,12 @@ func TestPresetWritesOneSectionPerModel(t *testing.T) {
 	got := string(raw)
 
 	// The keys are llama.cpp's own preset vocabulary, checked against common/arg.cpp:
-	// LLAMA_ARG_EMBEDDINGS, LLAMA_ARG_POOLING, LLAMA_ARG_RERANKING. A typo here is a router
-	// that refuses to start, and the only place it would be noticed is a log file.
+	// LLAMA_ARG_EMBEDDINGS, LLAMA_ARG_RERANKING. A typo here is a router that refuses to
+	// start, and the only place it would be noticed is a log file.
 	for _, want := range []string{
 		"version = 1", "[*]", "[libris-chat]", "[libris-embed]", "[libris-rerank]",
 		"model = /m/chat.gguf", "mmproj = /m/mmproj.gguf",
-		"embeddings = on", "pooling = mean", "reranking = on", "fit = on",
+		"embeddings = on", "reranking = on", "fit = on",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("preset is missing %q:\n%s", want, got)
@@ -46,6 +46,14 @@ func TestPresetWritesOneSectionPerModel(t *testing.T) {
 	// so the number is llama.cpp's measurement rather than libris's guess.
 	if !strings.Contains(got, "ctx-size = 8192") {
 		t.Error("the chat model has no ctx-size; -fit alone decides nothing about the request budget")
+	}
+
+	// And no pooling. --pooling's help says "use model default if unspecified", and the
+	// default comes from inside the GGUF; overriding it here would silently re-pool an
+	// embedder that shipped its own answer, returning vectors of the right length and the
+	// wrong meaning. The bug is quiet, so the assertion is here.
+	if strings.Contains(got, "pooling") {
+		t.Error("the preset names a pooling mode; the model file knows better than this file does")
 	}
 }
 

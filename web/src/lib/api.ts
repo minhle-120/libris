@@ -5,6 +5,7 @@ import type {
   DeviceReport,
   EngineView,
   Message,
+  ModelsView,
   Notebook,
   Segment,
   Serving,
@@ -353,6 +354,41 @@ export function startEngineServe(): Promise<Serving> {
  *  the state rather than a failure. */
 export function stopEngineServe(): Promise<Serving> {
   return request("/api/host/engine/serve", { method: "DELETE" });
+}
+
+// ── the model catalogue ──────────────────────────────────────────
+
+/** Every model libris offers, and which of its files are on this disk. */
+export function getModels(): Promise<ModelsView> {
+  return request<ModelsView>('/api/host/models');
+}
+
+/** Start a download. The answer is the card, not an acknowledgment: the caller re-renders
+ *  from it rather than guessing what its own click did. The bytes arrive later. */
+export function installModel(id: string): Promise<ModelsView> {
+  return request<ModelsView>('/api/host/models', {
+    method: 'POST',
+    body: JSON.stringify({ id })
+  });
+}
+
+/** Interrupt the running download and keep its bytes. */
+export function stopModelDownload(): Promise<ModelsView> {
+  return request<ModelsView>('/api/host/models/stop', { method: 'POST' });
+}
+
+/** Throw a stopped download's bytes away. */
+export function discardModel(id: string): Promise<ModelsView> {
+  return request<ModelsView>('/api/host/models/discard', {
+    method: 'POST',
+    body: JSON.stringify({ id })
+  });
+}
+
+export function removeModel(id: string): Promise<ModelsView> {
+  return request<ModelsView>(`/api/host/models/${encodeURIComponent(id)}`, {
+    method: 'DELETE'
+  });
 }
 
 export async function getDevices(refresh = false): Promise<DeviceReport> {
