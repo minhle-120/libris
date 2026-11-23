@@ -1,0 +1,89 @@
+# Publishing is the only thing in this repository that writes to GitHub, so it is
+# triggered by the one act that says "this commit is a release": a tag named v*.
+# An ordinary `git push` builds nothing and publishes nothing.
+#
+# No tests run here. They run locally, before the tag is cut — `make check`, and
+# `make e2e` / `make ui` when the change reaches that far. What this workflow does
+# with a commit is compile it for two platforms and nothing more, so nothing in it
+# can fail for a reason the local gates would not already have caught.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  dist:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            ext: ''
+          - os: windows-latest
+            goos: windows
+            goarch: amd64
+            ext: '.exe'
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # `go build` and not `make`, on both legs: a Windows runner does not promise
+      # make on PATH, and one command line that works on either is one less thing
+      # that can differ between the two files being published.
+      #
+      # CGO_ENABLED=0 is what makes the download a download. The link is static, so
+      # the binary never asks a stranger's distribution for a glibc it may not have.
+      # -s -w drops the symbol and DWARF tables: 22 MB of binary becomes 14 MB of
+      # download. The web UI is not built, because web/dist is committed and
+      # go:embed reads the tree — which means the asset holds exactly the UI in the
+      # tag, and keeping that UI current is a local-commit responsibility.
+      - name: build
+        env:
+          CGO_ENABLED: '0'
+        run: >-
+          go build -trimpath -ldflags "-s -w"
+          -o libris-${{ github.ref_name }}-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}
+          ./cmd/libris
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.goos }}-${{ matrix.goarch }}
+          path: libris-*
+
+  release:
+    # One job assembles the release rather than each leg publishing its own file.
+    # Two jobs racing to create the same release leaves, when the race is lost, a
+    # published release holding one binary.
+    needs: dist
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: checksums
+        run: (cd dist && sha256sum libris-* > SHA256SUMS.txt)
+
+      - name: publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The tag is the version, and it is also the asset name's version. Nothing
+          # else in the pipeline is told the number, so nothing else can disagree
+          # with it; `libris -version` reports the revision it was built from.
+          TAG: ${{ github.ref_name }}
+        run: >-
+          gh release create "$TAG" dist/*
+          --title "$TAG"
+          --notes-file docs/RELEASE_NOTES.md

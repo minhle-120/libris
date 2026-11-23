@@ -153,7 +153,20 @@ launches pass `-open=false`.
 
 The binary is ~23 MB and self-contained apart from the model servers and poppler/ffmpeg.
 It was 10.5 MB before SQLite: `go-sqlite3` embeds the compiled WASM build, which is the
-price of staying cgo-free and cross-compilable.
+price of staying cgo-free and cross-compilable. `libris -version` prints the revision a
+binary was built from, and `+dirty` means the tree it came from had uncommitted edits —
+the stamps are the compiler's (`runtime/debug.ReadBuildInfo`), so there is no version
+string anywhere to keep in sync.
+
+A release is cut by a tag, never by a push: `git tag -a v0.1.0 -m "…" && git push origin
+v0.1.0` runs `.github/workflows/release.yml`, which compiles static `linux/amd64` and
+`windows/amd64` binaries (`CGO_ENABLED=0 -ldflags "-s -w"`, 14 MB) and publishes them with
+`SHA256SUMS.txt` as one GitHub Release. **The workflow runs no tests** — they run locally,
+before the tag (`make check`, and `make e2e`/`make ui` where they reach) — and it builds
+no frontend either, because `web/dist` is committed and `go:embed` reads the tree, so a
+release ships the UI in the tag and keeping that current is a local-commit responsibility.
+`docs/RELEASE_NOTES.md` is the release body. This workflow, and the issue tracker, are the
+only things here that write to GitHub.
 
 ---
 
