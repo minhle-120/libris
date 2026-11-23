@@ -21,11 +21,9 @@ export type SettingGroup = { id: string; label: string; help: string; fields: Se
 export type Settings = {
 	engineMode: 'managed' | 'external';
 	enginePort: number;
-	engineProxy: string;
 	chatURL: string;
 	embedURL: string;
 	rerankURL: string;
-	apiKey: string;
 	timeoutSeconds: number;
 	chatModel: string;
 	embedModel: string;
@@ -77,13 +75,6 @@ export const settingGroups: SettingGroup[] = [
 				"mode": "managed"
 			},
 			{
-				"key": "engineProxy",
-				"label": "Download mirror",
-				"help": "Optional prefix for the llama.cpp download, for networks that cannot reach github.com. The version check still goes to GitHub, because a file mirror rarely mirrors its API.",
-				"kind": "url",
-				"mode": "managed"
-			},
-			{
 				"key": "chatURL",
 				"label": "Chat server",
 				"help": "Text, image and audio input.",
@@ -103,12 +94,6 @@ export const settingGroups: SettingGroup[] = [
 				"help": "Optional. Degrades to vector order when unset.",
 				"kind": "url",
 				"mode": "external"
-			},
-			{
-				"key": "apiKey",
-				"label": "API key",
-				"help": "Sent as a bearer token to every server.",
-				"kind": "password"
 			},
 			{
 				"key": "timeoutSeconds",
@@ -285,11 +270,9 @@ export function defaultSettings(): Settings {
 	return {
 		engineMode: "managed",
 		enginePort: 8080,
-		engineProxy: "",
 		chatURL: "http://127.0.0.1:8081",
 		embedURL: "http://127.0.0.1:8082",
 		rerankURL: "http://127.0.0.1:8083",
-		apiKey: "",
 		timeoutSeconds: 300,
 		chatModel: "",
 		embedModel: "",

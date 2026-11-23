@@ -11,7 +11,7 @@ func TestJSONRoundTrip(t *testing.T) {
 	want.PDFDPI = 300
 	want.RerankEnabled = false
 	want.PDFMode = PDFModeFallback
-	want.APIKey = "secret"
+	want.RerankModel = "bge-reranker-v2"
 
 	raw, err := want.MarshalJSON()
 	if err != nil {

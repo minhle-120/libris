@@ -110,7 +110,7 @@ func TestSnake(t *testing.T) {
 		"chatURL":        "chat_url",
 		"pdfDPI":         "pdf_dpi",
 		"maxFileMB":      "max_file_mb",
-		"apiKey":         "api_key",
+		"enginePort":     "engine_port",
 		"timeoutSeconds": "timeout_seconds",
 	}
 	for in, want := range cases {

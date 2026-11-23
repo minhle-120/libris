@@ -16,11 +16,13 @@ import (
 // the caller's context, because a whole-response timeout would cut them off.
 const DefaultTimeout = 5 * time.Minute
 
+// Config is how the client connects. Nothing here authenticates: the servers are loopback
+// ones, either libris's own router (ADR 0020) or ones the person started, and an auth header
+// was one more field for a local box that never reads it (see the note on send).
 type Config struct {
 	ChatURL   string
 	EmbedURL  string
 	RerankURL string
-	APIKey    string
 	Timeout   time.Duration
 	HTTP      *http.Client
 	UserAgent string
@@ -209,9 +211,6 @@ func (c *Client) post(ctx context.Context, base, suffix string, body any, accept
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", accept)
 	req.Header.Set("User-Agent", c.cfg.UserAgent)
-	if c.cfg.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
-	}
 
 	resp, err := c.hc.Do(req)
 	if err != nil {

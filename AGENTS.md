@@ -293,7 +293,7 @@ PDFDPI int `key:"pdfDPI" group:"ingest" label:"PDF raster DPI" help:"…"
   from the same tags.
 - `schema.go` reflects the struct into `web/src/lib/config.gen.ts`.
   `TestGeneratedSchemaIsCurrent` fails the build when that file is stale — run
-  `make generate`. **Never hand-edit it, never add a setting to the frontend.** 24
+  `make generate`. **Never hand-edit it, never add a setting to the frontend.** 22
   settings exist today — capacity is deliberately absent (rule 1 of the
   non-negotiables), and the three model names default to blank because a prefilled name
   is a guess about someone else's server that looks configured and fails anyway.
@@ -304,7 +304,8 @@ PDFDPI int `key:"pdfDPI" group:"ingest" label:"PDF raster DPI" help:"…"
   The settings *file* goes through `ApplyStoredJSON`, which drops such keys, reports them
   once at startup (`FileStore.Dropped()`) and lets the next save rewrite the file: an
   older build's vocabulary must never be a reason the app will not boot (ADR 0011).
-- `FileStore` writes `<data>/settings.json` atomically at `0600` (it can hold an API key);
+- `FileStore` writes `<data>/settings.json` atomically at `0600` (whatever a person typed
+  ends up there, and it has no reason to be world readable);
   a failed write leaves the old config in force. `MaxFileBytes()` is derived from
   `MaxFileMB`, so size has one unit.
 - **A saved setting takes effect on the next job, not the next restart.** `app` reads

@@ -43,10 +43,10 @@ const (
 	CPU    Backend = "cpu"
 )
 
-// Repository is upstream. api/releases are the two endpoints used; proxy, when set, is a
-// prefix on the download URL only — the API call is not rewritten, because a mirror that
-// serves release files almost never mirrors the API, and silently pointing a version query
-// at a stranger's box is a worse failure than a download that needs a second try.
+// Repository is upstream: api/releases are the two endpoints used. There is deliberately no
+// mirror setting — a prefix on the file download with no prefix on the version query is two
+// sources of truth about which bytes are current, and the digest is checked against the one
+// that answered the API.
 const (
 	owner      = "ggml-org"
 	repo       = "llama.cpp"
@@ -141,7 +141,7 @@ type Progress struct {
 
 // Manager is the package's whole interface to the rest of libris. It holds no
 // configuration: the data directory is given once, and the settings that change what it
-// does — backend, proxy — are arguments, because this package must not import config any
+// does — the backend — is an argument, because this package must not import config any
 // more than llm does.
 type Manager struct {
 	dir string // <data>/bin
@@ -156,7 +156,6 @@ type Manager struct {
 	// release is the bounded client: a few KB of JSON the settings page waits on, not the
 	// 35 MB file the caller's context owns. See Open.
 	release *http.Client
-	proxy   string
 
 	mu       sync.Mutex
 	progress Progress
@@ -199,15 +198,6 @@ func (m *Manager) Known(b Backend) (Release, Asset, bool) {
 		b = Vulkan
 	}
 	return m.cached(b)
-}
-
-// SetProxy applies a download prefix from the live settings. Called per job, so saving a
-// proxy takes effect on the next download rather than at the next restart — the discipline
-// every other cached thing in this app follows.
-func (m *Manager) SetProxy(prefix string) {
-	m.mu.Lock()
-	m.proxy = strings.TrimSuffix(strings.TrimSpace(prefix), "/")
-	m.mu.Unlock()
 }
 
 func (m *Manager) Dir() string { return m.dir }
@@ -656,7 +646,7 @@ func (m *Manager) download(ctx context.Context, asset Asset, _ string) (path str
 		return part, true, nil
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, m.downloadURL(asset.URL), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, asset.URL, nil)
 	if err != nil {
 		return "", false, err
 	}
@@ -762,18 +752,6 @@ func (m *Manager) writeMeta(asset Asset, meta partMeta) {
 			m.log.Debug("engine: could not record the partial download", "err", err)
 		}
 	}
-}
-
-// downloadURL applies the proxy prefix. Only the file download is proxied; see the comment
-// on the constants for why the version query is not.
-func (m *Manager) downloadURL(u string) string {
-	m.mu.Lock()
-	p := m.proxy
-	m.mu.Unlock()
-	if p == "" {
-		return u
-	}
-	return p + "/" + u
 }
 
 // countingWriter is the progress source, and the cancel point: a stopped download must

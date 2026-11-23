@@ -7,7 +7,7 @@ import (
 	"libris/internal/config"
 )
 
-func settings(chat, embed, key string, timeout int) config.Config {
+func settings(chat, embed string, timeout int) config.Config {
 	c := config.Default()
 	// These tests are about the addresses a person typed. In managed mode there are none to
 	// type — clients.For derives them from the port (ADR 0020) — so the mode is pinned here
@@ -15,7 +15,6 @@ func settings(chat, embed, key string, timeout int) config.Config {
 	c.EngineMode = config.EngineExternal
 	c.ChatURL = chat
 	c.EmbedURL = embed
-	c.APIKey = key
 	c.TimeoutSeconds = timeout
 	return c
 }
@@ -23,11 +22,11 @@ func settings(chat, embed, key string, timeout int) config.Config {
 func TestClientCacheReusesUntilTheConnectionChanges(t *testing.T) {
 	var c clientCache
 
-	first, err := c.For(settings("http://a:1", "http://e:1", "k", 30))
+	first, err := c.For(settings("http://a:1", "http://e:1", 30))
 	if err != nil {
 		t.Fatal(err)
 	}
-	again, err := c.For(settings("http://a:1", "http://e:1", "k", 30))
+	again, err := c.For(settings("http://a:1", "http://e:1", 30))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,13 +36,12 @@ func TestClientCacheReusesUntilTheConnectionChanges(t *testing.T) {
 
 	// Each of these decides how libris connects, so each must rebuild.
 	for name, next := range map[string]config.Config{
-		"chat URL":  settings("http://a:2", "http://e:1", "k", 30),
-		"embed URL": settings("http://a:1", "http://e:2", "k", 30),
-		"API key":   settings("http://a:1", "http://e:1", "other", 30),
-		"timeout":   settings("http://a:1", "http://e:1", "k", 31),
+		"chat URL":  settings("http://a:2", "http://e:1", 30),
+		"embed URL": settings("http://a:1", "http://e:2", 30),
+		"timeout":   settings("http://a:1", "http://e:1", 31),
 		// llm.New insists on a chat URL and tolerates a blank embed or rerank one,
 		// which stays a per-call ErrNoEmbedder rather than a startup failure.
-		"blank chat": settings("", "http://e:1", "k", 30),
+		"blank chat": settings("", "http://e:1", 30),
 	} {
 		got, err := c.For(next)
 		if name == "blank chat" {
@@ -68,7 +66,7 @@ func TestClientCacheReusesUntilTheConnectionChanges(t *testing.T) {
 func TestClientCacheIgnoresModelNames(t *testing.T) {
 	var c clientCache
 
-	before := settings("http://a:1", "http://e:1", "k", 30)
+	before := settings("http://a:1", "http://e:1", 30)
 	first, err := c.For(before)
 	if err != nil {
 		t.Fatal(err)
@@ -91,17 +89,17 @@ func TestClientCacheIgnoresModelNames(t *testing.T) {
 func TestClientCacheDoesNotRememberAFailure(t *testing.T) {
 	var c clientCache
 
-	if _, err := c.For(settings("", "http://e:1", "", 30)); err == nil {
+	if _, err := c.For(settings("", "http://e:1", 30)); err == nil {
 		t.Fatal("a missing chat URL should fail")
 	}
-	if _, err := c.For(settings("http://a:1", "http://e:1", "", 30)); err != nil {
+	if _, err := c.For(settings("http://a:1", "http://e:1", 30)); err != nil {
 		t.Fatalf("the good settings after a failure were refused: %v", err)
 	}
 }
 
 func TestClientCacheIsSafeForConcurrentJobs(t *testing.T) {
 	var c clientCache
-	base := settings("http://a:1", "http://e:1", "k", 30)
+	base := settings("http://a:1", "http://e:1", 30)
 
 	var wg sync.WaitGroup
 	for i := range 8 {

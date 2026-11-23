@@ -33,7 +33,7 @@ func (c *clientCache) For(cfg config.Config) (*llm.Client, error) {
 	cfg = cfg.Served()
 
 	key := strings.Join([]string{
-		cfg.ChatURL, cfg.EmbedURL, cfg.RerankURL, cfg.APIKey,
+		cfg.ChatURL, cfg.EmbedURL, cfg.RerankURL,
 		strconv.Itoa(cfg.TimeoutSeconds),
 	}, "\x00")
 
@@ -48,7 +48,6 @@ func (c *clientCache) For(cfg config.Config) (*llm.Client, error) {
 		ChatURL:   cfg.ChatURL,
 		EmbedURL:  cfg.EmbedURL,
 		RerankURL: cfg.RerankURL,
-		APIKey:    cfg.APIKey,
 		Timeout:   time.Duration(cfg.TimeoutSeconds) * time.Second,
 	})
 	if err != nil {

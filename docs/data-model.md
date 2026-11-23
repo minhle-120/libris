@@ -119,7 +119,7 @@ That is also why a stored message never relies on a segment id as its only link.
 `-data`, created on demand:
 
 ```
-settings.json   0600, atomic temp+rename — may hold an API key
+settings.json   0600, atomic temp+rename — whatever a person typed, so never world readable
 libris.db       SQLite (+ -wal/-shm while running)
 originals/      <sha256><ext> — the kept copy, never rewritten; deleted only when the
                   last notebook using it lets go (ADR 0013)

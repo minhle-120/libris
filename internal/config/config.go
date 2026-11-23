@@ -89,13 +89,11 @@ type Config struct {
 	// The port libris binds its own server to. A setting because libris is the thing that
 	// binds it (ADR 0011: a setting is an ability the app can apply), and a loopback port
 	// rather than a URL because "which address" is not a choice when the process is ours.
-	EnginePort  int    `key:"enginePort" group:"servers" label:"Server port" help:"The loopback port libris runs llama.cpp on. Chat, embeddings and reranking share it." min:"1024" max:"65535" mode:"managed"`
-	EngineProxy string `key:"engineProxy" group:"servers" label:"Download mirror" help:"Optional prefix for the llama.cpp download, for networks that cannot reach github.com. The version check still goes to GitHub, because a file mirror rarely mirrors its API." kind:"url" mode:"managed"`
+	EnginePort int `key:"enginePort" group:"servers" label:"Server port" help:"The loopback port libris runs llama.cpp on. Chat, embeddings and reranking share it." min:"1024" max:"65535" mode:"managed"`
 
 	ChatURL        string `key:"chatURL" group:"servers" label:"Chat server" help:"Text, image and audio input." kind:"url" required:"true" mode:"external"`
 	EmbedURL       string `key:"embedURL" group:"servers" label:"Embedding server" help:"Multimodal embeddings for text, page images and audio." kind:"url" required:"true" mode:"external"`
 	RerankURL      string `key:"rerankURL" group:"servers" label:"Rerank server" help:"Optional. Degrades to vector order when unset." kind:"url" mode:"external"`
-	APIKey         string `key:"apiKey" group:"servers" label:"API key" help:"Sent as a bearer token to every server." kind:"password"`
 	TimeoutSeconds int    `key:"timeoutSeconds" group:"servers" label:"Request timeout" help:"Local CPU inference is slow. Lower it for GPU." min:"5" max:"3600" unit:"s"`
 
 	// ── models ───────────────────────────────────────────────────
@@ -143,14 +141,12 @@ func Default() Config {
 		// fetches the build, runs it on the port below, and the addresses are derived. The
 		// three URLs and three names still have defaults, because external mode is a real
 		// mode and a saved config that validates in one mode must validate in the other.
-		EngineMode:  EngineManaged,
-		EnginePort:  8080,
-		EngineProxy: "",
+		EngineMode: EngineManaged,
+		EnginePort: 8080,
 
 		ChatURL:        "http://127.0.0.1:8081",
 		EmbedURL:       "http://127.0.0.1:8082",
 		RerankURL:      "http://127.0.0.1:8083",
-		APIKey:         "",
 		TimeoutSeconds: 300,
 
 		ChatModel:     "",

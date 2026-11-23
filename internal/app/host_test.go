@@ -50,7 +50,6 @@ type fakeEngine struct {
 	checks    int
 	forced    int
 	tags      []string // what Install was asked for
-	proxies   []string
 	removed   int
 	removeErr error
 	discarded int
@@ -96,12 +95,6 @@ func (f *fakeEngine) Check(ctx context.Context, b engine.Backend, force bool) (e
 	f.knownOK, f.knownRel, f.knownAsset = true, rel, asset
 	f.mu.Unlock()
 	return rel, asset, nil
-}
-
-func (f *fakeEngine) SetProxy(prefix string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.proxies = append(f.proxies, prefix)
 }
 
 func (f *fakeEngine) Install(ctx context.Context, tag string, b engine.Backend) (engine.Installed, error) {
@@ -162,11 +155,11 @@ func (f *fakeEngine) ClearParts() error {
 
 // seen reports the counters the assertions read, under the same lock the manager's goroutine
 // takes to write them.
-func (f *fakeEngine) seen() (checks, forced, removed, discarded, stopped int, tags, proxies []string) {
+func (f *fakeEngine) seen() (checks, forced, removed, discarded, stopped int, tags []string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.checks, f.forced, f.removed, f.discarded, f.stopped,
-		append([]string(nil), f.tags...), append([]string(nil), f.proxies...)
+		append([]string(nil), f.tags...)
 }
 
 // hostSettings is the one method of the Settings interface these tests care about, held as a
@@ -292,16 +285,14 @@ func TestEngineViewOffersAnUpdateOnlyNumerically(t *testing.T) {
 	}
 }
 
-func TestEngineInstallResolvesTheTagAndCarriesTheSettings(t *testing.T) {
+func TestEngineInstallResolvesTheTag(t *testing.T) {
 	eng := &fakeEngine{
 		knownOK:    true,
 		knownRel:   engine.Release{Tag: "b12649"},
 		knownAsset: engine.Asset{Name: "asset.tar.gz"},
 		installed:  &engine.Installed{Tag: "b12649", Backend: engine.Vulkan},
 	}
-	cfg := config.Default()
-	cfg.EngineProxy = "http://mirror.internal:3128"
-	h, cache := newTestHost(t, eng, cfg)
+	h, cache := newTestHost(t, eng, config.Default())
 
 	// The install was asked for with no tag — the label on the button is "Download", not a
 	// version — so the tag has to be resolved here, and the backend that decided it is the
@@ -309,12 +300,9 @@ func TestEngineInstallResolvesTheTagAndCarriesTheSettings(t *testing.T) {
 	if _, err := h.EngineInstall(context.Background(), ""); err != nil {
 		t.Fatal(err)
 	}
-	_, _, _, _, _, tags, proxies := eng.seen()
+	_, _, _, _, _, tags := eng.seen()
 	if len(tags) != 1 || tags[0] != "b12649" {
 		t.Errorf("Install was asked for %v, want the newest tag", tags)
-	}
-	if len(proxies) != 1 || proxies[0] != cfg.EngineProxy {
-		t.Errorf("the proxy set on the manager was %v, want the one in settings — a download that used a proxy frozen at boot makes the settings page a lie", proxies)
 	}
 	// The engine is a device probe once it exists, so the cached report about the machine has
 	// to go: otherwise the page keeps saying what the machine could run *before* the build
@@ -355,7 +343,7 @@ func TestUpdateCheckRunsOnceInTheBackgroundAndLands(t *testing.T) {
 	v := settled(t, h)
 	// Two pollers, one question. Without the in-flight guard this is a loop that spends the
 	// hourly unauthenticated GitHub allowance on a page nobody is looking at.
-	checks, _, _, _, _, _, _ := eng.seen()
+	checks, _, _, _, _, _ := eng.seen()
 	if checks != 1 {
 		t.Errorf("%d update checks ran, want one", checks)
 	}
@@ -386,7 +374,7 @@ func TestForcedCheckIsAlsoNonBlocking(t *testing.T) {
 		t.Error("the forced check threw away the cached answer while it worked")
 	}
 	settled(t, h)
-	_, forced, _, _, _, _, _ := eng.seen()
+	_, forced, _, _, _, _ := eng.seen()
 	if forced != 1 {
 		t.Errorf("forced=%d, want the background refresh to ask upstream", forced)
 	}
@@ -415,7 +403,7 @@ func TestAFailedCheckIsNotRetriedOnEveryVisit(t *testing.T) {
 			t.Error("the failure stopped being reported, so the page went quiet for no stated reason")
 		}
 	}
-	if checks, _, _, _, _, _, _ := eng.seen(); checks != 1 {
+	if checks, _, _, _, _, _ := eng.seen(); checks != 1 {
 		t.Errorf("%d checks for 13 visits, want the failure left alone", checks)
 	}
 
@@ -424,7 +412,7 @@ func TestAFailedCheckIsNotRetriedOnEveryVisit(t *testing.T) {
 		t.Fatal(err)
 	}
 	settled(t, h)
-	if checks, forced, _, _, _, _, _ := eng.seen(); checks != 2 || forced != 2 {
+	if checks, forced, _, _, _, _ := eng.seen(); checks != 2 || forced != 2 {
 		t.Errorf("checks=%d forced=%d, want the button to force a second attempt", checks, forced)
 	}
 }
@@ -620,13 +608,13 @@ func TestPartsAreSeparateFromTheEngine(t *testing.T) {
 	if err := h.EngineDiscardParts(); err != nil {
 		t.Fatal(err)
 	}
-	_, _, removed, discarded, stopped, _, _ := eng.seen()
+	_, _, removed, discarded, stopped, _ := eng.seen()
 	if discarded != 1 || removed != 0 {
 		t.Errorf("discarded=%d removed=%d, want discarding a stopped download to leave the engine alone",
 			discarded, removed)
 	}
 	h.EngineStop()
-	_, _, _, _, stopped, _, _ = eng.seen()
+	_, _, _, _, stopped, _ = eng.seen()
 	if stopped != 1 {
 		t.Error("Stop did not reach the manager, so the button would do nothing")
 	}
@@ -642,12 +630,7 @@ func TestSettingsChangedNoticesOnlyWhatMatters(t *testing.T) {
 	next := config.Default()
 	next.EnginePort = 9090
 	if !h.SettingsChanged(prev, next) {
-		t.Error("changing the build selection did not, so the page keeps offering the other asset")
-	}
-	proxied := config.Default()
-	proxied.EngineProxy = "http://mirror:3128"
-	if !h.SettingsChanged(prev, proxied) {
-		t.Error("changing the mirror did not, and the size shown is the mirror's file")
+		t.Error("changing the port did not, so the page still reports the server on the old one")
 	}
 }
 

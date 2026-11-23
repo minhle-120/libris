@@ -73,7 +73,7 @@ func TestFileStoreSavePersists(t *testing.T) {
 
 	next := Default()
 	next.PDFDPI = 144
-	next.APIKey = "s3cret"
+	next.RerankModel = "bge-reranker-v2"
 	if err := store.Save(next); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestFileStoreSavePersists(t *testing.T) {
 	if err != nil {
 		t.Fatalf("file not written: %v", err)
 	}
-	// The file can hold an API key, so it must not be world readable.
+	// Whatever a person typed ends up in this file, so it is never world readable.
 	if perm := info.Mode().Perm(); perm != 0o600 {
 		t.Errorf("perm = %o, want 600", perm)
 	}
@@ -98,7 +98,7 @@ func TestFileStoreSavePersists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reopened.Get().APIKey != "s3cret" {
+	if reopened.Get().RerankModel != "bge-reranker-v2" {
 		t.Errorf("reopened = %+v", reopened.Get())
 	}
 }

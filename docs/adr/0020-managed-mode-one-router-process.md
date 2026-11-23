@@ -32,8 +32,13 @@ Two things follow from that gap, and they are the same decision:
 
 **Managed mode and external mode are one switch, and they are exclusive.**
 
-- **External** is what exists today: model servers run somewhere else, and the three URLs, the
-  API key and the model names are typed by hand.
+- **External** is what exists today: model servers run somewhere else, and the three URLs and
+  the three model names are typed by hand. Two fields went with the switch: the **API key**
+  (libris now sends no `Authorization` header at all — its servers are loopback ones it starts
+  or points at, and a server that demands a key is a server it cannot be told about) and the
+  **download mirror** (a prefix on the file download only, while the digest is checked against
+  the release the *unproxied* API described: two sources of truth about which bytes are
+  current, which is worse than no mirror).
 - **Managed** is new. libris downloads the **Vulkan** build (ADR 0018, minus the choice),
   starts **one** `llama-server` in **router mode**, and derives everything the connection
   group used to ask for: one loopback base URL, and model names that are libris's own aliases.
@@ -96,6 +101,9 @@ source and the card already says "Nothing downloaded yet".
   brand-new install has no file and gets managed.
 - **`make e2e` and `make ui` keep their fakes** — the fake server already answers all three
   endpoints on one port, which is now also what the real one looks like.
+- **A bearer token can no longer be sent to any server, and a download cannot be redirected.**
+  Both abilities were deleted rather than hidden, so `llm.Config` has no credential field and
+  a key-protected or mirrored endpoint needs a rebuild to reach.
 - **Managed mode makes the three model-name settings derived rather than typed**, so
   `config` grows a mode and the generated frontend changes shape (ADR 0001). External mode
   keeps every field exactly where it is.

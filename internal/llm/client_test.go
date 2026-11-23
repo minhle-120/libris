@@ -92,7 +92,7 @@ func TestChatRequestAndResponse(t *testing.T) {
 		"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}
 	}`, nil)
 
-	c := newClient(t, llm.Config{ChatURL: srv.URL, APIKey: "k"})
+	c := newClient(t, llm.Config{ChatURL: srv.URL})
 	tool, err := llm.NewTool("search", "find things", map[string]any{"type": "object"})
 	if err != nil {
 		t.Fatal(err)
@@ -110,8 +110,10 @@ func TestChatRequestAndResponse(t *testing.T) {
 	if rec.path != "/v1/chat/completions" {
 		t.Fatalf("path = %q", rec.path)
 	}
-	if rec.auth != "Bearer k" {
-		t.Fatalf("auth = %q", rec.auth)
+	// The servers are loopback ones, and libris has no credential to send: an Authorization
+	// header appearing here would mean something grew one without a setting behind it.
+	if rec.auth != "" {
+		t.Fatalf("sent an Authorization header: %q", rec.auth)
 	}
 
 	sent := decode[map[string]any](t, rec.body)

@@ -56,10 +56,6 @@ type EngineManager interface {
 	Install(ctx context.Context, tag string, b engine.Backend) (engine.Installed, error)
 	Remove(ctx context.Context) error
 	Stop()
-	// SetProxy is on the interface because the proxy is a setting, and a download that used
-	// a proxy frozen at boot would make the settings page a lie — the same discipline as
-	// every other cached thing here (AGENTS §6).
-	SetProxy(prefix string)
 	Progress() engine.Progress
 	Dir() string
 	PartsBytes() int64
@@ -306,9 +302,7 @@ func (h *Host) startCheck(b engine.Backend, force, needed bool) bool {
 // which is the label on the one button, so it is resolved here rather than in a browser that
 // cannot see the release list.
 func (h *Host) EngineInstall(ctx context.Context, tag string) (engine.Installed, error) {
-	cfg := h.settings.Get()
 	const backend = engine.Vulkan
-	h.engine.SetProxy(cfg.EngineProxy)
 
 	if tag == "" {
 		rel, _, ok := h.engine.Known(backend)
@@ -419,12 +413,11 @@ func (h *Host) invalidateDevices(because string) {
 }
 
 // SettingsChanged reports whether a saved settings change means the machine section should be
-// refetched. The mode decides which half of the page is showing and the port decides what
-// libris would bind if it ran the server; the mirror decides which bytes a download fetches.
+// refetched: the mode decides which half of the page is showing, and the port decides what
+// libris would bind if it ran the server.
 func (h *Host) SettingsChanged(prev, next config.Config) bool {
 	return prev.EngineMode != next.EngineMode ||
-		prev.EnginePort != next.EnginePort ||
-		prev.EngineProxy != next.EngineProxy
+		prev.EnginePort != next.EnginePort
 }
 
 // ModelView is one GGUF on this disk, as the page shows it.

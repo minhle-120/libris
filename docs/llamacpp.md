@@ -18,7 +18,10 @@ blank — see the embeddings section for what a blank name costs.
 ## Endpoints and auth
 
 - `POST /v1/chat/completions`, `POST /v1/embeddings`, `POST /v1/rerank` (alias of
-  `/reranking`). Auth is `Authorization: Bearer <key>`.
+  `/reranking`). A server started with `--api-key` (verified in `common/arg.cpp`, env
+  `LLAMA_API_KEY`) answers 401 to anything without `Authorization: Bearer <key>`. libris
+  sends no such header: there is no key setting (ADR 0020), so a server behind one is a
+  server libris cannot be pointed at.
 - `503` means all inference slots are busy — llama.cpp refuses instead of queueing.
   That is `llm.IsBusy(err)`, with `Retry-After` parsed into `app.ErrBusy` → HTTP 429.
 

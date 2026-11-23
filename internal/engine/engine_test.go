@@ -822,21 +822,6 @@ func TestStatusIgnoresATreeWithNoRecord(t *testing.T) {
 	}
 }
 
-func TestProxyIsAppliedToTheDownloadOnly(t *testing.T) {
-	// A mirror that serves release files almost never mirrors the API, so silently pointing
-	// the version query at a stranger's box is a worse failure than a download that needs a
-	// second try.
-	m := Open(t.TempDir(), nil)
-	m.SetProxy("https://mirror.example/")
-	if got := m.downloadURL("https://github.com/x/y.zip"); got != "https://mirror.example/https://github.com/x/y.zip" {
-		t.Errorf("download URL = %q", got)
-	}
-	m.SetProxy("")
-	if got := m.downloadURL("https://github.com/x/y.zip"); got != "https://github.com/x/y.zip" {
-		t.Errorf("with no proxy: %q", got)
-	}
-}
-
 // TestUpdateCheckIsBoundedEvenWhenTheServerIsSilent covers the difference between the two
 // HTTP clients this package owns. A release list is a few kilobytes the settings page waits
 // on, so it gets a deadline; the archive does not, because a 35 MB fetch over a slow link is
