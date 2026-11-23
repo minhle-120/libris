@@ -185,12 +185,13 @@ export type EngineView = {
 
 export type Device = {
   kind: string;
+  /** The slot llama.cpp named ("Vulkan0"), which is what a -dev flag would take. Two
+   *  backends over one card are joined here ("CUDA0 / Vulkan0"), not two rows. */
   name: string;
   total_bytes?: number;
-  bus_id?: string;
-  bus_vendor?: string;
-  driver?: string;
+  /** The card's own words ("NVIDIA GeForce RTX 3070"), and what the chip shows. */
   description?: string;
+  /** What is free at the moment of asking, which only a live ggml init can know. */
   free_bytes?: number;
   source?: string;
 };

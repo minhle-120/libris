@@ -44,7 +44,7 @@ func newFakeHost() *fakeHost {
 		installed: engine.Installed{Tag: "b12649", Backend: engine.Vulkan},
 		devices: deviceinfo.Report{
 			OS: "linux", Arch: "amd64",
-			Devices: []deviceinfo.Device{{Kind: "gpu", Name: "Vulkan0"}},
+			Devices: []deviceinfo.Device{{Kind: "nvidia", Name: "Vulkan0", Description: "NVIDIA GeForce RTX 3070"}},
 		},
 	}
 }

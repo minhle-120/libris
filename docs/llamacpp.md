@@ -115,6 +115,30 @@ themselves are not shipped either: `internal/engine` downloads upstream's prebui
 into the data directory on demand, and everything in `llm` still talks to a base URL, so
 "external OpenAI API" and "downloaded llama.cpp" stay interchangeable.
 
+## Asking it what it can run on: `--list-devices`
+
+This is libris's only device probe (ADR 0019), so the flag is a wire contract like any
+other. Verified by running `llama-b12651-bin-ubuntu-vulkan-x64` — digest checked against
+GitHub's, stdout and stderr captured separately — and read from
+`common_print_available_devices` (`common/arg.cpp:1149`).
+
+| | |
+|---|---|
+| The output is **not JSON** | `common/arg.cpp` prints lines. A spec that said otherwise was written from the flag's name, and `ParseDevices` parses text |
+| `Available devices:` then two spaces, `NAME: description (TOTAL MiB, FREE MiB free)` | the exact printf is `"  %s: %s (%zu MiB, %zu MiB free)\n"` over `ggml_backend_dev_name` and `ggml_backend_dev_description` |
+| `description` may itself contain parentheses | `Vulkan0: AMD Radeon 660M (RADV REMBRANDT) (16142 MiB, 14663 MiB free)`. The memory suffix has to be anchored to the **end of the line**, not matched as "the last parenthesised group", or the card's own name is cut off at the first bracket |
+| `name` is a backend slot: `CUDA0`, `HIP0`, `Vulkan1`, `SYCL0`, `CPU` | the backend word says the vendor for CUDA/HIP/SYCL, and says nothing at all for Vulkan and Metal — on this laptop the Vulkan rows are an AMD iGPU and an NVIDIA dGPU, told apart only by reading the description |
+| One card can appear twice, once per loaded backend | so "how many rows" is not "how many GPUs", and a report that counts rows warns a user to choose between one GPU and itself. `mergeBackends` folds rows whose description and size agree, keeping both slot names — they are what `-dev` takes |
+| CPU devices are **skipped** (`common/arg.cpp:1157`) | so the flag cannot say that a CPU exists, which is the one row `deviceinfo` states itself |
+| `  (none)` when nothing but a CPU backend was found | and it is an answer, not a failure: it is how a build without GPU support says so |
+| Everything goes to **stdout**, stderr is empty, exit 0, 1.7 s | so `cmd.Output()` is enough — nothing has to be read off a log — and a run that takes longer than a few seconds is a broken driver rather than a slow one |
+
+The `(none)` shape is read from the source, not run: the machine this was checked on has two
+adapters, and the CPU-only build that would print it was not downloaded.
+
+`TestDetectAgainstARealEngine` runs the flag for real and is skipped unless
+`LIBRIS_ENGINE_BIN` names an installed `llama-server`.
+
 ## Release binaries (verified against the live API, 2026-11-23)
 
 Everything here was read off `api.github.com` or run from the downloaded tree, because the

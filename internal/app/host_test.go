@@ -187,7 +187,7 @@ func newTestHost(t *testing.T, eng EngineManager, cfg config.Config) (*Host, str
 			return deviceinfo.Report{
 				OS:      "linux",
 				Arch:    "amd64",
-				Devices: []deviceinfo.Device{{Kind: "gpu", Name: "Vulkan0", Description: "NVIDIA GeForce RTX 3070", Source: "llama-server"}},
+				Devices: []deviceinfo.Device{{Kind: "nvidia", Name: "Vulkan0", Description: "NVIDIA GeForce RTX 3070", Source: "llama-server"}},
 			}, nil
 		},
 	})
@@ -456,7 +456,7 @@ func TestDevicesAreCachedUntilTheFingerprintChanges(t *testing.T) {
 				return deviceinfo.Report{
 					OS:          "linux",
 					Arch:        "amd64",
-					Devices:     []deviceinfo.Device{{Kind: "gpu", Name: "Vulkan0", Source: "sysfs"}},
+					Devices:     []deviceinfo.Device{{Kind: "nvidia", Name: "Vulkan0", Description: "NVIDIA GeForce RTX 3070", Source: "llama-server"}},
 					Fingerprint: "fp-1",
 				}, nil
 			},
@@ -487,7 +487,7 @@ func TestDevicesAreCachedUntilTheFingerprintChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	if probes != 2 {
-		t.Errorf("probes = %d, want ?refresh=1 to run the collectors again", probes)
+		t.Errorf("probes = %d, want ?refresh=1 to ask the engine again", probes)
 	}
 
 	// The cached document is the one the page renders, so it has to be the whole report.
@@ -508,16 +508,17 @@ func TestDevicesAreCachedUntilTheFingerprintChanges(t *testing.T) {
 }
 
 func TestDevicesAskTheEngineOnceItExists(t *testing.T) {
-	// The installed engine is the best probe there is, so its path is handed to the collectors.
-	// A test that asserted this on the *result* would be asserting a merge rule that belongs
-	// to deviceinfo; what belongs to Host is that it passes the path through at all.
+	// The installed engine is the only thing worth asking, so its path and its tag are handed
+	// on. A test that asserted this on the *result* would be asserting parse and merge rules
+	// that belong to deviceinfo; what belongs to Host is that it passes both through at all —
+	// the tag because the cache is keyed on the build that answered.
 	eng := &fakeEngine{installed: &engine.Installed{Tag: "b12649", Path: "/data/bin/b12649/bin/llama-server"}}
 
-	var seen string
+	var seenBin, seenTag string
 	h, err := NewHost(HostOptions{
 		Engine: eng, Settings: &hostSettings{cfg: config.Default()},
 		Probe: func(_ context.Context, o deviceinfo.Options) (deviceinfo.Report, error) {
-			seen = o.EngineBin
+			seenBin, seenTag = o.EngineBin, o.EngineTag
 			return deviceinfo.Report{OS: "linux"}, nil
 		},
 	})
@@ -527,18 +528,61 @@ func TestDevicesAskTheEngineOnceItExists(t *testing.T) {
 	if _, err := h.Devices(context.Background(), true); err != nil {
 		t.Fatal(err)
 	}
-	if seen != "/data/bin/b12649/bin/llama-server" {
-		t.Errorf("the collectors were given %q, want the installed engine", seen)
+	if seenBin != "/data/bin/b12649/bin/llama-server" {
+		t.Errorf("the engine was given as %q, want the installed binary", seenBin)
+	}
+	if seenTag != "b12649" {
+		t.Errorf("the engine was given with tag %q, want the installed build", seenTag)
 	}
 
-	// With no engine, they are given nothing, and no attempt is made to run a binary that
-	// is not there.
+	// With no engine, nothing is handed over, and no attempt is made to run a binary that is
+	// not there. This is the state a first run is in, and deviceinfo says so in words rather
+	// than answering a question nobody asked.
 	eng.installed = nil
 	if _, err := h.Devices(context.Background(), true); err != nil {
 		t.Fatal(err)
 	}
-	if seen != "" {
-		t.Errorf("with no engine installed the collectors were given %q", seen)
+	if seenBin != "" || seenTag != "" {
+		t.Errorf("with no engine installed the probe was given %q %q", seenBin, seenTag)
+	}
+}
+
+// The trade ADR 0019 takes, tested where the caching lives: a report from a machine that had
+// nothing installed must not be served back once something is. The old document is not an
+// answer about the hardware — it is the admission that nothing was asked — so serving it
+// after a download would be the settings page lying about a machine it has now looked at.
+func TestDevicesCacheIsNotServedOnceAnEngineExists(t *testing.T) {
+	eng := &fakeEngine{}
+	cache := filepath.Join(t.TempDir(), "devices.json")
+
+	probes := 0
+	newHost := func() *Host {
+		h, err := NewHost(HostOptions{
+			Engine: eng, Settings: &hostSettings{cfg: config.Default()}, DeviceCache: cache,
+			Probe: func(context.Context, deviceinfo.Options) (deviceinfo.Report, error) {
+				probes++
+				return deviceinfo.Report{
+					OS: "linux", Arch: "amd64",
+					Devices: []deviceinfo.Device{{Kind: "cpu", Name: "x86-64 CPU"}},
+				}, nil
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return h
+	}
+
+	if _, err := newHost().Devices(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	eng.installed = &engine.Installed{Tag: "b12649", Path: "/data/bin/b12649/llama-server"}
+	if _, err := newHost().Devices(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	if probes != 2 {
+		t.Errorf("probes = %d, want the download to make the cached report stale",
+			probes)
 	}
 }
 

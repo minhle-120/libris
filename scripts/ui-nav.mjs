@@ -989,7 +989,10 @@ const code = await withBrowser(
       const dd = (dt) => {
         const row = [...root.querySelectorAll('.facts > div')]
           .find((r) => r.querySelector('dt')?.textContent.trim() === dt);
-        return row ? row.querySelector('dd').textContent.trim().replace(/\s+/g, ' ') : null;
+        // \\s, not \s: this whole block is a template literal handed to ui.eval, and inside a
+        // string an unescaped \s is just an s — which turns the collapse into "replace every
+        // letter s with a space" and silently mangles every fact read off the page.
+        return row ? row.querySelector('dd').textContent.trim().replace(/\\s+/g, ' ') : null;
       };
       // The untransformed value, for the assertion that cares about an exact string: what
       // textContent reports depends on how the text happened to wrap.
@@ -1008,6 +1011,9 @@ const code = await withBrowser(
         stored: dd('Stored in'),
         storedDir: attr('Stored in', 'title'),
         detected: dd('Detected'),
+        warnings: [...root.querySelectorAll('.warnings li')]
+          .map((li) => li.textContent.trim().replace(/\\s+/g, ' '))
+          .join(' | '),
         latest: dd('Latest build'),
         download: button(/Download|Update to|Checking/) ? button(/Download|Update to|Checking/).textContent.trim() : null,
         remove: !!button(/^Remove$/),
@@ -1033,10 +1039,10 @@ const code = await withBrowser(
     );
 
     // Same reasoning as above, for the other request: the device row arrives with
-    // /api/host/devices, which runs real collectors, and the two requests finish at different
-    // times. Polling the row itself — rather than sleeping a guessed amount — is also what
-    // keeps the assertion honest: a machine where detection truly produced nothing still
-    // fails here.
+    // /api/host/devices, which may have to start a subprocess to ask the engine, and the two
+    // requests finish at different times. Polling the row itself — rather than sleeping a
+    // guessed amount — is also what keeps the assertion honest: a row that truly stayed
+    // empty still fails here.
     const detected = await ui.eval(`
       const read = () =>
         [...document.querySelectorAll('.engine .facts > div')].find(
@@ -1085,6 +1091,21 @@ const code = await withBrowser(
       "the detected row says something either way",
       (eng.detected ?? "").length > 10,
       eng.detected,
+    );
+    // The trade ADR 0019 takes, asserted where a user would read it: with nothing installed
+    // there is nothing to ask, and the page must say so without inventing a fact about the
+    // hardware. "No graphics device" on a box nobody has probed is the same sentence a
+    // GPU-less machine gets, and the two lead to different downloads.
+    checks.check(
+      "with no engine the row points at the download instead of denying a GPU",
+      /download/i.test(eng.detected ?? "") &&
+        !/no graphics/i.test(`${eng.detected} ${eng.warnings}`),
+      `${eng.detected} — ${eng.warnings.slice(0, 60)}`,
+    );
+    checks.check(
+      "and the report itself says the machine has not been asked",
+      /not been asked/i.test(eng.warnings ?? ""),
+      eng.warnings,
     );
     checks.check(
       "the newest build is named by tag, or the reason it is unknown",

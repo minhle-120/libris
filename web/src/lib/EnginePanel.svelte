@@ -18,8 +18,9 @@
    * The machine itself, as distinct from the settings above it.
    *
    * Everything else on this page is a choice libris can apply. This is not: what is installed
-   * is a fact, what is new is somebody else's fact, and what the box can run is the
-   * operating system's. So the section is read from /api/host/* and its controls are verbs —
+   * is a fact, what is new is somebody else's fact, and what the box can run is a fact about
+   * the installed llama.cpp — the only thing libris asks (ADR 0019). So the section is read
+   * from /api/host/* and its controls are verbs —
    * download, stop, remove — with the two confirmation rules the rest of the app already
    * follows: a destructive action asks first, and Cancel is the button Enter lands on.
    */
@@ -64,10 +65,27 @@
   );
   const latest = $derived(view?.latest);
   const asset = $derived(view?.asset);
+  // The report always carries a CPU row, so "the machine has no GPU" is the *absence* of a
+  // non-CPU row rather than an empty list — and the list length cannot be the test.
+  const gpus = $derived((devices?.devices ?? []).filter((d) => d.kind !== 'cpu'));
 
   onMount(() => {
     void refresh(false);
     void refreshDevices(false);
+  });
+
+  // The engine is the only thing libris asks about the machine (ADR 0019), so the answer
+  // about what this box can run on does not exist until a download lands, and changes when a
+  // newer one does. The server drops its cached report on install and on remove; this is the
+  // half that asks again, so the row fills in without a reload. The `undefined` guard is what
+  // keeps the first paint from being counted as a change: while the view is loading there is
+  // no tag to compare, and refetching then would skip a cache that is perfectly good.
+  let lastTag: string | undefined;
+  $effect(() => {
+    const tag = view?.installed?.tag;
+    if (tag === undefined) return;
+    if (lastTag !== undefined && tag !== lastTag) void refreshDevices(true);
+    lastTag = tag;
   });
 
   // A saved build selection changes what this section should offer, so it reloads. Watching
@@ -155,8 +173,8 @@
       confirming = false;
       removing = false;
       await refresh(false);
-      // The engine is a device probe, so what the machine can run is a different answer now.
-      void refreshDevices(true);
+      // No refreshDevices here: removing the engine changes the tag the effect above
+      // watches, and one rule about when the machine is re-asked beats two.
     } catch (e) {
       // 409 arrives here when a llama-server is holding the files. It is shown rather than
       // retried: the fix belongs to the person running the server.
@@ -249,17 +267,21 @@
       <div>
         <dt>Detected</dt>
         <dd>
-          {#if devices.devices.length === 0}
-            <span class="muted">No graphics device reported — libris will run on the CPU</span>
+          {#if !installed}
+            <span class="muted">asks llama.cpp once it is downloaded below</span>
+          {:else if gpus.length === 0}
+            <span class="muted">No graphics device — libris will run on the CPU</span>
           {:else}
-            {#each devices.devices as device (device.name + (device.bus_id ?? ''))}
-              <span class="device" title={device.source ?? ''}>
+            {#each devices.devices as device (device.name)}
+              <span
+                class="device"
+                title={device.free_bytes
+                  ? `${device.name} · ${formatBytes(device.free_bytes)} free`
+                  : device.name}
+              >
                 {device.description || device.name}
                 {#if device.total_bytes}
                   <span class="muted">{formatBytes(device.total_bytes)}</span>
-                {/if}
-                {#if device.driver}
-                  <span class="muted">{device.driver}</span>
                 {/if}
               </span>
             {/each}

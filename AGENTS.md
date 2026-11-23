@@ -120,6 +120,7 @@ next one, so what each one settles, in the order an agent is likely to need it:
 | the notebook's columns, the panel, the breadcrumb, a conversation | 0012, 0014, 0015, 0017 | Sources and Activity are a panel beside the chat, not pages instead of it; the header ends at the chat you are reading; conversations are the second level of the notebook list, not a control in the composer; a window too narrow for both fixed columns closes the panel, never the chat |
 | how settings reach the browser | 0002 | settings are served and saved over HTTP |
 | whether llama.cpp ships with libris, or is fetched | 0018 | it is fetched, on demand, unpinned, verified against upstream's digest |
+| what libris is allowed to learn about the machine | 0018, 0019 | the engine's `--list-devices` is the *only* device probe — no `nvidia-smi`, no `lspci`, no WMI — so a machine with nothing installed is told it has not been asked, not that it has no GPU |
 
 ---
 
@@ -189,7 +190,7 @@ internal/
   httpapi/             browser transport: JSON, files, embedded SPA, the SSE ask stream
   events/              not built: status/token/job events
   engine/              llama.cpp's own prebuilt releases: find, verify, unpack, stop, remove
-  deviceinfo/          what the machine has, collected into <data>/devices.json
+  deviceinfo/          what the machine can run, asked of the installed engine and cached in <data>/devices.json
   mcpserver/           not built: MCP transport
 web/                   Svelte source, embed.go, and dist/ — committed, because go:embed bakes it in
 docs/                  adr/ plus the reference pages in the table above

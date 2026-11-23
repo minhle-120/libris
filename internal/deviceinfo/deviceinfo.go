@@ -1,9 +1,19 @@
 // Package deviceinfo answers one question: what can this machine run a model on.
 //
-// It is a leaf, and deliberately stubborn about staying one — no imports of config,
-// llm, engine or store. That is what lets a machine that has no llama.cpp installed,
-// and therefore no way to ask it anything, still produce a device report: the settings
-// page has to be able to say "this box has no GPU" before anything is downloaded.
+// There is one source: an installed llama-server, asked with --list-devices. The OS probes
+// this package used to run — lspci, sysfs, nvidia-smi, rocm-smi, WMI, system_profiler — are
+// gone (ADR 0019). What they bought was a report on a machine that had not been downloaded
+// to yet, and what they cost was a merge between sources that disagree: lspci calls a card
+// "GeForce RTX 3070" and says nothing about memory, nvidia-smi calls the same card "NVIDIA
+// GeForce RTX 3070" and caps at 4 GiB on Windows, and a report listing both tells a user to
+// choose between one GPU and itself. The engine's answer is the only one that is about the
+// program being run: it lists the backends that build can actually use, with the memory it
+// can actually allocate right now.
+//
+// The cost is paid where the user sees it: with nothing installed there is nothing to ask,
+// so the report says "this machine has not been asked yet" instead of reading the PCI bus
+// and guessing. It is still a leaf — no config, llm, engine or store; the binary to ask
+// arrives as a path.
 //
 // Nothing here estimates a GPU layer count or a context size. llama.cpp fits a model to
 // the memory it finds with -fit, and a number computed here would be a second, worse
@@ -15,13 +25,11 @@ package deviceinfo
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strings"
 	"time"
 )
@@ -39,30 +47,28 @@ const (
 	Other  Kind = "other"
 )
 
-// Device is one graphics adapter, or the CPU package when there is nothing else worth
-// naming. TotalBytes is zero when no source on this machine would say — a VBIOS does not
-// report VRAM to Linux without a driver, and inventing a number would be worse than a
-// blank cell (see UnknownSize).
+// Device is one thing llama.cpp offered to run a model on.
+//
+// Name is the slot ggml gave it ("Vulkan0", "CUDA0") — the string that would be passed to
+// -dev, and therefore not something to reword. Description is the card's own words
+// ("NVIDIA GeForce RTX 3070"), which is what a person recognises, and what a reader is
+// shown. TotalBytes is zero when the line had no memory in it, which a build can do; a
+// blank cell beats an invented number, and warn() says the cell is blank.
 type Device struct {
 	Kind       Kind   `json:"kind"`
 	Name       string `json:"name"`
 	TotalBytes int64  `json:"total_bytes,omitempty"`
-	BusID      string `json:"bus_id,omitempty"`
-	// BusVendor is a PCI vendor id ("0x10de"), the only field on which two probes' names
-	// for one card can be reconciled without guessing.
-	BusVendor string `json:"bus_vendor,omitempty"`
-	Driver    string `json:"driver,omitempty"`
-	// Description is the adapter's own words, when a probe had them: ggml prints
+	// Description is the adapter's own words, when the line had them: ggml prints
 	// "NVIDIA GeForce RTX 3070" next to the slot name "Vulkan0", and the second is useless
 	// to a person while the first is how they recognise their machine.
 	Description string `json:"description,omitempty"`
 	// FreeBytes is what is unused at the moment of asking, not the card's capacity. Only a
-	// live probe (llama.cpp's) can know it, and it is deliberately kept apart from
-	// TotalBytes: a browser with three tabs open changes this number and not that one.
+	// live ggml init sees what another program is holding, and it is deliberately kept apart
+	// from TotalBytes: a browser with three tabs open changes this number and not that one.
 	FreeBytes int64 `json:"free_bytes,omitempty"`
-	// Source names the probe that produced this row, because the probes disagree and a
-	// user debugging a wrong number needs to know which one was wrong: "lspci",
-	// "sysfs", "nvidia-smi", "rocm-smi", "wmi", "system_profiler".
+	// Source names where the row came from, because a user debugging a wrong number needs
+	// to know which thing was wrong: "llama-server" for every row the engine reported, "go"
+	// for the CPU row this package states without asking anything.
 	Source string `json:"source,omitempty"`
 }
 
@@ -74,8 +80,8 @@ type Report struct {
 	// Warnings are for the user, in sentences: "Two graphics adapters are present —
 	// pick the one to run on." An empty slice means the report needs no asterisk.
 	Warnings []string `json:"warnings,omitempty"`
-	// BootID and Fingerprint are what make a cached report safe to reuse: a driver update
-	// or a reboot can change the answer, and a card in the other slot changes it too.
+	// Fingerprint and CheckedAt are what make a cached report safe to reuse: a new engine
+	// build or a reboot can change the answer.
 	Fingerprint string    `json:"fingerprint,omitempty"`
 	CheckedAt   time.Time `json:"checked_at"`
 	// Cached is set only when reading the file, never by Detect: it is the difference
@@ -84,24 +90,20 @@ type Report struct {
 }
 
 // Run executes a helper binary and returns stdout. It is a field of Options rather than a
-// call to exec inside this package so every collector here can be tested against recorded
-// output — no unit test may need nvidia-smi, a GPU, or a Windows box (docs/testing.md).
+// call to exec inside this package so the engine probe can be tested against recorded
+// output — no unit test may need a GPU, or an installed engine (docs/testing.md).
 type Run func(ctx context.Context, name string, args ...string) ([]byte, error)
 
 type Options struct {
-	// LookPath decides whether a probe's binary is present. Injectable for the same
-	// reason Run is.
-	LookPath func(name string) (string, error)
-	Run      Run
-	// ReadFile and ReadDir are os.ReadFile and os.ReadDir, for the sysfs and /proc
-	// collectors, which are the only part of this package that reads a filesystem.
-	ReadFile func(path string) ([]byte, error)
-	ReadDir  func(name string) ([]os.DirEntry, error)
-	// EngineBin is an installed llama-server to probe with --list-devices, when there is
-	// one. It is the best source available — it reports the backends that build can actually
-	// use — so Detect asks it last and merges the answer. Empty means no engine installed,
-	// which is the common case this phase: the settings page must still describe the machine.
+	// EngineBin is an installed llama-server to probe with --list-devices, or empty when
+	// there is none — which is not an error, it is the state a first run is in, and the
+	// report has a sentence for it.
 	EngineBin string
+	// EngineTag is that install's release tag (b12649), used only to key the cache: a new
+	// engine is a new answer about what the machine can run.
+	EngineTag string
+
+	Run Run
 
 	// Now and BootID keep Detect deterministic in tests.
 	Now    func() time.Time
@@ -109,19 +111,10 @@ type Options struct {
 }
 
 func (o Options) withDefaults() Options {
-	if o.ReadDir == nil {
-		o.ReadDir = os.ReadDir
-	}
-	if o.LookPath == nil {
-		o.LookPath = exec.LookPath
-	}
 	if o.Run == nil {
 		o.Run = func(ctx context.Context, name string, args ...string) ([]byte, error) {
 			return exec.CommandContext(ctx, name, args...).Output()
 		}
-	}
-	if o.ReadFile == nil {
-		o.ReadFile = os.ReadFile
 	}
 	if o.Now == nil {
 		o.Now = time.Now
@@ -132,65 +125,70 @@ func (o Options) withDefaults() Options {
 	return o
 }
 
-// Detect runs this platform's collectors. It never fails: a machine where every probe is
-// missing is reported as CPU-only with a warning, because "no data" and "no GPU" are
-// different sentences to a person deciding whether to download a 5 GB model.
+// askTimeout bounds the run of the engine's --list-devices.
+//
+// Not a guess at how long initialising a GPU takes — that is driver- and box-dependent, and
+// a Vulkan init on a laptop that has to wake the dGPU is slow on purpose. It is the limit on
+// a process that is supposed to print six lines and exit, so a hang here means a broken
+// driver and the answer the user needs is "that one did not answer", not a settings page
+// that never comes back.
+const askTimeout = 30 * time.Second
+
+// noEngine is what a machine with nothing installed is told, in the report's own words. It
+// is deliberately not "no graphics adapter was found": on this machine nothing has been
+// looked at, and a sentence that reads as a fact about the hardware would be a lie about a
+// question that was never asked.
+const noEngine = "Nothing has been downloaded yet, so this machine has not been asked what it can run on. Download llama.cpp below, then check again."
+
+// Detect asks the one thing worth asking, and never fails: an unanswerable machine gets a
+// report that says which question could not be put, because "nothing was asked" and "no
+// GPU" are different sentences to a person deciding whether to download a 5 GB model.
 func Detect(ctx context.Context, opts Options) Report {
 	opts = opts.withDefaults()
 
-	rep := Report{OS: runtime.GOOS, Arch: runtime.GOARCH, Devices: []Device{}, Warnings: []string{}}
-	rep.Devices = append(rep.Devices, cpuDevice(opts))
-	rep.Devices = append(rep.Devices, gpuDevices(ctx, opts)...)
-	rep.Devices = dedupe(rep.Devices)
-	rep.Warnings = append(rep.Warnings, warn(rep.Devices)...)
+	rep := Report{
+		OS:       runtime.GOOS,
+		Arch:     runtime.GOARCH,
+		Devices:  []Device{cpuDevice()},
+		Warnings: []string{},
+	}
+
+	if opts.EngineBin == "" {
+		rep.Warnings = append(rep.Warnings, noEngine)
+	} else {
+		ctx, cancel := context.WithTimeout(ctx, askTimeout)
+		defer cancel()
+
+		out, err := opts.Run(ctx, opts.EngineBin, "--list-devices")
+		if err != nil {
+			rep.Warnings = append(rep.Warnings,
+				"The installed engine did not answer when it was asked for its devices ("+oneLine(err)+
+					"), so what this machine can run on is not known.")
+		} else {
+			rep.Devices = append(rep.Devices, engineDevices(out)...)
+			rep.Warnings = append(rep.Warnings, warn(rep.Devices)...)
+		}
+	}
 
 	rep.Fingerprint = Fingerprint(opts)
 	rep.CheckedAt = opts.Now().UTC()
 	return rep
 }
 
-// gpuDevices is implemented per platform.
-func cpuDevice(o Options) Device {
-	d := Device{Kind: CPU, Name: "This machine's CPU", Source: "go"}
+// cpuDevice is the one row not taken from the engine, and it is a constant rather than a
+// probe. llama.cpp's --list-devices skips CPU devices (common/arg.cpp:1157), so a report
+// that asked only the engine could not say that a CPU exists — and "this runs on the CPU"
+// is the answer a person on the box with no GPU needs. Nothing is read or run: it is a
+// property of the binary already executing.
+func cpuDevice() Device {
+	d := Device{Kind: CPU, Name: "CPU", Source: "go"}
 	switch runtime.GOARCH {
 	case "amd64":
 		d.Name = "x86-64 CPU"
 	case "arm64":
 		d.Name = "ARM64 CPU"
 	}
-	// /proc/cpuinfo's model name is the one CPU string worth showing: it is what a person
-	// recognises from the box their machine came in.
-	if raw, err := o.ReadFile("/proc/cpuinfo"); err == nil {
-		for _, line := range strings.Split(string(raw), "\n") {
-			if v, ok := strings.CutPrefix(line, "model name"); ok {
-				if _, v, ok = strings.Cut(v, ":"); ok {
-					d.Name = strings.TrimSpace(v)
-					d.Source = "proc"
-				}
-				break
-			}
-		}
-	}
-	if runtime.GOOS == "darwin" {
-		// Apple silicon reports its memory to the CPU, not to a separate adapter.
-		d.Kind = Apple
-		d.Name = "Apple " + runtime.GOARCH
-	}
 	return d
-}
-
-func dedupe(in []Device) []Device {
-	seen := map[string]bool{}
-	out := make([]Device, 0, len(in))
-	for _, d := range in {
-		key := strings.ToLower(strings.TrimSpace(d.Name)) + "\x00" + fmt.Sprint(d.TotalBytes)
-		if key == "\x000" || seen[key] {
-			continue
-		}
-		seen[key] = true
-		out = append(out, d)
-	}
-	return out
 }
 
 // warn turns the shape of a report into the sentences a user needs before downloading.
@@ -224,15 +222,28 @@ func warn(dev []Device) []string {
 	return w
 }
 
-// Fingerprint is the cache key, and it is computed from cheap inputs on purpose: boot id,
-// the display devices on the PCI bus with their vendor ids, and the NVIDIA driver version.
-// Nothing is run and no GPU is initialised, so a stale cache can be recognised before a
-// probe is paid for — which is the only order that makes a cache worth having.
+// oneLine keeps a subprocess's complaint inside one sentence: --list-devices writes ggml's
+// own startup log to stderr, and a warning rendered as a <li> is not a place for forty
+// lines of it.
+func oneLine(err error) string {
+	s := strings.Join(strings.Fields(err.Error()), " ")
+	const max = 200
+	if len(s) > max {
+		return s[:max] + "…"
+	}
+	return s
+}
+
+// Fingerprint is the cache key, and it is computed from cheap inputs on purpose: this boot,
+// and this engine build. Nothing is run, so a stale cache can be recognised before a probe
+// is paid for — which is the only order that makes a cache worth having.
 //
-// A driver update, a reboot, or a card moving slot each change it. What it cannot see is a
-// memory size changing on its own, which is why the cache also has an age (Load's maxAge):
-// on Windows and macOS, where there is no boot id to read, age is the only invalidation and
-// the fingerprint mostly just distinguishes one machine from another.
+// It no longer enumerates the PCI bus, because nothing in the report comes from the bus any
+// more. The answer moves when the engine moves — and installing or removing one already
+// invalidates the cache where that happens (app.Host) — or when the machine reboots. What it
+// cannot see is a driver update that survives a reboot under the same engine build, which is
+// why the cache also has an age (Load's maxAge): on Windows and macOS, where there is no
+// boot id to read, age is the only invalidation.
 func Fingerprint(o Options) string {
 	o = o.withDefaults()
 
@@ -240,32 +251,22 @@ func Fingerprint(o Options) string {
 	if id := o.BootID(); id != "" {
 		parts = append(parts, "boot="+id)
 	}
-	if raw, err := o.ReadFile("/sys/module/nvidia/version"); err == nil {
-		parts = append(parts, "nv="+strings.Fields(string(raw))[0])
-	}
-	if entries, err := o.readDir("/sys/bus/pci/devices"); err == nil {
-		for _, e := range entries {
-			class, err := o.ReadFile("/sys/bus/pci/devices/" + e.Name() + "/class")
-			if err != nil || !isDisplayClass(string(class)) {
-				continue
-			}
-			vendor, _ := o.ReadFile("/sys/bus/pci/devices/" + e.Name() + "/vendor")
-			parts = append(parts, e.Name()+":"+strings.TrimSpace(string(vendor)))
+	if o.EngineBin != "" {
+		tag := o.EngineTag
+		if tag == "" {
+			// A build with no recorded tag is still identified by where it lives, and the
+			// install directory carries the tag.
+			tag = o.EngineBin
 		}
+		parts = append(parts, "engine="+tag)
 	}
-	sort.Strings(parts)
 	parts = append(parts, runtime.GOOS+"/"+runtime.GOARCH)
 	return strings.Join(parts, "|")
 }
 
-func isDisplayClass(class string) bool {
-	class = strings.TrimPrefix(strings.TrimSpace(class), "0x")
-	return len(class) >= 2 && class[:2] == pciClassMask
-}
-
 // readBootID is a linuxism that is empty everywhere else, which is the honest answer: on
 // Windows and macOS this cache cannot be invalidated by a reboot, so its fingerprint
-// carries the driver versions and the age instead.
+// carries the engine build and the age instead.
 func readBootID() string {
 	raw, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
 	if err != nil {
@@ -326,8 +327,3 @@ func Save(path string, rep Report) error {
 	}
 	return nil
 }
-
-// ErrNoProbe means the one binary a collector needed is not installed. It is never
-// returned to a caller — Detect swallows it into a warning — but it exists so a test can
-// tell "absent" from "failed".
-var ErrNoProbe = errors.New("deviceinfo: probe not installed")

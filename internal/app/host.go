@@ -26,8 +26,9 @@ import (
 )
 
 // deviceCacheAge bounds how long a device report stays reusable without asking again. The
-// fingerprint catches a reboot or a driver update; this catches everything a fingerprint
-// cannot see, and keeps the settings page from running a subprocess on every visit.
+// fingerprint catches a reboot and a new engine build; this catches what neither can see — a
+// driver updated in place, a card moved slot — and keeps the settings page from running a
+// subprocess on every visit.
 const deviceCacheAge = 24 * time.Hour
 
 // checkBudget is how long a background update check may run before it is given up on. It is
@@ -70,7 +71,7 @@ type HostOptions struct {
 	DeviceCache string
 	Logger      *slog.Logger
 
-	// Probe runs the collectors. It is a field so the caching around it can be tested on a
+	// Probe asks the installed engine what it can run on. It is a field so the caching around it can be tested on a
 	// machine with neither a GPU nor permission to run anything; nil means the real one.
 	Probe func(context.Context, deviceinfo.Options) (deviceinfo.Report, error)
 }
@@ -280,8 +281,9 @@ func (h *Host) EngineInstall(ctx context.Context, tag string) (engine.Installed,
 	if err != nil {
 		return engine.Installed{}, err
 	}
-	// The engine is a device probe once it exists, so the cached report about the machine is
-	// now one source behind what is knowable.
+	// The engine is the only thing worth asking about the machine, so this is the moment a
+	// report about it becomes possible at all — and the cached answer, if there was one, is
+	// now about a build that is no longer here.
 	h.invalidateDevices("engine installed")
 	return in, nil
 }
@@ -309,12 +311,12 @@ func (h *Host) EngineDiscardParts() error { return h.engine.ClearParts() }
 // Devices reports what this machine can run a model on, from the cache if it still describes
 // the machine.
 //
-// The order is the cheap one: the cache key is computed from a reboot id and the PCI bus, so
-// a stale entry is recognised without running anything. Only then does anything get asked,
-// and the engine — once installed — is asked last and merged, because ggml knows which
-// backends that build can actually use.
+// The order is the cheap one: the cache key is this boot and this engine build, so a stale
+// entry is recognised without running anything. Only then is the engine asked — and with
+// nothing installed it cannot be asked at all, which the report says instead of guessing
+// from what the operating system exposes (ADR 0019).
 func (h *Host) Devices(ctx context.Context, refresh bool) (deviceinfo.Report, error) {
-	probe := deviceinfo.Options{EngineBin: h.engineBin()}
+	probe := h.engineProbe()
 	fp := deviceinfo.Fingerprint(probe)
 
 	if !refresh && h.devCache != "" {
@@ -327,9 +329,9 @@ func (h *Host) Devices(ctx context.Context, refresh bool) (deviceinfo.Report, er
 	if err != nil {
 		return deviceinfo.Report{}, err
 	}
-	// The stamp belongs here, not in the collectors. A probe reports what it saw; *when* it
+	// The stamp belongs here, not in the probe. A probe reports what it saw; *when* it
 	// saw it, and which machine configuration the answer describes, are properties of the
-	// cache entry, and a collector that filled them in itself could not be tested against a
+	// cache entry, and a probe that filled them in itself could not be tested against a
 	// clock.
 	rep.Fingerprint = fp
 	if rep.CheckedAt.IsZero() {
@@ -345,13 +347,17 @@ func (h *Host) Devices(ctx context.Context, refresh bool) (deviceinfo.Report, er
 	return rep, nil
 }
 
-// engineBin is the installed engine's own path, which is the only probe worth running: the
-// same binary libris will later start, reporting the same backends it will start them with.
-func (h *Host) engineBin() string {
-	if in, ok := h.engine.Status(); ok {
-		return in.Path
+// engineProbe is who to ask: the installed engine's own path, which is the only thing worth
+// asking — the same binary libris will later start, reporting the same backends it will
+// start them with — plus its tag, so a new download is a different cache entry rather than
+// an old answer about a build that is no longer there. An empty Options means no engine, and
+// deviceinfo has a sentence for that.
+func (h *Host) engineProbe() deviceinfo.Options {
+	in, ok := h.engine.Status()
+	if !ok {
+		return deviceinfo.Options{}
 	}
-	return ""
+	return deviceinfo.Options{EngineBin: in.Path, EngineTag: in.Tag}
 }
 
 func (h *Host) invalidateDevices(because string) {
