@@ -28,6 +28,13 @@ jobs:
             goarch: amd64
             ext: '.exe'
     runs-on: ${{ matrix.os }}
+    # A Windows `run:` step is PowerShell unless told otherwise, and PowerShell
+    # has no notion of $TAG: it built into a file called `libris---` and
+    # reported success. Bash on both legs is what makes the command below the
+    # same command on both — the whole reason it is one line.
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 
@@ -55,9 +62,14 @@ jobs:
           OS: ${{ matrix.goos }}
           ARCH: ${{ matrix.goarch }}
           EXT: ${{ matrix.ext }}
-        run: >-
-          go build -trimpath -ldflags "-s -w"
-          -o "libris-$TAG-$OS-$ARCH$EXT" ./cmd/libris
+        run: |
+          set -eu
+          asset="libris-$TAG-$OS-$ARCH$EXT"
+          go build -trimpath -ldflags "-s -w" -o "$asset" ./cmd/libris
+          test -n "$TAG" && test -f "$asset"
+          # A green leg that uploads the wrong filename is worse than a red one:
+          # the release page looks finished and the download is named after a
+          # shell that expanded nothing. This is the check that catches it.
 
       - uses: actions/upload-artifact@v4
         with:
