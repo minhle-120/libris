@@ -30,7 +30,22 @@ PATCH  …/chats/{chatID}                   {"title":…} → 204
 GET    /api/notebooks/{id}/chats/{chatID}/messages
 POST   /api/notebooks/{id}/ask            SSE, see below
 GET    /                                  embedded SPA, index.html fallback
+GET    /api/host/engine                   installed + newest + progress; `?check=1` asks
+                                          GitHub again now
+POST   /api/host/engine                   {"backend"?,"tag"?} → 202 with the tag it chose;
+                                          409 while the update check is still running, 502
+                                          with the reason when there is no answer
+POST   /api/host/engine/stop              ends a download and keeps its bytes to resume
+DELETE /api/host/engine                   the engine, unless a server is running on it
+DELETE /api/host/engine/parts             kept download bytes, and their resume records
+GET    /api/host/devices                  what the machine has, cached for a night
 ```
+
+Neither host endpoint waits on GitHub. `GET /api/host/engine` answers from the local record
+in microseconds and starts the lookup behind the response, saying `{"checking":true}`; the
+page polls and the answer lands in a later view. This is not a performance choice — a
+measured `api.github.com` round trip here is seven seconds, which is longer than the browser
+waits for a settings page and longer than anyone will stand looking at one.
 
 Planned, not built: SSE progress for ingest instead of the UI's polling, and `/mcp`.
 

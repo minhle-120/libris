@@ -110,6 +110,24 @@ is a jailed read — it cannot escape `--media-path`. Asset names we generate (h
 
 ## Process management is not here
 
-`internal/llm` deliberately excludes spawning and supervising servers. A future
-`internal/llamacpp` will probe or start them and hand plain base URLs to `llm`, so
-"external OpenAI API" and "bundled llama.cpp" stay interchangeable.
+`internal/llm` deliberately excludes spawning and supervising servers. The binaries
+themselves are not shipped either: `internal/engine` downloads upstream's prebuilt release
+into the data directory on demand, and everything in `llm` still talks to a base URL, so
+"external OpenAI API" and "downloaded llama.cpp" stay interchangeable.
+
+## Release binaries (verified against the live API, 2026-11-23)
+
+Everything here was read off `api.github.com` or run from the downloaded tree, because the
+first version of `internal/engine` was written from memory and got three of it wrong.
+
+| | |
+|---|---|
+| The builds are the `b<digits>` releases, and every one is `prerelease: true` | so `/releases/latest` — which skips prereleases — returns `v1.0.0`, whose only asset is `nightly-tag.txt`. Asking that endpoint for an engine binary never gets one. `internal/engine` lists releases and picks the newest `b*` that carries an asset for this platform |
+| `llama-b12650-bin-ubuntu-vulkan-x64.tar.gz` is 37.0 MB, `…-bin-ubuntu-x64.tar.gz` 23.3 MB | Linux's CPU build has **no backend word in its name at all**, which is why the asset name is a candidate table tried against the release's own list rather than a format string |
+| Windows is `…-bin-win-vulkan-x64.zip` (38.9 MB) and `…-bin-win-cpu-x64.zip` | `win`, not `windows`, and `.zip`, not `.tar.gz` |
+| Every asset publishes `digest: "sha256:<hex>"` | GitHub's own digest, so a download is verified against upstream rather than against nothing |
+| The tar is **flat** | one directory, `llama-b12650/`, with `llama-server`, the tools and every `.so` side by side. No `bin/`, no `lib/` — `findServer` walks for that reason |
+| The tar contains **symbolic links** | `libllama.so -> libllama.so.1 -> libllama.so.1.0.0`. Refusing them is refusing to install the server |
+| `llama-server` has `RUNPATH: [$ORIGIN]` | so it finds its libraries wherever the directory is put, and needs no `LD_LIBRARY_PATH`. `…/llama-server --version` → `build 12650` |
+| Asset URLs redirect to a signed CDN host | which does not honour a suffix range (`curl -r -65536`) at all |
+| A stopped download resumes with `Range: bytes=<n>-` | asserted by `TestStoppedDownloadResumesRatherThanRestarting`, which is the one part of this table the live download did *not* exercise — it downloaded once, whole |

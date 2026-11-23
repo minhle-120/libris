@@ -119,6 +119,7 @@ next one, so what each one settles, in the order an agent is likely to need it:
 | where files go on disk | 0005 | the data directory defaults to Documents/libris, resolved per platform |
 | the notebook's columns, the panel, the breadcrumb, a conversation | 0012, 0014, 0015, 0017 | Sources and Activity are a panel beside the chat, not pages instead of it; the header ends at the chat you are reading; conversations are the second level of the notebook list, not a control in the composer; a window too narrow for both fixed columns closes the panel, never the chat |
 | how settings reach the browser | 0002 | settings are served and saved over HTTP |
+| whether llama.cpp ships with libris, or is fetched | 0018 | it is fetched, on demand, unpinned, verified against upstream's digest |
 
 ---
 
@@ -187,6 +188,8 @@ internal/
   app/                 use cases shared by both transports (+ ingest queue)
   httpapi/             browser transport: JSON, files, embedded SPA, the SSE ask stream
   events/              not built: status/token/job events
+  engine/              llama.cpp's own prebuilt releases: find, verify, unpack, stop, remove
+  deviceinfo/          what the machine has, collected into <data>/devices.json
   mcpserver/           not built: MCP transport
 web/                   Svelte source, embed.go, and dist/ — committed, because go:embed bakes it in
 docs/                  adr/ plus the reference pages in the table above
@@ -212,7 +215,9 @@ Two rules the layout exists to enforce:
 `chat` takes evidence as *input* and must not call `retrieve` itself. Orchestration lives
 in `app` so both transports share one implementation.
 
-**Built:** settings and the generated settings UI; ingest of text, PDFs (text +
+**Built:** settings and the generated settings UI, the machine's device report, and the
+on-demand download of llama.cpp's prebuilt binaries (`docs/llamacpp.md` has the release
+facts, ADR 0018 why they are fetched rather than shipped); ingest of text, PDFs (text +
 rasters), images and audio slices; embedding; recall, rerank and the registry; the
 research loop and synthesis; turn persistence in a chat that a question finds, starts, or
 deletes; the SSE ask stream; the web UI including the conversation tree, the chunk
@@ -576,6 +581,11 @@ a ticket, or that a ticket would only restate.
 
 Found the hard way. Browser-harness and fixture traps are in `docs/testing.md`.
 
+- A tar is not a list of files. llama.cpp's releases ship symlinks (`libllama.so -> .so.1 ->
+  .so.1.0.0`), and an unpacker that accepts only regular files dies 37 MB into the only
+  download that matters — leaving a half-written tree nothing counts, which is why a failed
+  unpack removes the directory it made. The archive fixture invented a `bin/` upstream does
+  not have; the code survived only because `findServer` walks.
 - `go:embed` cannot reach above its package directory, so migrations live under
   `internal/store/sqlite/` and the frontend embed lives in `web/embed.go`.
 - Guessing base64 vs path by character set is wrong: `path/to/file` is all `[A-Za-z/]`.
