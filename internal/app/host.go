@@ -17,6 +17,7 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"sync"
 	"time"
 
 	"libris/internal/config"
@@ -29,10 +30,24 @@ import (
 // cannot see, and keeps the settings page from running a subprocess on every visit.
 const deviceCacheAge = 24 * time.Hour
 
+// checkBudget is how long a background update check may run before it is given up on. It is
+// longer than the manager's own HTTP deadline on purpose: this is the outer bound, and the
+// inner one produces the sentence the page shows.
+const checkBudget = 30 * time.Second
+
+// checkRetry is how long a failed update check is left alone. Without it, a machine that is
+// offline sees a fresh attempt on every poll of the settings page — the page would say
+// "checking" forever, and something with a captive portal would spend the day hammering a
+// server that is not answering. A deliberate "Check for updates" ignores this.
+const checkRetry = 5 * time.Minute
+
 // EngineManager is what Host needs from the binary manager — the whole of it, because every
 // method here is a button on the page. engine.Manager satisfies it; a test does not have to.
 type EngineManager interface {
 	Status() (engine.Installed, bool)
+	// Known is the cached answer, without asking anyone. It is what lets this page load at
+	// the speed of the local disk.
+	Known(b engine.Backend) (engine.Release, engine.Asset, bool)
 	Check(ctx context.Context, b engine.Backend, force bool) (engine.Release, engine.Asset, error)
 	Install(ctx context.Context, tag string, b engine.Backend) (engine.Installed, error)
 	Remove(ctx context.Context) error
@@ -67,6 +82,14 @@ type Host struct {
 	probe    func(context.Context, deviceinfo.Options) (deviceinfo.Report, error)
 	log      *slog.Logger
 	now      func() time.Time
+
+	// The update check is a background act, so its state is process state: one in flight, and
+	// the sentence from the last one that failed. Guarded because the page can be open in two
+	// tabs, which is two pollers.
+	mu          sync.Mutex
+	checking    bool
+	lastErr     string
+	lastAttempt time.Time
 }
 
 func NewHost(opts HostOptions) (*Host, error) {
@@ -113,6 +136,11 @@ type EngineView struct {
 	Update     bool            `json:"update_available"`
 	CheckError string          `json:"check_error,omitempty"`
 
+	// Checking means the answer about what is newest is not in yet, and will be: the check
+	// runs in the background and the page asks again. Without it the absence of Latest reads
+	// as "we could not find out", which is a different claim and a dead end for the reader.
+	Checking bool `json:"checking,omitempty"`
+
 	Progress engine.Progress `json:"progress"`
 
 	// Dir and PartsBytes are shown so the space a download will use, and the space a
@@ -146,23 +174,81 @@ func (h *Host) Engine(ctx context.Context, force bool) (*EngineView, error) {
 		v.Backend = string(in.Backend)
 	}
 
-	rel, asset, err := h.engine.Check(ctx, backend, force)
-	switch {
-	case err != nil && !errors.Is(err, engine.ErrNotFound):
-		v.CheckError = err.Error()
-	case err == nil:
+	rel, asset, known := h.engine.Known(backend)
+	if known {
 		v.Latest = &rel
 		v.Asset = &asset
-		// Comparison is numeric, not lexical: "b9999" sorts after "b12649" as a string and
-		// is the older build, and an app that offered that as an update would be offering a
+		// Comparison is numeric, not lexical: "b9999" sorts after "b12649" as a string and is
+		// the older build, and an app that offered that as an update would be offering a
 		// downgrade.
 		if v.Installed != nil && engine.CompareTags(v.Installed.Tag, rel.Tag) < 0 {
 			v.Update = true
 		}
-	default:
-		v.CheckError = err.Error()
 	}
+	h.startCheck(backend, force, !known)
+	// The last failure, if there was one. It stays until a check succeeds, because a page
+	// that silently goes back to showing nothing explains nothing about the download button
+	// that stopped appearing.
+	//
+	// Checking reports the state, not this call's contribution to it. Reading only whether
+	// *this* call started a check made a polling client see true once and false forever —
+	// which is not "still working", it is a lie that the answer is final.
+	h.mu.Lock()
+	v.Checking = h.checking
+	v.CheckError = h.lastErr
+	h.mu.Unlock()
 	return v, nil
+}
+
+// startCheck asks upstream in the background, at most once at a time.
+//
+// The settings page does not wait for this. A measured round trip to the release API on a
+// real network here is seven seconds, and a page whose first paint is somebody else's server
+// is a page that shows a spinner on a machine that answered instantly. So the view reports
+// what is on disk now, says a check is running, and the browser asks again — the same shape
+// the ingest queue already uses, for the same reason.
+// force is whether a person asked; needed is whether the page has nothing to show. They are
+// separate because the backoff below answers only to the first: an ordinary visit may be
+// deferred, a button press may not.
+func (h *Host) startCheck(b engine.Backend, force, needed bool) bool {
+	h.mu.Lock()
+	switch {
+	case h.checking:
+		h.mu.Unlock()
+		return false
+	case !force && !needed:
+		h.mu.Unlock()
+		return false
+	case !force && !h.lastAttempt.IsZero() && h.now().Sub(h.lastAttempt) < checkRetry:
+		// Recently failed, and nobody asked for another go. The page still shows the failure
+		// sentence and the button that retries it.
+		h.mu.Unlock()
+		return false
+	}
+	h.checking = true
+	h.lastAttempt = h.now()
+	h.mu.Unlock()
+
+	go func() {
+		// Not the request's context: the check belongs to the machine's state, and a browser
+		// that reloads the page while it is in flight must not abort it and start another.
+		ctx, cancel := context.WithTimeout(context.Background(), checkBudget)
+		defer cancel()
+
+		_, _, err := h.engine.Check(ctx, b, true)
+
+		h.mu.Lock()
+		h.checking = false
+		switch {
+		case err != nil:
+			h.lastErr = err.Error()
+			h.log.Debug("engine: update check failed", "err", err)
+		default:
+			h.lastErr = ""
+		}
+		h.mu.Unlock()
+	}()
+	return true
 }
 
 // EngineInstall fetches a tag the page offered. An empty tag means "whatever is newest",
@@ -177,9 +263,16 @@ func (h *Host) EngineInstall(ctx context.Context, tag string) (engine.Installed,
 	h.engine.SetProxy(cfg.EngineProxy)
 
 	if tag == "" {
-		rel, _, err := h.engine.Check(ctx, backend, false)
-		if err != nil {
-			return engine.Installed{}, err
+		rel, _, ok := h.engine.Known(backend)
+		if !ok {
+			// Nothing on disk to offer. Ask once, here, where an answer is required — the
+			// page keeps its Download button disabled until it has a release to name, so this
+			// is the rare path and not the common one.
+			asked, _, err := h.engine.Check(ctx, backend, false)
+			if err != nil {
+				return engine.Installed{}, err
+			}
+			rel = asked
 		}
 		tag = rel.Tag
 	}

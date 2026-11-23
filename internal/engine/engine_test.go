@@ -700,3 +700,32 @@ func TestProxyIsAppliedToTheDownloadOnly(t *testing.T) {
 		t.Errorf("with no proxy: %q", got)
 	}
 }
+
+// TestUpdateCheckIsBoundedEvenWhenTheServerIsSilent covers the difference between the two
+// HTTP clients this package owns. A release list is a few kilobytes the settings page waits
+// on, so it gets a deadline; the archive does not, because a 35 MB fetch over a slow link is
+// supposed to be long. A single client for both would either kill the download or let a hung
+// api.github.com hold the page open indefinitely — and "indefinitely" is the interesting word,
+// because a socket that accepts and says nothing never errors on its own.
+func TestUpdateCheckIsBoundedEvenWhenTheServerIsSilent(t *testing.T) {
+	hang := make(chan struct{})
+	defer close(hang)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-hang // accepted, answered never
+	}))
+
+	m := Open(t.TempDir(), nil)
+	m.api = srv.URL + "/api"
+	m.release = &http.Client{Timeout: 60 * time.Millisecond}
+
+	start := time.Now()
+	_, _, err := m.Check(context.Background(), Vulkan, true)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("a server that never answered produced no error")
+	}
+	if elapsed > 2*time.Second {
+		t.Errorf("the check waited %s, want it cut off by its own deadline", elapsed)
+	}
+}

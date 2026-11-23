@@ -6,6 +6,7 @@
   import Toggle from '../lib/Toggle.svelte';
   import Button from '../lib/Button.svelte';
   import Icon from '../lib/Icon.svelte';
+  import EnginePanel from '../lib/EnginePanel.svelte';
 
   // Values come from the backend; labels, help, ranges and enums come from the
   // generated schema. Nothing in this file defines a setting.
@@ -15,6 +16,10 @@
   let saving = $state(false);
   let error = $state('');
   let notice = $state('');
+  // Bumped on every save, and handed to the machine section as a reason to refetch. A
+  // settings change that alters what the backend offers must not leave the section showing
+  // the other build's file size.
+  let savedToken = $state(0);
 
   const snapshot = $derived(JSON.stringify(settings));
   const dirty = $derived(!loading && snapshot !== saved);
@@ -47,6 +52,7 @@
     try {
       apply(await putSettings(settings));
       notice = 'Saved';
+      savedToken++;
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     } finally {
@@ -178,6 +184,13 @@
               {/if}
             </SettingRow>
           {/each}
+
+          <!-- The machine is not a setting. What is installed, what is new, and what the box
+               has in it are read from /api/host/*, and its buttons are verbs — so this lives
+               under the group that names it rather than among the generated fields above. -->
+          {#if group.id === 'engine'}
+            <EnginePanel backend={str('engineBackend')} saved={savedToken} />
+          {/if}
         </section>
       {/each}
 

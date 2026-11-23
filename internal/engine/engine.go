@@ -66,6 +66,16 @@ var tagPattern = regexp.MustCompile(`^b\d{4,6}$`)
 
 // ErrBusy means a download is already running. Two at once would fight over the same
 // .parts file and produce a file that verifies against neither.
+// releaseTimeout bounds the update check, which the settings page waits on. Long enough for
+// a slow but working connection, short enough that a hung one is an error sentence rather
+// than a page that never finishes loading.
+// releaseTimeout bounds the update check. Generous for a few kilobytes, and deliberately: a
+// measured api.github.com round trip on a real network here is seven seconds, so a tighter
+// bound would turn a slow connection into a page that says the newest build is unknown. It
+// exists only so a socket that accepts and never answers cannot hold the settings page open
+// forever.
+const releaseTimeout = 15 * time.Second
+
 var ErrBusy = errors.New("engine: a download is already running")
 
 // ErrNotFound means the release exists but has nothing usable for this platform — which
@@ -143,7 +153,10 @@ type Manager struct {
 	files string
 	log   *slog.Logger
 	http  *http.Client
-	proxy string
+	// release is the bounded client: a few KB of JSON the settings page waits on, not the
+	// 35 MB file the caller's context owns. See Open.
+	release *http.Client
+	proxy   string
 
 	mu       sync.Mutex
 	progress Progress
@@ -164,10 +177,28 @@ func Open(dir string, log *slog.Logger) *Manager {
 		// client-wide deadline would kill the one thing it is waiting for. The caller's
 		// context is the only timeout here — the same reasoning internal/llm gives for
 		// never setting one on a streaming request.
-		http:     &http.Client{},
+		http: &http.Client{},
+		// The opposite case, so the opposite setting: the release list is a few KB and the
+		// settings page waits on it. Without a bound, an api.github.com that accepts the
+		// connection and says nothing holds the whole section open indefinitely — installed
+		// tag, storage path and all — on a machine that is otherwise answering fine.
+		release:  &http.Client{Timeout: releaseTimeout},
 		progress: Progress{State: StateIdle},
 		now:      func() time.Time { return time.Now().UTC() },
 	}
+}
+
+// Known answers what a check would return from disk, without asking anyone: the release and
+// asset last seen for this backend, and whether that answer is still inside its age.
+//
+// The settings page needs this to be cheap. A page that fetches the newest nightly on every
+// visit is a page whose load time is somebody else's server, and this is the call that lets
+// it say what it knows immediately and ask in the background.
+func (m *Manager) Known(b Backend) (Release, Asset, bool) {
+	if b == "" {
+		b = Vulkan
+	}
+	return m.cached(b)
 }
 
 // SetProxy applies a download prefix from the live settings. Called per job, so saving a
@@ -236,7 +267,7 @@ func (m *Manager) Check(ctx context.Context, b Backend, force bool) (Release, As
 		req.Header.Set("If-None-Match", etag)
 	}
 
-	res, err := m.http.Do(req)
+	res, err := m.release.Do(req)
 	if err != nil {
 		// Offline is a normal condition for a local-first app, and a cached answer is
 		// better than no answer: "newest I saw on the 21st" beats an error on a page whose

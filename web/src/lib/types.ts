@@ -3,8 +3,13 @@
 //
 // Settings are NOT defined here: internal/config generates ./config.gen.ts,
 // which is the single source for defaults, labels, ranges and enums.
-export type { Settings, SettingField, SettingGroup, SettingKind } from './config.gen';
-export { defaultSettings, settingGroups } from './config.gen';
+export type {
+  Settings,
+  SettingField,
+  SettingGroup,
+  SettingKind,
+} from "./config.gen";
+export { defaultSettings, settingGroups } from "./config.gen";
 
 export type Notebook = {
   id: string;
@@ -13,13 +18,13 @@ export type Notebook = {
   source_count: number; // read from the database, so it is 0 on a brand-new notebook
 };
 
-export type SourceKind = 'pdf' | 'image' | 'audio' | 'text' | 'unsupported';
+export type SourceKind = "pdf" | "image" | "audio" | "text" | "unsupported";
 
 /**
  * Async ingest state. `processing` covers everything from queue to chunking —
  * there is no finer progress signal until ingest emits SSE events.
  */
-export type SourceStatus = 'processing' | 'ready' | 'unsupported' | 'failed';
+export type SourceStatus = "processing" | "ready" | "unsupported" | "failed";
 
 export type Source = {
   id: string; // sha256 of the contents
@@ -66,7 +71,7 @@ export type Segment = {
   id: string;
   source_id: string;
   doc_id: string; // a PDF yields two documents: the text and the page rasters
-  kind: 'text' | 'image' | 'audio';
+  kind: "text" | "image" | "audio";
   ordinal: number;
   text: string;
   asset?: Asset;
@@ -75,7 +80,7 @@ export type Segment = {
 
 /** The two views the right-hand panel offers. Chat is not one of them: the chat is
  * the page the panel sits beside, not a place you navigate to from it. */
-export type Panel = 'sources' | 'activity';
+export type Panel = "sources" | "activity";
 
 /** One level of the header breadcrumb. No `onclick` means "this is the page you are
  * on", which is the only honest reason a crumb is not a link. */
@@ -91,7 +96,7 @@ export type Chat = {
   created_at: number;
 };
 
-export type MessageRole = 'user' | 'assistant';
+export type MessageRole = "user" | "assistant";
 
 /**
  * How an assistant turn ended. These are different claims about the sentence in
@@ -99,11 +104,7 @@ export type MessageRole = 'user' | 'assistant';
  * look like a grounded one, and an interrupted one says so.
  */
 export type MessageStatus =
-  | 'answered'
-  | 'no-info'
-  | 'ungrounded'
-  | 'canceled'
-  | 'interrupted';
+  "answered" | "no-info" | "ungrounded" | "canceled" | "interrupted";
 
 /**
  * What a `[[Chunk N]]` label resolved to, frozen when the answer was written.
@@ -119,7 +120,7 @@ export type Citation = {
   doc_id: string;
   source_id: string;
   source_name: string;
-  kind: 'text' | 'image' | 'audio';
+  kind: "text" | "image" | "audio";
   ordinal: number;
   quote?: string;
   /** The page raster or audio slice a citation opens. */
@@ -135,4 +136,72 @@ export type Message = {
   status?: MessageStatus;
   created_at: number;
   citations?: Citation[];
+};
+
+// ── the machine ──────────────────────────────────────────────────
+// These mirror the JSON of /api/host/*, which is deviceinfo.Report and app.EngineView
+// marshalled by internal/domain's rules — snake_case, and an empty list is null.
+
+export type EngineState =
+  "idle" | "downloading" | "verifying" | "unpacking" | "done" | "failed";
+
+export type EngineProgress = {
+  state: EngineState;
+  tag?: string;
+  asset?: string;
+  done: number;
+  total: number;
+  error?: string;
+  since?: string;
+  resumed?: boolean;
+};
+
+export type InstalledEngine = {
+  tag: string;
+  backend: string;
+  path: string;
+  bytes: number;
+  installed_at: string;
+  sha256?: string;
+  upstream?: string;
+};
+
+/** One round trip answers the whole section: what is here, what is new, how the
+ *  download is going, and how much a stopped one is still holding. */
+export type EngineView = {
+  installed?: InstalledEngine;
+  backend: string;
+  latest?: { tag: string; published: string; url?: string };
+  asset?: { name: string; url: string; size: number; sha256?: string };
+  update_available: boolean;
+  check_error?: string;
+  /** A check is running in the background and a later poll will carry its answer. Absent
+   *  means there is nothing in flight — which is not the same as having failed. */
+  checking?: boolean;
+  progress: EngineProgress;
+  dir: string;
+  parts_bytes: number;
+};
+
+export type Device = {
+  kind: string;
+  name: string;
+  total_bytes?: number;
+  bus_id?: string;
+  bus_vendor?: string;
+  driver?: string;
+  description?: string;
+  free_bytes?: number;
+  source?: string;
+};
+
+export type DeviceReport = {
+  os: string;
+  arch: string;
+  devices: Device[];
+  warnings?: string[];
+  fingerprint?: string;
+  checked_at: string;
+  /** Set only when the server read its cache: "somebody asked this morning", not "we asked". */
+  cached?: boolean;
 };

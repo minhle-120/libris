@@ -1,5 +1,15 @@
-import type { Asset, Chat, Citation, Message, Notebook, Segment, Source } from './types';
-import type { Settings } from './config.gen';
+import type {
+  Asset,
+  Chat,
+  Citation,
+  DeviceReport,
+  EngineView,
+  Message,
+  Notebook,
+  Segment,
+  Source,
+} from "./types";
+import type { Settings } from "./config.gen";
 
 /** The one place in the frontend that talks to /api. */
 
@@ -7,8 +17,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   // Only JSON bodies get the type header: a FormData body must keep the
   // multipart boundary the browser generates for it.
-  if (typeof init?.body === 'string' && !headers.has('Content-Type')) {
-    headers.set('Content-Type', 'application/json');
+  if (typeof init?.body === "string" && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
   }
 
   const res = await fetch(path, { ...init, headers });
@@ -39,39 +49,47 @@ const list = <T>(value: T[] | null): T[] => value ?? [];
 
 /** Effective configuration: environment defaults overlaid with the settings file. */
 export function getSettings(): Promise<Settings> {
-  return request<Settings>('/api/settings');
+  return request<Settings>("/api/settings");
 }
 
 /** Partial update; absent keys keep their current value. Returns the result. */
 export function putSettings(settings: Settings): Promise<Settings> {
-  return request<Settings>('/api/settings', {
-    method: 'PUT',
-    body: JSON.stringify(settings)
+  return request<Settings>("/api/settings", {
+    method: "PUT",
+    body: JSON.stringify(settings),
   });
 }
 
 // ── notebooks ────────────────────────────────────────────────────
 
 export async function listNotebooks(): Promise<Notebook[]> {
-  return list(await request<Notebook[] | null>('/api/notebooks'));
+  return list(await request<Notebook[] | null>("/api/notebooks"));
 }
 
 export function createNotebook(name: string): Promise<Notebook> {
-  return request<Notebook>('/api/notebooks', { method: 'POST', body: JSON.stringify({ name }) });
+  return request<Notebook>("/api/notebooks", {
+    method: "POST",
+    body: JSON.stringify({ name }),
+  });
 }
 
 export function renameNotebook(id: string, name: string): Promise<void> {
-  return request<void>(`/api/notebooks/${id}`, { method: 'PATCH', body: JSON.stringify({ name }) });
+  return request<void>(`/api/notebooks/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ name }),
+  });
 }
 
 export function deleteNotebook(id: string): Promise<void> {
-  return request<void>(`/api/notebooks/${id}`, { method: 'DELETE' });
+  return request<void>(`/api/notebooks/${id}`, { method: "DELETE" });
 }
 
 // ── sources ──────────────────────────────────────────────────────
 
 export async function listSources(notebookId: string): Promise<Source[]> {
-  return list(await request<Source[] | null>(`/api/notebooks/${notebookId}/sources`));
+  return list(
+    await request<Source[] | null>(`/api/notebooks/${notebookId}/sources`),
+  );
 }
 
 /**
@@ -81,13 +99,21 @@ export async function listSources(notebookId: string): Promise<Source[]> {
  */
 export function uploadSource(notebookId: string, file: File): Promise<Source> {
   const form = new FormData();
-  form.append('file', file, file.name);
-  return request<Source>(`/api/notebooks/${notebookId}/sources`, { method: 'POST', body: form });
+  form.append("file", file, file.name);
+  return request<Source>(`/api/notebooks/${notebookId}/sources`, {
+    method: "POST",
+    body: form,
+  });
 }
 
 /** Removes a source from a notebook. The file and its derived data are kept. */
-export function detachSource(notebookId: string, sourceId: string): Promise<void> {
-  return request<void>(`/api/notebooks/${notebookId}/sources/${sourceId}`, { method: 'DELETE' });
+export function detachSource(
+  notebookId: string,
+  sourceId: string,
+): Promise<void> {
+  return request<void>(`/api/notebooks/${notebookId}/sources/${sourceId}`, {
+    method: "DELETE",
+  });
 }
 
 export function getSource(sourceId: string): Promise<Source> {
@@ -104,11 +130,15 @@ export function getSource(sourceId: string): Promise<Source> {
  * the row it already has. A source that is processing is refused with 400.
  */
 export function reingestSource(sourceId: string): Promise<Source> {
-  return request<Source>(`/api/sources/${sourceId}/reingest`, { method: 'POST' });
+  return request<Source>(`/api/sources/${sourceId}/reingest`, {
+    method: "POST",
+  });
 }
 
 export async function listSegments(sourceId: string): Promise<Segment[]> {
-  return list(await request<Segment[] | null>(`/api/sources/${sourceId}/segments`));
+  return list(
+    await request<Segment[] | null>(`/api/sources/${sourceId}/segments`),
+  );
 }
 
 // ── stored files ─────────────────────────────────────────────────
@@ -120,38 +150,51 @@ export function originalURL(sourceId: string): string {
 
 /** A derived page raster or audio slice. The asset id contains slashes, which
  * are the path here, so only each segment is escaped. */
-export function assetURL(asset: Pick<Asset, 'id'>): string {
-  return `/api/assets/${asset.id.split('/').map(encodeURIComponent).join('/')}`;
+export function assetURL(asset: Pick<Asset, "id">): string {
+  return `/api/assets/${asset.id.split("/").map(encodeURIComponent).join("/")}`;
 }
 
 // ── the conversation ───────────────────────────────────────────────
 
 export async function listChats(notebookId: string): Promise<Chat[]> {
-  return list(await request<Chat[] | null>(`/api/notebooks/${notebookId}/chats`));
+  return list(
+    await request<Chat[] | null>(`/api/notebooks/${notebookId}/chats`),
+  );
 }
 
 /** A conversation's title, after its reader decided what it should be. */
-export function renameChat(notebookId: string, chatId: string, title: string): Promise<void> {
+export function renameChat(
+  notebookId: string,
+  chatId: string,
+  title: string,
+): Promise<void> {
   return request<void>(`/api/notebooks/${notebookId}/chats/${chatId}`, {
-    method: 'PATCH',
-    body: JSON.stringify({ title })
+    method: "PATCH",
+    body: JSON.stringify({ title }),
   });
 }
 
 export function createChat(notebookId: string, title: string): Promise<Chat> {
   return request<Chat>(`/api/notebooks/${notebookId}/chats`, {
-    method: 'POST',
-    body: JSON.stringify({ title })
+    method: "POST",
+    body: JSON.stringify({ title }),
   });
 }
 
 export function deleteChat(notebookId: string, chatId: string): Promise<void> {
-  return request<void>(`/api/notebooks/${notebookId}/chats/${chatId}`, { method: 'DELETE' });
+  return request<void>(`/api/notebooks/${notebookId}/chats/${chatId}`, {
+    method: "DELETE",
+  });
 }
 
-export async function listMessages(notebookId: string, chatId: string): Promise<Message[]> {
+export async function listMessages(
+  notebookId: string,
+  chatId: string,
+): Promise<Message[]> {
   return list(
-    await request<Message[] | null>(`/api/notebooks/${notebookId}/chats/${chatId}/messages`)
+    await request<Message[] | null>(
+      `/api/notebooks/${notebookId}/chats/${chatId}/messages`,
+    ),
   );
 }
 
@@ -180,16 +223,16 @@ export async function ask(
   chatId: string,
   question: string,
   events: AskEvents,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<void> {
   // A question is asked in a notebook; `chatId` empty means the turn starts the
   // conversation and the server names it after the question. The id comes back on the
   // done frame, which is the only way the caller learns which row appeared.
   const res = await fetch(`/api/notebooks/${notebookId}/ask`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ question, chat_id: chatId }),
-    signal
+    signal,
   });
 
   // A refusal happens before the stream opens, so it is a normal JSON error and
@@ -204,11 +247,11 @@ export async function ask(
     }
     throw new Error(message);
   }
-  if (!res.body) throw new Error('the answer stream is empty');
+  if (!res.body) throw new Error("the answer stream is empty");
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
-  let buffer = '';
+  let buffer = "";
 
   for (;;) {
     const { done, value } = await reader.read();
@@ -226,40 +269,81 @@ export async function ask(
   }
 }
 
-const FRAME_END = '\n\n';
+const FRAME_END = "\n\n";
 
 function dispatch(frame: string, events: AskEvents) {
-  let name = 'message';
+  let name = "message";
   const data: string[] = [];
-  for (const line of frame.split('\n')) {
-    if (line.startsWith('event: ')) name = line.slice(7).trim();
-    else if (line.startsWith('data: ')) data.push(line.slice(6));
+  for (const line of frame.split("\n")) {
+    if (line.startsWith("event: ")) name = line.slice(7).trim();
+    else if (line.startsWith("data: ")) data.push(line.slice(6));
   }
   if (!data.length) return;
 
   let payload: unknown;
   try {
-    payload = JSON.parse(data.join('\n'));
+    payload = JSON.parse(data.join("\n"));
   } catch {
     return; // a frame we cannot read is not worth losing the rest of the answer over
   }
 
   switch (name) {
-    case 'status':
-      events.onStatus?.((payload as { text?: string }).text ?? '');
+    case "status":
+      events.onStatus?.((payload as { text?: string }).text ?? "");
       break;
-    case 'citations':
+    case "citations":
       events.onCitations?.(payload as Citation[]);
       break;
-    case 'delta': {
+    case "delta": {
       const d = payload as { text?: string; reasoning?: string };
-      events.onDelta?.(d.text ?? '', d.reasoning ?? '');
+      events.onDelta?.(d.text ?? "", d.reasoning ?? "");
       break;
     }
-    case 'done':
+    case "done":
       events.onDone?.(payload as Message);
       break;
-    case 'error':
-      throw new Error((payload as { error?: string }).error ?? 'the question failed');
+    case "error":
+      throw new Error(
+        (payload as { error?: string }).error ?? "the question failed",
+      );
   }
+}
+
+// ── the machine ──────────────────────────────────────────────────
+
+/** The engine on this disk, the newest one upstream offers, and where the download is. */
+export function getEngine(check = false): Promise<EngineView> {
+  return request<EngineView>(`/api/host/engine${check ? "?check=1" : ""}`);
+}
+
+/** Starts a download and answers as soon as it is underway — the fetch itself is minutes
+ *  long, and progress is polled from getEngine rather than held open on this request. */
+export function installEngine(
+  tag?: string,
+): Promise<{ tag: string; state: string }> {
+  return request("/api/host/engine", {
+    method: "POST",
+    body: JSON.stringify(tag ? { tag } : {}),
+  });
+}
+
+/** Interrupts a download and keeps its bytes, so the next attempt resumes. */
+export function stopEngine(): Promise<{ stopped: boolean }> {
+  return request("/api/host/engine/stop", { method: "POST" });
+}
+
+export function removeEngine(): Promise<{ removed: boolean }> {
+  return request("/api/host/engine", { method: "DELETE" });
+}
+
+/** The button that means "cancel": unlike Stop, this one frees the space. */
+export function discardEngineParts(): Promise<{ parts_removed: boolean }> {
+  return request("/api/host/engine/parts", { method: "DELETE" });
+}
+
+export async function getDevices(refresh = false): Promise<DeviceReport> {
+  const rep = await request<DeviceReport>(
+    `/api/host/devices${refresh ? "?refresh=1" : ""}`,
+  );
+  return { ...rep, devices: list(rep.devices) };
 }
