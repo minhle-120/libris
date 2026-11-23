@@ -33,7 +33,14 @@ func main() {
 		"directory for the database, originals and derived files; defaults to Documents/libris")
 	openUI := flag.Bool("open", true,
 		"show the address in a browser once the port is listening; -open=false for a headless run")
+	showVersion := flag.Bool("version", false,
+		"print the revision this binary was built from, and exit")
 	flag.Parse()
+
+	if *showVersion {
+		writeVersion(os.Stdout)
+		return
+	}
 
 	given := map[string]bool{}
 	flag.Visit(func(f *flag.Flag) { given[f.Name] = true })
