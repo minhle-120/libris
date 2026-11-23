@@ -325,24 +325,15 @@ PDFDPI int `key:"pdfDPI" group:"ingest" label:"PDF raster DPI" help:"…"
   The same reasoning took the ring off the empty-state icon — an icon in a bordered
   circle is another box, and one per column made every empty screen look like the same
   placeholder.
-- A scrollbar is chrome, not content: thin, coloured from `--border`, and transparent until
-   the pointer is inside the region that scrolls (`*:hover`, `*:focus-within`). The gutter
-   stays reserved, so an invisible bar cannot shift text when it arrives. In a notebook the
-   scroller is `.messages`, and the harness asserts its computed `scrollbar-width`/
-   `scrollbar-color` rather than a screenshot, because a bar that only exists under the
-   pointer is exactly the thing a still image gets wrong in both directions.
-- A scrollbar is chrome, not content: thin, coloured from `--border`, and transparent until
-  the pointer is inside the region that scrolls (`*:hover`, `*:focus-within`). The gutter
-  stays reserved, so an invisible bar cannot shift text when it arrives. In a notebook the
-  scroller is `.messages`, and the harness asserts its computed `scrollbar-width` and
-  `scrollbar-color` rather than a screenshot, because a bar that exists only under the
-  pointer is exactly what a still image gets wrong in both directions.
-- A notebook is three columns until the window says otherwise. Below `MIN_CHAT` (480px of
-  reading column, `lib/panel.ts`) the **panel** becomes its 44px rail, automatically — the
-  sidebar is never touched, because it is the navigation. The rule fires on the *edge* of a
-  resize, never on every event; an automatic close does not write `localStorage`, so the
-  user's width and their open/closed choice survive it; and a panel opened by hand in a
-  narrow window stays open. ADR 0017 argues the three alternatives and why each lost.
+- A scrollbar is chrome, not content: thin, `--border`, transparent until the pointer is in
+  the region that scrolls (`*:hover`, `*:focus-within`), with the gutter reserved so text
+  cannot shift when it appears. The scroller is `.messages`; the harness asserts computed
+  `scrollbar-width`/`scrollbar-color`, because a still image gets a hover-only bar wrong
+  both ways.
+- Below `MIN_CHAT` (480px of chat, `lib/panel.ts`) the **panel** becomes its 44px rail. The
+  sidebar is navigation, so it is never touched. The rule fires on the *edge* of a resize
+  and never writes `localStorage`: a hand-opened panel is not fought, a hand-closed one is
+  not opened at the user, and the width survives an automatic close. ADR 0017.
 - A row's actions arrive on hover or focus, and they arrive *over* the card corner rather
   than in its flow: four 32px buttons in flow cost a filename 128px of width and left
   seven characters to identify the file by. Hidden with `opacity`, never `display:none` —
@@ -623,16 +614,13 @@ Found the hard way. Browser-harness and fixture traps are in `docs/testing.md`.
   Windows), the filesystem root, or home itself.
 - An empty `[]domain.Segment` serialises to `null`, not `[]`. Every list reader has to
   tolerate it — `api.ts` routes all lists through `list()` for that reason.
-- DOMPurify's `ALLOWED_URI_REGEXP` is not only a link filter. It runs over the value of
-  every *allowed* attribute that is not on DOMPurify's own URI-safe list, and one that
-  fails it is deleted without a word. So `lib/markdown.ts` lost `align="right"` and
-  `colspan="2"` — a model's `|---:|` arrived left-aligned — while `class` and `title`
-  survived, because those happen to be on the list. A non-address attribute that has to
-  survive goes in `ADD_URI_SAFE_ATTR`; `NOT_ADDRESSES` says why.
-- `overflow-wrap: anywhere` takes part in min-content sizing and `break-word` does not. On
-  the markdown body, `anywhere` let a table column under pressure collapse to four
-  characters and break every word in it ("Temperatur/e", "Wh/ere") — broken at 900px,
-  perfectly fine at 1468, which is how it went unnoticed into a commit.
+- DOMPurify's `ALLOWED_URI_REGEXP` is not only a link filter: it runs over the value of
+  every allowed attribute not on DOMPurify's own URI-safe list, and a failure is deleted
+  silently. `class`/`title` are on that list, `align` is not — so every `|---:|` arrived
+  left-aligned. Non-address attributes go in `ADD_URI_SAFE_ATTR` (`NOT_ADDRESSES`).
+- `overflow-wrap: anywhere` takes part in min-content sizing and `break-word` does not: on
+  the markdown body `anywhere` collapsed a table column to four characters and broke every
+  word in it. Broken at 900px, fine at 1468 — which is how it got committed.
 - An `<img>` starts fetching as soon as it belongs to a rendered document, whether or not
   anything appends it. Converting an answer's image into a link *after* importing the node
   is therefore a request the user never made: do it in the parser document, where nothing
@@ -650,19 +638,15 @@ Found the hard way. Browser-harness and fixture traps are in `docs/testing.md`.
 - `formatBytes` said 12 KB for a 1.2 KB file: `bytes / 10 ** (2 * i)` is decimal,
   `bytes / 1024 ** i` is binary, and the index was chosen by log₂₀₄₈. Write the divisor to
   match the base and assert an exact value, not `/KB/`.
-- Two fixed columns either side of one flexible middle means the middle dies first: at
-  the default 288 + 340 the chat is 272 px at a 900 px window and 12 px at 640, with no
-  horizontal scroll to show for it. Measure the columns, do not eyeball them (ADR 0012).
-  ADR 0017 closed it: the panel now becomes its rail below 480px of chat, which takes
-  the chat from 40px to 308px at 640.
-- A table is shrink-to-fit already. Adding `width: max-content; max-width: 100%` to
-  `.md table` measured byte-for-byte identical at 1468 / 1180 / 900 / 640, so the bar under a
-  narrow table means the chat column is narrower than the table's minimum content width —
-  a layout fact about the column, which CSS on the table cannot fix. Two of these fixes were
-  written before the measurement; only the scrollbar one survived it.
-- A probe run after a viewport loop measures whatever the last screenshot left behind. The
-  first per-width numbers here were taken at the 640px pass and reported a 40px chat column
-  as if it were the layout; per-width numbers need the viewport set *inside* the loop.
+- Two fixed columns either side of one flexible middle: the middle dies first. At the
+  defaults the chat was 272px at a 900px window and 40px at 640. Measure, do not eyeball.
+  ADR 0017 closed it (panel -> rail below 480px of chat: 40px -> 308px at 640).
+- A table is shrink-to-fit already, so `width: max-content; max-width: 100%` on `.md table`
+  measured identical at four widths. A bar under a narrow table is the *column* being
+  narrower than the table's minimum content width — CSS on the table cannot fix it.
+- A probe after a viewport loop measures whatever the last screenshot left behind: the first
+  per-width numbers here came from the 640px pass and read as the desktop layout. Set the
+  viewport *inside* the loop.
 - Grid items with `align-items: start` do not stretch, so a sticky sub-nav needs its
   containing row to be tall. Check layout at 640 / 900 / 1180 px before declaring a
   settings-style page done.
