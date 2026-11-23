@@ -7,7 +7,7 @@
     listChats,
     listNotebooks
   } from './lib/api';
-  import { readOpen, SIDE, writeOpen } from './lib/panel';
+  import { NOTEBOOKS, narrowRule, readOpen, readW, SIDE, writeOpen } from './lib/panel';
   import { errorMessage } from './lib/format';
   import type { Chat, Crumb, Notebook, Panel, Source } from './lib/types';
   import Header from './components/Header.svelte';
@@ -296,8 +296,46 @@
   function setPanelOpen(next: boolean) {
     panelOpen = next;
     writeOpen(SIDE, next);
+    closedByRule = false;
     if (!next) inspecting = null;
   }
+
+  // The narrow rule, given the one moment in which it is allowed to speak: the window
+  // changed size, and the answer changed. Below MIN_CHAT of reading column the panel
+  // becomes its rail; when there is room for a real panel again it comes back. "The answer
+  // changed" is the whole design — a rule that runs on every resize event takes the panel
+  // away again a second after the user put it back, which is worse than the bar it removes.
+  //
+  // Closing by rule does not write to localStorage. A preference the window's width
+  // overwrote is not the user's preference, and the next wide window would open on the
+  // app's idea of what they wanted.
+  let tooNarrow = $state(false);
+  let closedByRule = false;
+
+  function applyNarrowRule() {
+    const r = narrowRule(
+      window.innerWidth,
+      { width: readW(NOTEBOOKS), open: readOpen(NOTEBOOKS) },
+      { width: readW(SIDE), open: panelOpen }
+    );
+    if (r.tooNarrow === tooNarrow) return;
+    tooNarrow = r.tooNarrow;
+    if (tooNarrow) {
+      if (panelOpen) {
+        closedByRule = true;
+        panelOpen = false;
+      }
+    } else if (closedByRule && r.hasRoom) {
+      closedByRule = false;
+      panelOpen = true;
+    }
+  }
+
+  onMount(() => {
+    applyNarrowRule();
+    window.addEventListener('resize', applyNarrowRule);
+    return () => window.removeEventListener('resize', applyNarrowRule);
+  });
 
   /** A citation is an instruction to look: the panel opens even if it was shut. */
   function inspect(source: Source | null) {

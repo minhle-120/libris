@@ -26,6 +26,10 @@ await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ui-profile-drop' }
     })).json();
   `);
   await ui.reload(app);
+  // Deliberate, not incidental: headless Chrome defaults to 800x600, which is narrow
+  // enough that the panel is now closed by the narrow rule (web/src/lib/panel.ts). A
+  // harness that inherits a window size is a harness that silently tests one layout.
+  await ui.setViewport(1400, 900);
 
   await ui.eval(`
     const item = [...document.querySelectorAll('.sidebar .list .item')]
@@ -208,6 +212,17 @@ await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ui-profile-drop' }
   // ── layout, at the widths that have bitten this repo before ──────
   for (const width of [640, 1180]) {
     await ui.setViewport(width);
+    await ui.settle(300);
+    // At 640 the narrow rule has closed the panel (web/src/lib/panel.ts), and the source
+    // list lives inside it — so open it the way a person at that width would, from the
+    // rail. What this loop measures is the panel holding the viewer, a question that only
+    // exists while the panel is open.
+    await ui.eval(`
+      const rail = [...document.querySelectorAll('.sidepanel.closed button')].find((b) => /sources/i.test(b.title));
+      if (rail) rail.click();
+      return !!rail;
+    `);
+    await ui.settle(300);
     await ui.eval(`
       const row = [...document.querySelectorAll('.source')]
         .find((r) => r.querySelector('.name')?.textContent === 'overlap.txt');

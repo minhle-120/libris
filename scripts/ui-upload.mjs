@@ -38,6 +38,11 @@ const cdpPort = Number(process.env.CDP_PORT ?? 9321);
 const checks = new Checks();
 
 const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ui-profile' }, async (ui) => {
+  // Deliberate, not incidental: headless Chrome defaults to 800x600, which is narrow
+  // enough that the panel is now closed by the narrow rule (web/src/lib/panel.ts). A
+  // harness that inherits a window size is a harness that silently tests one layout.
+  await ui.setViewport(1400, 900);
+
   const boot = await ui.eval(`
     return {
       // The tile is the brand and the first crumb spells it; the header used to say

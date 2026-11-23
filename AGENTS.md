@@ -103,8 +103,8 @@ Argued through. Breaking one needs a conversation, not a commit.
 11. **Interfaces are declared by the consumer**, not the producer, and kept narrow.
 
 Every one of those, and several things this file does not repeat, has an ADR behind it.
-Twelve exist, they are short, and "the index is `ls docs/adr/`" is true but useless
-mid-sentence — so what each one settles, in the order an agent is likely to need it:
+They are short, and the index is `ls docs/adr/` — a number here would be stale by the
+next one, so what each one settles, in the order an agent is likely to need it:
 
 | Deciding | Read | It says |
 |---|---|---|
@@ -117,7 +117,7 @@ mid-sentence — so what each one settles, in the order an agent is likely to ne
 | retrieval at scale, a vector index | 0010 | vectors are BLOBs in SQLite, scanned in Go — for now |
 | notebooks, dedupe, a shared file | 0003 | notebooks own memberships; sources are content-addressed and shared |
 | where files go on disk | 0005 | the data directory defaults to Documents/libris, resolved per platform |
-| the notebook's columns, the panel, the breadcrumb, a conversation | 0012, 0014, 0015 | Sources and Activity are a panel beside the chat, not pages instead of it; the header ends at the chat you are reading; conversations are the second level of the notebook list, not a control in the composer |
+| the notebook's columns, the panel, the breadcrumb, a conversation | 0012, 0014, 0015, 0017 | Sources and Activity are a panel beside the chat, not pages instead of it; the header ends at the chat you are reading; conversations are the second level of the notebook list, not a control in the composer; a window too narrow for both fixed columns closes the panel, never the chat |
 | how settings reach the browser | 0002 | settings are served and saved over HTTP |
 
 ---
@@ -337,6 +337,12 @@ PDFDPI int `key:"pdfDPI" group:"ingest" label:"PDF raster DPI" help:"…"
   scroller is `.messages`, and the harness asserts its computed `scrollbar-width` and
   `scrollbar-color` rather than a screenshot, because a bar that exists only under the
   pointer is exactly what a still image gets wrong in both directions.
+- A notebook is three columns until the window says otherwise. Below `MIN_CHAT` (480px of
+  reading column, `lib/panel.ts`) the **panel** becomes its 44px rail, automatically — the
+  sidebar is never touched, because it is the navigation. The rule fires on the *edge* of a
+  resize, never on every event; an automatic close does not write `localStorage`, so the
+  user's width and their open/closed choice survive it; and a panel opened by hand in a
+  narrow window stays open. ADR 0017 argues the three alternatives and why each lost.
 - A row's actions arrive on hover or focus, and they arrive *over* the card corner rather
   than in its flow: four 32px buttons in flow cost a filename 128px of width and left
   seven characters to identify the file by. Hidden with `opacity`, never `display:none` —
@@ -647,6 +653,8 @@ Found the hard way. Browser-harness and fixture traps are in `docs/testing.md`.
 - Two fixed columns either side of one flexible middle means the middle dies first: at
   the default 288 + 340 the chat is 272 px at a 900 px window and 12 px at 640, with no
   horizontal scroll to show for it. Measure the columns, do not eyeball them (ADR 0012).
+  ADR 0017 closed it: the panel now becomes its rail below 480px of chat, which takes
+  the chat from 40px to 308px at 640.
 - A table is shrink-to-fit already. Adding `width: max-content; max-width: 100%` to
   `.md table` measured byte-for-byte identical at 1468 / 1180 / 900 / 640, so the bar under a
   narrow table means the chat column is narrower than the table's minimum content width —

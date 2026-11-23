@@ -35,6 +35,40 @@ export const SIDE: PanelSpec = {
   edge: 'right'
 };
 
+/**
+ * How much of the window the reading column is owed. Below this the chat is a stack of
+ * short lines and tables cannot fit; the reading measure itself wants 42rem (672px), and
+ * this is the floor under it rather than the ideal.
+ */
+export const MIN_CHAT = 480;
+
+/**
+ * The narrow rule: two fixed columns and a reading column do not fit in every window, and
+ * the middle one dies first. Below MIN_CHAT of chat, the right panel is in the way.
+ *
+ * Two numbers, not one, because a single threshold oscillates: the panel's own width is
+ * what makes the chat narrow, so closing it makes room and reopening it takes the room
+ * back. `tooNarrow` is measured with the panel as it stands now — including a panel the
+ * user dragged wide — and `hasRoom` is measured against the narrowest panel worth opening
+ * (min, not the remembered width), so the way in and the way out are different widths.
+ *
+ * Deliberately stateless. The caller decides when to act, and acts only when the answer
+ * *changes*: a rule that runs on every resize event takes the panel away again a second
+ * after the user put it back.
+ */
+export function narrowRule(
+  innerWidth: number,
+  sidebar: { width: number; open: boolean },
+  side: { width: number; open: boolean }
+): { tooNarrow: boolean; hasRoom: boolean } {
+  const left = sidebar.open ? sidebar.width : NOTEBOOKS.rail;
+  const chat = innerWidth - left - (side.open ? side.width : SIDE.rail);
+  return {
+    tooNarrow: chat < MIN_CHAT,
+    hasRoom: innerWidth - left - MIN_CHAT >= SIDE.min,
+  };
+}
+
 export const clampW = (spec: PanelSpec, n: number) =>
   Math.min(spec.max, Math.max(spec.min, Math.round(n)));
 

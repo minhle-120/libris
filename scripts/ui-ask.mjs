@@ -109,6 +109,11 @@ const ask = (ui) =>
   `);
 
 const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ask-profile' }, async (ui) => {
+  // Deliberate, not incidental: headless Chrome defaults to 800x600, which is narrow
+  // enough that the panel is now closed by the narrow rule (web/src/lib/panel.ts). A
+  // harness that inherits a window size is a harness that silently tests one layout.
+  await ui.setViewport(1400, 900);
+
   // ── a notebook with one ready source ───────────────────────────
   // Created on the server with a name nobody else would type, then opened by that
   // name. With a shared server and notebooks from earlier runs, "the last row" and
@@ -403,9 +408,12 @@ An invented [[Chunk 99]] and a malformed [[chunk 3]] label.`;
       })(),
       // And the bar that is left is styled chrome, not the operating system's.
       bar: (() => {
-        const scroller = [...document.querySelectorAll('*')].find(
-          (n) => n.scrollHeight - n.clientHeight > 200 && /auto|scroll/.test(getComputedStyle(n).overflowY)
+        const scrollers = [...document.querySelectorAll('*')].filter((n) =>
+          /auto|scroll/.test(getComputedStyle(n).overflowY)
         );
+        const scroller = scrollers.sort(
+          (a, b) => b.scrollHeight - b.clientHeight - (a.scrollHeight - a.clientHeight)
+        )[0];
         const cs = getComputedStyle(scroller ?? document.documentElement);
         return { w: cs.scrollbarWidth, c: cs.scrollbarColor, sel: scroller ? scroller.className.split(' ')[0] : 'root' };
       })(),

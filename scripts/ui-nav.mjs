@@ -28,6 +28,10 @@ const code = await withBrowser(
     // profile, and half these checks are about what the defaults are.
     await ui.eval(`localStorage.clear(); return true`);
     await ui.reload(app);
+    // Deliberate, not incidental: headless Chrome defaults to 800x600, which is narrow
+    // enough that the panel is now closed by the narrow rule (web/src/lib/panel.ts). A
+    // harness that inherits a window size is a harness that silently tests one layout.
+    await ui.setViewport(1400, 900);
     await ui.settle();
 
     const boot = await ui.eval(`
@@ -440,6 +444,90 @@ const code = await withBrowser(
       `return document.querySelector('.sidepanel .seg') ? Math.round(document.querySelector('.sidepanel').getBoundingClientRect().width) : null`
     );
     checks.check('the panel opens back at the width it closed at', reopenedPanel === 420, `width=${reopenedPanel}`);
+
+    // ── two fixed columns and a reading column: the narrow rule ──────────
+    // The sidebar and the panel are fixed-width by the user's drag, and the chat is what
+    // is left, so the chat dies first: at a 900px window it was 272px wide and nothing in
+    // it fitted. The rule closes the panel to its rail when the reading column drops under
+    // MIN_CHAT (480, web/src/lib/panel.ts) and gives it back when there is room for a real
+    // panel again. Three properties are worth checks, because each is a way a feature like
+    // this usually goes wrong: the user's own setting survives an automatic close; a panel
+    // the user opened by hand is not taken away again; and a panel the user closed is not
+    // pushed back on the way out of narrow.
+    const panelState = () =>
+      ui.until(`
+        const p = document.querySelector('.sidepanel');
+        return {
+          rail: p.classList.contains('closed'),
+          w: Math.round(p.getBoundingClientRect().width),
+          chat: Math.round(document.querySelector('.chat').getBoundingClientRect().width),
+          pref: localStorage.getItem('libris.sidepanel.open'),
+        };
+      `, 1, 1);
+    const wide = await ui.eval(`return window.innerWidth`);
+
+    await ui.setViewport(980, 900);
+    await ui.settle(400);
+    const byRule = await panelState();
+    checks.check(
+      'a window too narrow for both columns closes the panel by itself',
+      byRule?.rail === true && byRule?.w === 44,
+      () => JSON.stringify(byRule)
+    );
+    checks.check(
+      'and the reading column it gives back is the point of the rule',
+      byRule?.chat >= 480,
+      () => `chat=${byRule?.chat}`
+    );
+    checks.check(
+      'an automatic close does not overwrite the setting',
+      byRule?.pref === '1',
+      () => `pref=${byRule?.pref}`
+    );
+
+    await ui.setViewport(1400, 900);
+    await ui.settle(400);
+    const restored = await panelState();
+    checks.check(
+      'the panel comes back at its own width when there is room again',
+      restored?.rail === false && restored?.w === 420,
+      () => JSON.stringify(restored)
+    );
+
+    await ui.setViewport(980, 900);
+    await ui.settle(400);
+    await ui.click('Show sources');
+    await ui.settle(300);
+    await ui.setViewport(1000, 900);
+    await ui.settle(300);
+    await ui.setViewport(1020, 900);
+    await ui.settle(300);
+    const byHand = await panelState();
+    checks.check(
+      'a panel the user opened by hand stays open while it is still narrow',
+      byHand?.rail === false,
+      () => JSON.stringify(byHand)
+    );
+
+    await ui.setViewport(1400, 900);
+    await ui.settle(300);
+    await ui.click('Hide panel');
+    await ui.settle(300);
+    await ui.setViewport(980, 900);
+    await ui.settle(300);
+    await ui.setViewport(1400, 900);
+    await ui.settle(400);
+    const shutByHand = await panelState();
+    checks.check(
+      'and a panel the user closed is not opened at them by the rule',
+      shutByHand?.rail === true && shutByHand?.pref === '0',
+      () => JSON.stringify(shutByHand)
+    );
+
+    // Back to the state the rest of the harness expects: panel open, default width.
+    await ui.click('Show sources');
+    await ui.setViewport(wide, 900);
+    await ui.settle(300);
 
     // ── the notebook list is a tree: the notebook, then its conversations ──
     // A conversation lives where the breadcrumb says it does, so the two are the same

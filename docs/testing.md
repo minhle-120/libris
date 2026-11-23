@@ -53,8 +53,8 @@ text, and that `ready` is backed by rows.
 Builds, starts the binary against a throwaway data directory, and runs
 `scripts/ui-upload.mjs`, `ui-drop.mjs`, `ui-ask.mjs` and `ui-nav.mjs` over CDP
 (`scripts/cdp.mjs`, no dependencies). They assert on DOM state — computed text and
-counts — not screenshots. 216 checks across four harnesses (50 upload, 23 drop, 75 ask,
-68 nav) cover create-notebook (with
+counts — not screenshots. 222 checks across four harnesses (50 upload, 23 drop, 75 ask,
+74 nav) cover create-notebook (with
 a name) from both the sidebar and the landing state, rename, resize and collapse of both
 columns, the breadcrumb — including that it names the chat and refuses to name the panel,
 the settings bar, file-picker upload,
@@ -82,6 +82,15 @@ derived from the request rather than scripted, so one fake answers a question ab
 corpus; `/control {"script":…,"hold":…}` pins an exact sequence when a check needs a
 specific way to end. Assert against it through `/stats`, which reports what the *server*
 saw, not what the client intended.
+
+Headless Chrome defaults to **800x600**, and a harness that never calls `setViewport` is
+therefore testing the narrow layout: with the panel and the sidebar at their defaults that
+window leaves the chat 172px, which is how the app ran in every harness until ADR 0017 made
+the panel close itself there and three checks fell over for a reason that was correct. Each
+harness now names its window, because a default inherited from a browser binary is a fixture
+nobody can read. And measure the layout you mean: a probe placed *after* a viewport loop
+reports whatever the last screenshot left behind, which is how the first per-width numbers of
+the markdown work were taken at 640px and read as if they were the desktop.
 
 ## Traps in the CDP harness
 
