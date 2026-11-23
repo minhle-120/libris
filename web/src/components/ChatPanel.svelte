@@ -1,12 +1,13 @@
 <script lang="ts">
   import { ask, listMessages } from '../lib/api';
-  import { chunkPieces, trimPartialLabel } from '../lib/chunks';
-  import { citationLocator, errorMessage } from '../lib/format';
+  import { trimPartialLabel } from '../lib/chunks';
+  import { chipLabel, errorMessage } from '../lib/format';
   import type { Citation, Message, Notebook, Source } from '../lib/types';
   import Badge from '../lib/Badge.svelte';
   import Button from '../lib/Button.svelte';
   import Icon from '../lib/Icon.svelte';
   import EmptyState from '../lib/EmptyState.svelte';
+  import Rich from '../lib/Rich.svelte';
 
   let {
     notebook,
@@ -229,11 +230,6 @@
     }
   }
 
-  /** The label on a citation chip: the chunk's number, then where it points. */
-  function chipLabel(c: Citation): string {
-    const where = citationLocator(c);
-    return where ? `Chunk ${c.chunk} · ${where}` : `Chunk ${c.chunk}`;
-  }
 </script>
 
 <!-- No header. A conversation is chosen in the notebook list, which is the one place
@@ -265,6 +261,8 @@
     <div class="messages" bind:this={panel}>
       {#each messages as m (m.id)}
         {#if m.role === 'user'}
+          <!-- A question is never rendered as markdown. It is what the person typed, and
+               formatting their `# headings` or `$math$` would reinterpret what they said. -->
           <div class="turn user">
             <p>{m.content}</p>
           </div>
@@ -286,16 +284,9 @@
               </div>
             {/if}
 
-            <p class="answer">
-              {#each chunkPieces(m.content, m.citations ?? []) as piece, i (i)}
-                {#if piece.kind === 'text'}{piece.text}{:else}<button
-                    class="inline"
-                    type="button"
-                    title="{piece.citation?.source_name} — {chipLabel(piece.citation!)}"
-                    onclick={() => piece.citation && oncite?.(piece.citation)}
-                  >{piece.citation?.chunk}</button>{/if}
-              {/each}
-            </p>
+            <div class="answer">
+              <Rich text={m.content} citations={m.citations ?? []} {oncite} />
+            </div>
 
             {#if m.status && m.status !== 'answered'}
               <p class="note">
@@ -333,7 +324,11 @@
           {/if}
 
           {#if streaming}
-            <p class="answer">{trimPartialLabel(streaming)}<span class="caret"></span></p>
+            <div class="answer">
+              <!-- Half a `[[Chunk 1` is held back, but everything else is rendered as it
+                   arrives: a list that forms is the answer being written. -->
+              <Rich text={trimPartialLabel(streaming)} citations={live} {oncite} streaming />
+            </div>
           {:else}
             <p class="answer pulse">{status || 'Thinking…'}</p>
           {/if}
@@ -457,8 +452,7 @@
   /* Tonal, not outlined: a chip is a thing to press, and a 1px box around fourteen
      characters reads as a label. `--link` never existed, so until now these rendered in
      the body colour and looked like part of the sentence. */
-  .cite,
-  .inline {
+  .cite {
     display: inline-flex;
     align-items: center;
     gap: 4px;
@@ -476,17 +470,7 @@
     padding: 2px 8px;
   }
 
-  /* The inline form sits inside a sentence, so it stays small and does not lift the
-     line the way a padded button would. */
-  .inline {
-    font-size: 11px;
-    line-height: 1;
-    padding: 2px 6px;
-    vertical-align: 0.15em;
-  }
-
-  .cite:hover:not(:disabled),
-  .inline:hover {
+  .cite:hover:not(:disabled) {
     background: color-mix(in srgb, var(--accent) 24%, transparent);
     text-decoration: none;
   }
@@ -513,21 +497,8 @@
     margin-top: 6px !important;
   }
 
-  .caret {
-    display: inline-block;
-    width: 7px;
-    height: 1em;
-    margin-left: 2px;
-    background: var(--fg-muted);
-    vertical-align: -0.15em;
-    animation: blink 1s steps(1) infinite;
-  }
-
-  @keyframes blink {
-    50% {
-      opacity: 0;
-    }
-  }
+  /* The inline chip, the caret and everything the answer is built from live inside `.md`,
+     which Svelte does not render and therefore cannot style. They are in app.css. */
 
   .composer {
     flex-shrink: 0;
@@ -649,8 +620,7 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .pulse,
-    .caret {
+    .pulse {
       animation: none;
     }
   }

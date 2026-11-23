@@ -215,8 +215,9 @@ in `app` so both transports share one implementation.
 **Built:** settings and the generated settings UI; ingest of text, PDFs (text +
 rasters), images and audio slices; embedding; recall, rerank and the registry; the
 research loop and synthesis; turn persistence in a chat that a question finds, starts, or
-deletes; the SSE ask stream; the web UI including the conversation tree and the chunk
-inspector; `make check`, `make e2e`, `make ui`.
+deletes; the SSE ask stream; the web UI including the conversation tree, the chunk
+inspector, and answers rendered as markdown with LaTeX (ADR 0016); `make check`,
+`make e2e`, `make ui`.
 
 **Not built:** `/mcp` and `cmd/libris-mcp` (`internal/events` and `internal/mcpserver`
 are empty directories, untracked); ingest progress events; audio transcription — slicing
@@ -386,6 +387,20 @@ PDFDPI int `key:"pdfDPI" group:"ingest" label:"PDF raster DPI" help:"…"
   `lib/format.ts` holds the only display formatting rules, so byte and duration strings
   cannot diverge; `citationLocator` there is the whole rule for what a citation chip
   says (a time range for audio, a page for everything else).
+- An answer body is rendered by `lib/markdown.ts` — marked, then DOMPurify, then KaTeX and
+  highlight.js — and it is the only markdown in the app (ADR 0016). Source text, chunk
+  text and warnings stay verbatim, because they quote a file and formatting them would
+  reinterpret it. A question is never rendered either: it is what the person typed.
+- Citation chips are attached to the finished DOM by `attachChips`, after markdown and
+  math, so a code block that quotes the grammar cites nothing without the pass trying to
+  be clever about it. `lib/chunks.ts` still owns the grammar; `chunkPieces` is gone.
+- Anything inside `.md` must be styled in `app.css`. Svelte's scoped styles cannot reach
+  nodes the component did not build, which is why `.inline` and `.caret` left
+  `ChatPanel.svelte` — a rule added to the component for a chip is a rule that does nothing.
+- An image in an answer becomes a link with its alt text, and a fence whose language is
+  not registered stays plain monospace. Both refusals are the same one: no request the
+  user did not make, no language guessed at. `vite.config.ts`'s `woff2Only()` is not
+  decoration either — `dist/` is committed, so the build's leftovers ship.
 - `lib/chunks.ts` is the only module that knows the `[[Chunk N]]` grammar. A label with
   no citation behind it is dropped rather than rendered as a dead button: the registry
   holds exactly what the model was shown, so an invented `[[Chunk 99]]` means a model
@@ -442,7 +457,7 @@ scripted model so all six termination paths are asserted with no model in the ro
 fake `API` and assert only the HTTP mapping.
 
 Three levels: `make check` (unit), `make e2e` (real binary against a fake embedding
-server, database read back with `sqlite3`), `make ui` (172 browser checks over CDP
+server, database read back with `sqlite3`), `make ui` (209 browser checks over CDP
 against the real UI and a fake that answers all three llama.cpp endpoints). Coverage is
 88% overall; the gaps are DB-error guards and unreachable IO branches, and production
 code should not be contorted to reach them.
@@ -590,6 +605,20 @@ Found the hard way. Browser-harness and fixture traps are in `docs/testing.md`.
   Windows), the filesystem root, or home itself.
 - An empty `[]domain.Segment` serialises to `null`, not `[]`. Every list reader has to
   tolerate it — `api.ts` routes all lists through `list()` for that reason.
+- DOMPurify's `ALLOWED_URI_REGEXP` is not only a link filter. It runs over the value of
+  every *allowed* attribute that is not on DOMPurify's own URI-safe list, and one that
+  fails it is deleted without a word. So `lib/markdown.ts` lost `align="right"` and
+  `colspan="2"` — a model's `|---:|` arrived left-aligned — while `class` and `title`
+  survived, because those happen to be on the list. A non-address attribute that has to
+  survive goes in `ADD_URI_SAFE_ATTR`; `NOT_ADDRESSES` says why.
+- `overflow-wrap: anywhere` takes part in min-content sizing and `break-word` does not. On
+  the markdown body, `anywhere` let a table column under pressure collapse to four
+  characters and break every word in it ("Temperatur/e", "Wh/ere") — broken at 900px,
+  perfectly fine at 1468, which is how it went unnoticed into a commit.
+- An `<img>` starts fetching as soon as it belongs to a rendered document, whether or not
+  anything appends it. Converting an answer's image into a link *after* importing the node
+  is therefore a request the user never made: do it in the parser document, where nothing
+  can load. `make ui` counts what the page fetched, which is how this was found.
 - A 202 body is not decoration: return the state you just caused. `ReingestSource`
   answering with the row it read *before* flipping it to `processing` left the row saying
   `failed`, stopped the poll, and the source looked stuck until reload.

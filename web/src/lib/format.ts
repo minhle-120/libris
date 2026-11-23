@@ -52,6 +52,16 @@ export function citationLocator(c: Pick<Citation, 'kind' | 'span'>): string {
   return formatPages(c.span.page, c.span.page_end);
 }
 
+/**
+ * What a citation says about itself: the chunk's number, then where it points. Both the
+ * row above an answer and the button inside its sentences come through here, so the two
+ * cannot describe the same citation differently.
+ */
+export function chipLabel(c: Pick<Citation, 'chunk' | 'kind' | 'span'>): string {
+  const where = citationLocator(c);
+  return where ? `Chunk ${c.chunk} · ${where}` : `Chunk ${c.chunk}`;
+}
+
 export function errorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }

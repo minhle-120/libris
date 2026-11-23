@@ -53,15 +53,18 @@ text, and that `ready` is backed by rows.
 Builds, starts the binary against a throwaway data directory, and runs
 `scripts/ui-upload.mjs`, `ui-drop.mjs`, `ui-ask.mjs` and `ui-nav.mjs` over CDP
 (`scripts/cdp.mjs`, no dependencies). They assert on DOM state — computed text and
-counts — not screenshots. 172 checks across four harnesses (50 upload, 23 drop, 39 ask,
-60 nav) cover create-notebook (with
+counts — not screenshots. 214 checks across four harnesses (50 upload, 23 drop, 73 ask,
+68 nav) cover create-notebook (with
 a name) from both the sidebar and the landing state, rename, resize and collapse of both
 columns, the breadcrumb — including that it names the chat and refuses to name the panel,
 the settings bar, file-picker upload,
 `processing → ready` polling, dedupe, drag-and-drop, unsupported files, filtering,
 detach, and a whole question: streaming, citations arriving before the answer, a chip
 opening the source on the cited chunk, a reload, the model refusing, the model answering
-in prose, a dead server, and Stop. They skip successfully when Chrome is missing. One
+in prose, a dead server, and Stop — and that same answer rendered as markdown: a table
+that scrolls where it stands, a fence coloured by the language it names, LaTeX inline and
+display, a column that stays aligned, a half-written equation that stays readable, an image that must not load, and a
+script and an `onerror` that must not run. They skip successfully when Chrome is missing. One
 harness runs alone with `make ui-upload`, `make ui-drop`, `make ui-ask` or `make ui-nav`
 — same fake and same fixture, so a frontend tweak does not require reading three suites —
 and a harness name that does not exist is an error rather than an empty pass. That knob

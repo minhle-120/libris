@@ -312,6 +312,238 @@ const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ask-p
     () => `title=${afterReload?.title}`
   );
 
+  // ── a rendered answer ──────────────────────────────────────
+  // The synthesiser writes markdown, LaTeX and — if a source provoked it — HTML. This one
+  // answer exercises the whole surface, including the two things it must never do: run
+  // what it was given, or fetch anything.
+  const RICH = `## Two pages, briefly
+
+**Bold**, *italic*, \`inline $ sign\`, and a [link](https://example.com/a).
+
+- first
+- second, citing [[Chunk 1]]
+  - nested under it
+
+1. one
+2. two
+
+| where | value |
+| --- | ---: |
+| page two | 4.2 K [[Chunk 1]] |
+| page one | $5 and $10 |
+
+> quoted from page two
+
+\`\`\`go
+func main() { fmt.Println("measured") }
+
+const measured = "4.2 K, measured twice, with a citation that keeps on going"
+\`\`\`
+
+Inline math $E=mc^2$ and display math:
+
+$$\\frac{\\Delta S}{k_B} = \\ln W$$
+
+![a figure that will not load](https://example.com/fig.png)
+
+<img src="https://example.com/probe.png" onerror="window.__xss = 1"><script>window.__xss2 = 1<\/script>
+
+An invented [[Chunk 99]] and a malformed [[chunk 3]] label.`;
+
+  await control({ reset: true, answer: RICH });
+  await send(ui, 'Summarise it with a table');
+  await ui.settle(60);
+  await ask(ui);
+
+  // Rendered as it arrives, not only once the server has the finished row: a body that
+  // appears as plain text and then reflows at the end is the same bug as no markdown.
+  const live = await ui.until(`
+    const md = document.querySelector('.turn.live .answer .md');
+    return !!md?.textContent.length;
+    `, 200, 5);
+  checks.check('the streaming answer is markdown too', live === true, () => `live=${live}`);
+
+  const done = await ui.until(
+    `
+    const turn = [...document.querySelectorAll('.turn.assistant')].at(-1);
+    if (!turn || turn.classList.contains('live')) return null;
+    const answer = turn.querySelector('.answer');
+    const md = answer?.querySelector('.md');
+    if (!md) return null;
+    const cell = (sel) => md.querySelector(sel);
+    return {
+      text: answer.textContent.replace(/\\s+/g, ' ').trim(),
+      h2: !!cell('h2'),
+      strong: !!cell('strong'),
+      em: !!cell('em'),
+      codeInline: [...md.querySelectorAll('p code, li code')].map((c) => c.textContent),
+      list: md.querySelectorAll('ul > li').length,
+      nested: !!cell('ul ul li'),
+      ordered: !!cell('ol li'),
+      th: md.querySelectorAll('table th').length,
+      scroller: !!cell('.table-wrap') || !!md.querySelector('table')?.closest('.table-wrap'),
+      overflow: getComputedStyle(md.querySelector('.table-wrap') ?? md).overflowX,
+      // align survives the sanitizer only because markdown.ts tells DOMPurify it is not an
+      // address; every other allowed attribute's value is run through the URI regexp.
+      align: [...(md.querySelector('tr')?.children ?? [])].map((c) => getComputedStyle(c).textAlign),
+      quote: !!cell('blockquote'),
+      lang: cell('pre code')?.dataset.lang ?? '',
+      tokens: md.querySelectorAll('pre .hljs-keyword, pre .hljs-title').length,
+      math: md.querySelectorAll('.katex').length,
+      dollars: [...md.querySelectorAll('code')].some((c) => c.textContent.includes('$')),
+      images: md.querySelectorAll('img').length,
+      imageLink: !!cell('a.image'),
+      scripts: md.querySelectorAll('script').length,
+      link: cell('a[href="https://example.com/a"]')?.target ?? '',
+      rel: cell('a[href="https://example.com/a"]')?.rel ?? '',
+      inline: [...answer.querySelectorAll('.answer .inline')].map((b) => b.textContent.trim()),
+      widthFits: answer.getBoundingClientRect().width <=
+        document.querySelector('.chat').getBoundingClientRect().width + 1,
+      xss: [window.__xss, window.__xss2].filter((v) => v !== undefined).length,
+      // Anything the page actually tried to fetch that is not its own origin. A blocked
+      // image never appears here at all, because no element ever asked for it.
+      remote: performance
+        .getEntriesByType('resource')
+        .map((e) => e.name)
+        .filter((n) => /^https?:/.test(n) && !n.startsWith(location.origin))
+    };
+    `,
+    400,
+    100
+  );
+
+  checks.check('the answer is a document now, not a paragraph', !!done?.h2 && !!done?.strong && !!done?.em, () => JSON.stringify({ h2: done?.h2, strong: done?.strong }));
+  checks.check('a heading is a heading', done?.h2 === true, () => `h2=${done?.h2}`);
+  checks.check('lists nest and ordered lists count', (done?.list ?? 0) >= 3 && done?.nested === true && done?.ordered === true, () => `list=${done?.list} nested=${done?.nested} ol=${done?.ordered}`);
+  checks.check('a table is a table, in something that can scroll', done?.th === 2 && done?.scroller === true && done?.overflow === 'auto', () => `th=${done?.th} wrap=${done?.scroller} overflow=${done?.overflow}`);
+  // The writer's `|---:|` is the only alignment in the grammar, and it is the one thing
+  // that can be deleted between the parser and the page without anything else noticing.
+  checks.check('and the column it aligned stays aligned', (done?.align ?? []).join() === 'left,right', () => `align=${JSON.stringify(done?.align)}`);
+  checks.check('a quoted line reads as a quote', done?.quote === true, () => `blockquote=${done?.quote}`);
+  checks.check('a fence is coloured by the language it names', done?.lang === 'go' && (done?.tokens ?? 0) > 0, () => `lang=${done?.lang} tokens=${done?.tokens}`);
+  checks.check('math renders, inline and display', (done?.math ?? 0) >= 2, () => `katex=${done?.math}`);
+  checks.check('a $ inside code is still a $', done?.dollars === true, () => `codes=${JSON.stringify(done?.codeInline)}`);
+  checks.check('money is not math', /\$5 and \$10/.test(done?.text ?? ''), () => `text=${done?.text?.slice(0, 200)}`);
+  checks.check('an image loads nothing and becomes a link', done?.images === 0 && done?.imageLink === true, () => `img=${done?.images} link=${done?.imageLink}`);
+  checks.check('a link out says it is going out', done?.link === '_blank' && /noopener/.test(done?.rel ?? ''), () => `target=${done?.link} rel=${done?.rel}`);
+  checks.check('the answer cannot reach past its column', done?.widthFits === true, () => `fits=${done?.widthFits}`);
+  checks.check(
+    'the chips inside it still cite, twice',
+    (done?.inline ?? []).length === 2 && (done?.inline ?? []).every((t) => /^\d+$/.test(t)),
+    () => `inline=${JSON.stringify(done?.inline)}`
+  );
+  checks.check(
+    'a label with no citation behind it is gone, and a malformed one is left alone',
+    !/Chunk 99|\\[\\[Chunk/.test(done?.text ?? '') && /\\[\\[chunk 3\\]\\]/.test(done?.text ?? ''),
+    () => `text=${done?.text?.slice(-160)}`
+  );
+
+  // The one check here that is about safety rather than shape. Both halves of the payload
+  // arrive in the answer body, exactly as a PDF could put them there, and neither the
+  // script tag nor the image handler runs — the sanitizer, not the model's manners, is
+  // what the answer path rests on.
+  checks.check('an answer cannot execute anything', done?.scripts === 0 && done?.xss === 0, () => `scripts=${done?.scripts} ran=${done?.xss}`);
+  checks.check('and cannot make a request of its own', (done?.remote ?? ['?']).length === 0, () => `remote=${JSON.stringify(done?.remote)}`);
+
+  // What the renderer owns, at the narrowest width the layout claims: the body it built
+  // must not exceed the thread, and the three things in it that can be wider than a
+  // reading column — a code fence, a table, a display equation — must scroll inside
+  // themselves. It deliberately does not assert that the thread itself has no horizontal
+  // overflow at 640px: with two fixed columns either side, the chat is already 12px wide
+  // at that width before any markdown exists, and that is AGENTS.md's known sharp edge,
+  // not this renderer's.
+  for (const width of [640, 900, 1180]) {
+    await ui.setViewport(width);
+    const fits = await ui.eval(`
+      const s = document.querySelector('.messages');
+      const md = [...document.querySelectorAll('.turn.assistant')].at(-1)
+        ?.querySelector('.answer .md');
+      const pre = md?.querySelector('pre');
+      const parts = [pre, md?.querySelector('.table-wrap'), md?.querySelector('.math')]
+        .filter(Boolean);
+      const head = md?.querySelector('th');
+      const range = head ? new Range() : null;
+      if (range) range.selectNodeContents(head);
+      return {
+        // One rect per line box: overflow-wrap: anywhere on the body reached into the
+        // cells and let the column shrink to four characters, breaking every word in it.
+        headLines: range ? range.getClientRects().length : 0,
+        body: Math.round(md?.getBoundingClientRect().width ?? 0),
+        client: s.clientWidth,
+        fits: (md?.getBoundingClientRect().width ?? 1e9) <= s.clientWidth + 1,
+        scrollers: parts.map((el) => getComputedStyle(el).overflowX),
+        codeScrolls: pre ? pre.scrollWidth > pre.clientWidth + 1 : null,
+        parts: parts.length
+      };
+    `);
+    await ui.clearViewport();
+    checks.check(
+      `the answer fits its column at ${width}px`,
+      fits?.fits === true,
+      () => `body=${fits?.body} client=${fits?.client}`
+    );
+    // Only where there is a chat to measure: at 640px the two fixed columns have already
+    // taken the middle one away, which is AGENTS.md's sharp edge and not this renderer's.
+    if (width >= 900) {
+      checks.check(
+        `no word inside the table is broken at ${width}px`,
+        fits?.headLines === 1,
+        () => `headLines=${fits?.headLines}`
+      );
+    }
+    checks.check(
+      `everything wide in it scrolls where it stands at ${width}px`,
+      fits?.parts === 3 &&
+        (fits?.scrollers ?? []).every((o) => o === 'auto') &&
+        fits?.codeScrolls === true,
+      () => `scrollers=${JSON.stringify(fits?.scrollers)} codeScrolls=${fits?.codeScrolls}`
+    );
+  }
+
+  // Stop in the middle of an equation and what is stored is not valid markdown. Two
+  // different failures, and the honest pair of expectations: an *unclosed* `$$` is not
+  // drawn at all — the scanner will not guess where it ends, so the reader keeps the text
+  // the model wrote — while a closed-but-broken `$…$` is drawn in red, because that one
+  // was a complete thought the model got wrong. Neither takes the prose with it.
+  const half = [
+    'It begins normally.',
+    '',
+    '$$\\frac{1}{2',
+    '',
+    'A closed one that is broken: $\\begin{aligned}$.',
+    '',
+    '```go',
+    'func half(',
+    ''
+  ].join('\n');
+  await control({ reset: true, answer: half });
+  const broken = await askAndRead(ui, 'Stop halfway through the maths');
+  checks.check(
+    'an answer that ends mid-expression keeps its prose',
+    /It begins normally/.test(broken?.text ?? ''),
+    () => `text=${broken?.text}`
+  );
+  checks.check(
+    'an unclosed $$ stays the text it is',
+    (broken?.text ?? '').includes(String.raw`$$\frac{1}{2`),
+    () => `text=${broken?.text}`
+  );
+  const drawn = await ui.eval(`
+    const md = [...document.querySelectorAll('.turn.assistant')].at(-1)?.querySelector('.answer .md');
+    return {
+      // The .math slot is what our scanner makes, so this counts the expressions it
+      // agreed were expressions. A KaTeX error span is not wrapped in .katex.
+      slots: md?.querySelectorAll('.math').length ?? -1,
+      errors: md?.querySelectorAll('.katex-error').length ?? -1,
+      pre: md?.querySelectorAll('pre').length ?? -1
+    };
+  `);
+  checks.check('only the expression that closed became math', drawn?.slots === 1, () => `slots=${drawn?.slots}`);
+  checks.check('and a broken one is drawn as itself, in red', drawn?.errors === 1, () => `katex-error=${drawn?.errors}`);
+  checks.check('an unclosed fence is still a code block', drawn?.pre === 1, () => `pre=${drawn?.pre}`);
+
+  await control({ reset: true });
+
   // ── the other ways a turn ends ─────────────────────────────────
   // A model that says the library cannot answer, after searching: its reason *is* the
   // answer, and the turn is labelled no-evidence rather than rendered as if grounded.
