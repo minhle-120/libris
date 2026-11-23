@@ -8,6 +8,7 @@ import (
 	"flag"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -30,12 +31,22 @@ func main() {
 	addr := flag.String("addr", "127.0.0.1:8080", "listen address; loopback only unless you mean otherwise")
 	dataDir := flag.String("data", defaultDataDir(),
 		"directory for the database, originals and derived files; defaults to Documents/libris")
+	openUI := flag.Bool("open", true,
+		"show the address in a browser once the port is listening; -open=false for a headless run")
 	flag.Parse()
 
 	given := map[string]bool{}
 	flag.Visit(func(f *flag.Flag) { given[f.Name] = true })
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	// Bound before anything is opened, so that a port someone else holds — nearly
+	// always another libris — fails here rather than after the database has been
+	// opened, the migrations run and the ingest worker started.
+	ln, err := net.Listen("tcp", *addr)
+	if err != nil {
+		fail(log, "listen", err)
+	}
 
 	log.Info("data directory", "path", *dataDir)
 	if !given["data"] {
@@ -145,13 +156,21 @@ func main() {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
+	// Serve on the listener that was already bound: the backlog has been accepting
+	// since startup, so a browser that arrives during the launch loses a request to
+	// nobody, and nothing has to poll for a port it already owns.
 	go func() {
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			fail(log, "serve", err)
 		}
 	}()
 
-	log.Info("libris listening", "addr", "http://"+*addr, "data", *dataDir)
+	url := browseURL(ln.Addr())
+	log.Info("libris listening", "url", url, "data", *dataDir)
+
+	if *openUI {
+		showInBrowser(log, url)
+	}
 
 	<-ctx.Done()
 	log.Info("shutting down")

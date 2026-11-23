@@ -100,7 +100,8 @@ writeFileSync(
 const port = 8123;
 const base = `http://127.0.0.1:${port}`;
 const log = openSync('/tmp/libris-e2e.log', 'w');
-const app = spawn(BIN, ['-addr', `127.0.0.1:${port}`, '-data', dataDir], {
+// -open=false: this is a server under test, not a user who wants to see the UI.
+const app = spawn(BIN, ['-open=false', '-addr', `127.0.0.1:${port}`, '-data', dataDir], {
   stdio: ['ignore', 'ignore', log]
 });
 

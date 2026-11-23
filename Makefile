@@ -56,11 +56,13 @@ UI_EMBED_PORT ?= 8124
 UI_HARNESS ?= ui-upload ui-drop ui-ask ui-nav
 ui: build
 	@for h in $(UI_HARNESS); do test -f scripts/$$h.mjs || { echo "make ui: no harness named $$h" >&2; exit 2; }; done
+# -open=false: a harness is headless by definition, and on a machine that happens to
+# have a desktop the default would raise a browser window mid-run.
 	@dir=$$(mktemp -d); \
 	printf '{"chatURL":"http://127.0.0.1:$(UI_EMBED_PORT)","embedURL":"http://127.0.0.1:$(UI_EMBED_PORT)","rerankURL":"http://127.0.0.1:$(UI_EMBED_PORT)","chatModel":"fake-chat","embedModel":"fake-embed-2","rerankModel":"fake-rerank"}' > $$dir/settings.json; \
 	node scripts/fake-embed.mjs $(UI_EMBED_PORT) >/tmp/libris-embed.log 2>&1 & embed=$$!; \
 	sleep 0.4; \
-	./libris -addr 127.0.0.1:$(UI_PORT) -data $$dir >/tmp/libris-ui.log 2>&1 & pid=$$!; \
+	./libris -open=false -addr 127.0.0.1:$(UI_PORT) -data $$dir >/tmp/libris-ui.log 2>&1 & pid=$$!; \
 	sleep 1; \
 	rc=0; i=0; \
 	for h in $(UI_HARNESS); do \

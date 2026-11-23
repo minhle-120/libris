@@ -142,9 +142,16 @@ make ui         # build, run, drive the real UI in headless Chrome
 make e2e        # build, run, upload against a fake embeddings server
 ./libris                                  # data goes to Documents/libris
 ./libris -addr 127.0.0.1:8080 -data /mnt/nvme/libris
+./libris -open=false                      # headless: no browser is opened
 ```
 
-The binary is ~21 MB and self-contained apart from the model servers and poppler/ffmpeg.
+On start it hands the address to the desktop (`open` / `xdg-open` / `rundll32`, in
+`cmd/libris/open*.go`) — a courtesy, never a start-up requirement, so a machine with no
+session logs the URL instead and serves anyway. The address is derived from the *bound*
+listener, which is why `-addr 127.0.0.1:0` opens the port the kernel picked. Both harness
+launches pass `-open=false`.
+
+The binary is ~23 MB and self-contained apart from the model servers and poppler/ffmpeg.
 It was 10.5 MB before SQLite: `go-sqlite3` embeds the compiled WASM build, which is the
 price of staying cgo-free and cross-compilable.
 
