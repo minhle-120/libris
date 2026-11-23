@@ -195,6 +195,28 @@ func TestEngineInstallRefusesBeforeStartingSomethingImpossible(t *testing.T) {
 	}
 }
 
+func TestEngineInstallWhileTheCheckIsStillRunning(t *testing.T) {
+	h := newFakeHost()
+	// A first visit on a fresh machine: nothing cached, so no release yet, nothing failed,
+	// and the check is in flight. This is not an offline machine and the response must not
+	// read like one.
+	h.view.Latest, h.view.Asset, h.view.CheckError, h.view.Checking = nil, nil, "", true
+	srv := hostServer(t, h)
+
+	code, body := hostCall(t, srv, http.MethodPost, "/api/host/engine", `{}`)
+	if code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (%s)", code, body)
+	}
+	if !strings.Contains(body, "still") || strings.Contains(body, "failed") {
+		t.Errorf("body = %s, want a wait-a-moment and no claim of failure", body)
+	}
+	select {
+	case tag := <-h.installs:
+		t.Errorf("an install was started for %q with no release to install", tag)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 func TestEngineInstallOfflineSaysSoInItsOwnRequest(t *testing.T) {
 	h := newFakeHost()
 	// What an offline machine produces: the installed row, no release, and a sentence why.

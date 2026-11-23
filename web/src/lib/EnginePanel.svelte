@@ -355,13 +355,17 @@
           disabled={!latest || started}
           title={latest
             ? `Fetch ${latest.tag} (${formatBytes(asset?.size ?? 0)}) into ${view?.dir ?? ''}`
-            : 'The newest build could not be determined'}
+            : checking
+              ? 'Waiting for the answer about which build is newest'
+              : 'The newest build could not be determined'}
         >
           <Icon name="upload" size={14} />
           {#if installed && latest}
             Update to {latest.tag}
           {:else if latest}
             Download {latest.tag}
+          {:else if checking}
+            Checking…
           {:else}
             Download
           {/if}

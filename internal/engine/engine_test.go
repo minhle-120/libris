@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -238,9 +239,27 @@ func fakeArchive(t *testing.T) []byte {
 		})
 		io.WriteString(tw, body)
 	}
-	write("llama-b12649/bin/"+exe, 0o755, "#!/bin/sh\nexit 0\n")
-	write("llama-b12649/lib/libggml-cpu.so", 0o644, filler(200_000))
-	write("llama-b12649/lib/libggml-base.so", 0o644, filler(120_000))
+	link := func(name, target string) {
+		tw.WriteHeader(&tar.Header{
+			Name: name, Linkname: target, Mode: 0o777, Typeflag: tar.TypeSymlink,
+			Format: tar.FormatGNU,
+		})
+	}
+	// Flat, because the tar this machine actually downloaded is flat: llama-b12650/ holds
+	// llama-server, the tools and every .so side by side, with no bin/ and no lib/. The
+	// first fixture invented a bin/ that does not exist upstream, and the code passed
+	// because findServer walks instead of assuming — which is the reason it can survive the
+	// next time upstream changes its mind.
+	write("llama-b12649/"+exe, 0o755, "#!/bin/sh\nexit 0\n")
+	write("llama-b12649/libggml-cpu.so", 0o644, filler(200_000))
+	write("llama-b12649/libggml-base.so", 0o644, filler(120_000))
+	// The links are not decoration and this fixture did not have them until a real 37 MB
+	// download died on the first one: llama.cpp ships libllama.so -> libllama.so.1 ->
+	// libllama.so.1.0.0, which is how the server finds its libraries at run time. An
+	// archive fixture without them describes an upstream that does not exist.
+	write("llama-b12649/libllama.so.1.0.0", 0o644, filler(60_000))
+	link("llama-b12649/libllama.so.1", "libllama.so.1.0.0")
+	link("llama-b12649/libllama.so", "libllama.so.1")
 	tw.Close()
 	gz.Close()
 	return buf.Bytes()
@@ -286,7 +305,7 @@ func TestInstallFetchesVerifiesUnpacksAndRecords(t *testing.T) {
 	}
 	// The archive's own root directory is stripped, so the tree is bin/ under the tag and
 	// not bin/ under a second copy of the tag.
-	if _, err := os.Stat(filepath.Join(want, "bin", serverName())); err != nil {
+	if _, err := os.Stat(filepath.Join(want, serverName())); err != nil {
 		t.Errorf("the tree was not laid out where libris looks: %v", err)
 	}
 	if _, err := findServer(want); err != nil {
@@ -631,7 +650,7 @@ func TestUnpackKeepsTheLinuxModes(t *testing.T) {
 	if err := m.unpack(context.Background(), archive, dest, "llama-b12649"); err != nil {
 		t.Fatal(err)
 	}
-	fi, err := os.Stat(filepath.Join(dest, "bin", "llama-server"))
+	fi, err := os.Stat(filepath.Join(dest, "llama-server"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -640,6 +659,123 @@ func TestUnpackKeepsTheLinuxModes(t *testing.T) {
 	}
 	if _, err := findServer(dest); err != nil {
 		t.Errorf("findServer: %v", err)
+	}
+}
+
+func TestUnpackMakesTheSharedLibraryLinks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the zip path has no links; upstream ships symlinks in the tar")
+	}
+	dir := t.TempDir()
+	m := Open(dir, nil)
+	archive := filepath.Join(dir, "engine.tar.gz")
+	if err := os.WriteFile(archive, fakeArchive(t), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(dir, "b12649")
+	if err := m.unpack(context.Background(), archive, dest, "llama-b12649"); err != nil {
+		t.Fatal(err)
+	}
+
+	// A link that arrived as a *copy of the text of its target* would unpack without error
+	// and fail at run time with a missing library, so Lstat is the assertion that matters.
+	fi, err := os.Lstat(filepath.Join(dest, "libllama.so"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("libllama.so arrived as mode %v, want a symbolic link", fi.Mode())
+	}
+	// And the chain resolves: .so -> .so.1 -> the file with the bytes in it.
+	body, err := os.ReadFile(filepath.Join(dest, "libllama.so"))
+	if err != nil {
+		t.Fatalf("the link chain does not resolve: %v", err)
+	}
+	if len(body) != 60_000 {
+		t.Errorf("reading through the chain gave %d bytes, want the versioned file's 60000", len(body))
+	}
+}
+
+func TestUnpackRefusesALinkOutOfTheTree(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("see above")
+	}
+	// Relative and absolute are separate cases: "../evil" is a member that looks harmless
+	// because the name contains no "..", and "/etc/passwd" is a target that looks like a
+	// path rather than a weapon. Both are resolved against the link's own directory before
+	// anything is created.
+	for _, target := range []string{"../../evil", "/etc/passwd", "sub/../../../evil"} {
+		var buf bytes.Buffer
+		gz := gzip.NewWriter(&buf)
+		tw := tar.NewWriter(gz)
+		tw.WriteHeader(&tar.Header{
+			Name: "llama-b12649/evil", Linkname: target, Mode: 0o777,
+			Typeflag: tar.TypeSymlink, Format: tar.FormatGNU,
+		})
+		tw.Close()
+		gz.Close()
+
+		dir := t.TempDir()
+		m := Open(dir, nil)
+		archive := filepath.Join(dir, "bad.tar.gz")
+		if err := os.WriteFile(archive, buf.Bytes(), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := m.unpack(context.Background(), archive, filepath.Join(dir, "b12649"), "llama-b12649"); err == nil {
+			t.Errorf("%q was accepted as a link target", target)
+		}
+		if _, err := os.Lstat(filepath.Join(dir, "evil")); err == nil {
+			t.Errorf("%q wrote outside the engine tree", target)
+		}
+	}
+}
+
+func TestAFailedUnpackLeavesNoHalfWrittenEngine(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("see above")
+	}
+	// The member that fails is placed *after* a good bin/llama-server on purpose: the
+	// interesting state is a directory that looks installed and is not, which is what a
+	// mid-archive error leaves behind, and it is invisible to the settings page.
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	head := func(h *tar.Header) {
+		if err := tw.WriteHeader(h); err != nil {
+			t.Fatal(err)
+		}
+	}
+	body := "#!/bin/sh\nexit 0\n"
+	head(&tar.Header{Name: "llama-b12649/" + serverName(), Mode: 0o755, Size: int64(len(body)),
+		Typeflag: tar.TypeReg, Format: tar.FormatGNU})
+	io.WriteString(tw, body)
+	head(&tar.Header{Name: "llama-b12649/creak", Typeflag: tar.TypeFifo, Format: tar.FormatGNU})
+	tw.Close()
+	gz.Close()
+
+	f := newFake(t)
+	dir := t.TempDir()
+	f.asset = buf.Bytes()
+	m := Open(dir, nil)
+	m.api = f.addr + "/api"
+
+	rel, _, err := m.Check(context.Background(), Vulkan, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Install(context.Background(), rel.Tag, Vulkan); err == nil {
+		t.Fatal("a fifo member was installed")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "b12649", serverName())); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a half-unpacked engine survived the failure: %v", err)
+	}
+	if _, ok := m.Status(); ok {
+		t.Error("the failed install reports itself as installed")
+	}
+	// The download is kept — the archive was verified, so resuming it is the repair. Only
+	// the unpacked tree goes.
+	if b := m.PartsBytes(); b == 0 {
+		t.Error("the verified archive was thrown away with the failed unpack, so the retry starts over")
 	}
 }
 

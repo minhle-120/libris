@@ -452,6 +452,17 @@ func (m *Manager) Progress() Progress {
 	return m.progress
 }
 
+// discardDest removes a half-unpacked engine tree. An archive that fails halfway leaves
+// files nothing will ever run and nothing will ever count: the settings page reports the
+// engine as not installed, so those bytes are invisible, and the disk has lost a few
+// hundred MB to a tree no query can name. This is the same rule the repo already applies to
+// a failed write — the temp file goes, whatever else the error was.
+func (m *Manager) discardDest(dest string) {
+	if err := os.RemoveAll(dest); err != nil {
+		m.log.Debug("engine: could not remove the half-unpacked engine", "path", dest, "err", err)
+	}
+}
+
 func (m *Manager) install(ctx context.Context, tag string, b Backend) (Installed, error) {
 	if err := os.MkdirAll(m.dir, 0o755); err != nil {
 		return Installed{}, fmt.Errorf("engine: %s: %w", m.dir, err)
@@ -518,6 +529,7 @@ func (m *Manager) install(ctx context.Context, tag string, b Backend) (Installed
 
 	m.setProgress(func(p *Progress) { p.State = StateUnpacking })
 	if err := m.unpack(ctx, got, dest, "llama-"+tag); err != nil {
+		m.discardDest(dest)
 		return Installed{}, err
 	}
 	// Both halves of the part go: the archive and its validators. Leaving the .json behind
@@ -531,6 +543,7 @@ func (m *Manager) install(ctx context.Context, tag string, b Backend) (Installed
 
 	exe, err := findServer(dest)
 	if err != nil {
+		m.discardDest(dest)
 		return Installed{}, err
 	}
 

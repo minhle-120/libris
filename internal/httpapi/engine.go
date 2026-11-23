@@ -103,7 +103,21 @@ func (s *Server) handleEngineInstall(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if view.Latest == nil {
-			writeError(w, http.StatusBadGateway, "the newest build could not be determined: "+view.CheckError)
+			switch {
+			case view.Checking:
+				// Nothing has failed. The answer has not arrived yet, and a machine that is
+				// told "could not be determined" here will go and press the same button again
+				// while the page is still waiting — which is the opposite of what a person
+				// watching a spinner wants to read.
+				writeError(w, http.StatusConflict, "libris is still finding out which build is newest; try again in a moment")
+			case view.CheckError != "":
+				writeError(w, http.StatusBadGateway, "the newest build could not be determined: "+view.CheckError)
+			default:
+				// No answer, no check in flight, no reason given: the view is inconsistent,
+				// and an error message that ends in a colon and a space is worse than no
+				// sentence at all.
+				writeError(w, http.StatusBadGateway, "the newest build could not be determined")
+			}
 			return
 		}
 		req.Tag = view.Latest.Tag

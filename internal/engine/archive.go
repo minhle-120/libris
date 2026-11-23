@@ -23,7 +23,9 @@ import (
 // Three rules, each learned from the way archives go wrong:
 //
 //   - The archive's own root directory is stripped. Upstream puts everything under
-//     llama-b12649/, and keeping it would put the engine at bin/b12649/b12649/bin/.
+//     llama-b12649/ — flat, one directory of binaries and shared objects, which is what a
+//     real download showed and not what the first fixture assumed — and keeping it would
+//     put the engine one directory deeper than libris looks.
 //   - A member that would land outside the destination is refused, not cleaned. "Reject
 //     unsafe paths rather than sanitise them" is the rule this repo already applies to
 //     DirSink, and an archive is exactly as untrusted as a filename from a browser.
@@ -178,14 +180,62 @@ func (m *Manager) unpackTar(archive, dest, root string) error {
 				return err
 			}
 			written += h.Size
+		case tar.TypeSymlink:
+			// Upstream really does ship these, and the engine does not work without them:
+			// libllama.so -> libllama.so.1 -> libllama.so.1.0.0 is how the shared objects
+			// find each other, so refusing a link is refusing to install the server. The
+			// first version of this function claimed the tree contained none, and died on
+			// the 37 MB download that this machine actually made.
+			//
+			// Containment is checked by resolving the target, not by trusting its shape: a
+			// link is the one archive member whose effect happens later, when something
+			// opens it, so "no .. in the name" is not enough here.
+			if err := linkFile(dest, p, filepath.ToSlash(h.Linkname)); err != nil {
+				return err
+			}
+		case tar.TypeLink:
+			// A hard link names another member, and member names in a hard link are
+			// archive-absolute, so it goes through stripRoot before it is safe to join.
+			target, err := safeJoin(dest, stripRoot(h.Linkname, root))
+			if err != nil {
+				return err
+			}
+			if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+				return fmt.Errorf("engine: %s: %w", filepath.Dir(p), err)
+			}
+			_ = os.Remove(p)
+			if err := os.Link(target, p); err != nil {
+				return fmt.Errorf("engine: link %s: %w", p, err)
+			}
 		default:
-			// Symlinks, hard links, devices, fifos: upstream's install tree contains none
-			// of them, so any that appear are either a packing mistake or an attack, and in
-			// either case a link inside a documents folder is not something to resolve.
+			// Devices, fifos, whiteouts: nothing an engine build needs, and creating a
+			// device node in a documents folder is never the intent.
 			return fmt.Errorf("engine: %s contains an unsupported archive member type for %q",
 				filepath.Base(archive), h.Name)
 		}
 	}
+}
+
+// linkFile creates a symbolic link whose target must stay inside dest once resolved. The
+// target is kept as the archive stored it, so a relative chain still reads as relative on
+// disk; only the decision to create it is libris's.
+func linkFile(dest, p, target string) error {
+	if target == "" || strings.HasPrefix(target, "/") {
+		return fmt.Errorf("engine: archive link %q points at %q, which libris will not create", p, target)
+	}
+	full := filepath.Join(filepath.Dir(p), filepath.FromSlash(target))
+	destClean := filepath.Clean(dest)
+	if full != destClean && !strings.HasPrefix(full, destClean+string(os.PathSeparator)) {
+		return fmt.Errorf("engine: archive link %q resolves to %s, outside %s", p, full, dest)
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return fmt.Errorf("engine: %s: %w", filepath.Dir(p), err)
+	}
+	_ = os.Remove(p) // a re-run over a half-unpacked tree
+	if err := os.Symlink(filepath.FromSlash(target), p); err != nil {
+		return fmt.Errorf("engine: link %s: %w", p, err)
+	}
+	return nil
 }
 
 func writeTarFile(r io.Reader, p string, mode os.FileMode) error {

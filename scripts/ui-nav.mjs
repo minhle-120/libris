@@ -1009,7 +1009,7 @@ const code = await withBrowser(
         storedDir: attr('Stored in', 'title'),
         detected: dd('Detected'),
         latest: dd('Latest build'),
-        download: button(/Download|Update to/) ? button(/Download|Update to/).textContent.trim() : null,
+        download: button(/Download|Update to|Checking/) ? button(/Download|Update to|Checking/).textContent.trim() : null,
         remove: !!button(/^Remove$/),
         discard: !!button(/Discard \d/),
         footnote: !!root.querySelector('.footnote')
@@ -1095,7 +1095,7 @@ const code = await withBrowser(
     );
     checks.check(
       "a first run offers a download, named or still waiting on the release",
-      /^Download( b[0-9]{4,})?$/.test(eng.download ?? ""),
+      /^Download( b[0-9]{4,})?$|^Checking\u2026$/.test(eng.download ?? ""),
       eng.download,
     );
     checks.check(
