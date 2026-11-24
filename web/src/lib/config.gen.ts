@@ -290,7 +290,7 @@ export function defaultSettings(): Settings {
 		embedModel: "",
 		embedDimensions: "",
 		rerankModel: "",
-		rerankEnabled: true,
+		rerankEnabled: false,
 		recallTopK: 10,
 		finalTopK: 5,
 		maxIterations: 5,

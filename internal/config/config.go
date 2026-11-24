@@ -172,11 +172,17 @@ func Default() Config {
 		RerankURL:      "http://127.0.0.1:8083",
 		TimeoutSeconds: 300,
 
-		ChatModel:     "",
-		EmbedModel:    "",
-		EmbedDim:      "",
-		RerankModel:   "",
-		RerankEnabled: true,
+		ChatModel:   "",
+		EmbedModel:  "",
+		EmbedDim:    "",
+		RerankModel: "",
+		// Off, because nothing on a fresh install can rerank: there is no reranker in the
+		// catalogue (ADR 0021), so in managed mode the derived address is well-formed and
+		// nothing answers it, and in external mode it is a server a person has not started yet.
+		// A default that is on would make the one retrieval stage that is a *choice* look
+		// configured when the machine cannot honour it — the same mistake as a prefilled model
+		// name above. Vector order is the answer that works everywhere.
+		RerankEnabled: false,
 
 		RecallTopK:      10,
 		FinalTopK:       5,
