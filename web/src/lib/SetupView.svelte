@@ -219,7 +219,7 @@
           checked as they arrive — because a different embedder would silently invalidate every
           vector already stored.
         </p>
-        {#if todo.length > 1}
+        {#if todo.length}
           <button
             class="btn btn-primary"
             disabled={busy !== ''}
@@ -230,12 +230,16 @@
           >
             {running || queue.length
               ? 'downloading, one at a time…'
-              : `Download both models · ${formatBytes(todo.reduce((n, e) => n + (e?.bytes ?? 0), 0))}`}
+              : todo.length > 1
+                ? `Download both models · ${formatBytes(todo.reduce((n, e) => n + (e?.bytes ?? 0), 0))}`
+                : `Download ${todo[0]!.label} · ${formatBytes(todo[0]!.bytes)}`}
           </button>
           <p>
             {running || queue.length
               ? 'one at a time, so neither bar lies about the other'
-              : 'fetched one at a time, and a stop keeps the bytes it already has'}
+              : todo.length > 1
+                ? 'fetched one at a time, and a stop keeps the bytes it already has'
+                : 'a stop keeps the bytes it already has, so this resumes where it left off'}
           </p>
         {/if}
 
@@ -249,14 +253,7 @@
               {#if m!.complete}
                 <span class="ok">installed</span>
               {:else}
-                <button
-                  class="btn"
-                  class:btn-primary={!setup.chat?.complete && m!.role === 'chat'}
-                  disabled={busy !== ''}
-                  onclick={() => act('model:' + m!.id, () => installModel(m!.id))}
-                >
-                  {busy === 'model:' + m!.id ? 'Downloading…' : 'Download'}
-                </button>
+                <span class="wait">{started === m!.id ? 'downloading…' : 'waiting'}</span>
               {/if}
             </li>
           {/each}
@@ -428,11 +425,16 @@
   .models li.done .what {
     color: var(--fg-muted);
   }
-  .devices .what {
+  /* The rule was written for `.what` and the markup says `.dev`, which is how a device row
+     lost its row layout: a scoped selector nobody matches fails silently, exactly like a
+     `var()` naming a token that does not exist. */
+  .devices .dev {
+    display: flex;
     flex-direction: row;
     align-items: baseline;
     gap: 8px;
     flex-wrap: wrap;
+    min-width: 0;
   }
   .slot {
     font-family: var(--font-mono);
@@ -444,13 +446,19 @@
     color: var(--fg-muted);
   }
   .devices button,
-  .models button,
-  .models .ok {
+  .models .ok,
+  .models .wait {
     margin-left: auto;
   }
   .ok {
     font-size: 12px;
     color: var(--success);
+  }
+  /* Green is a fact about this file, not a layout slot: a model that has not been fetched
+   yet must not wear the same badge as one that has. */
+  .wait {
+    font-size: 12px;
+    color: var(--fg-muted);
   }
   .progress {
     height: 6px;
