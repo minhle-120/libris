@@ -82,6 +82,15 @@
   $effect(() => {
     const head = queue[0];
     if (!head) return;
+    // Nothing is fetched while an earlier step is what the screen is showing. The queue outlives
+    // the page now, and that is how a stale one from a previous session fired the moment the
+    // first poll arrived — while the user was pressing "Download llama.cpp", with no engine and
+    // the models not even on screen. A button that appears to fetch gigabytes it never mentioned
+    // is worse than a queue that has to be started again.
+    if (setup.step !== 'models') {
+      if (queue.length) queue = [];
+      return;
+    }
     const entry = models?.entries.find((e) => e.id === head);
     // Advancing comes before every "nothing to do right now" guard, and that ordering was the
     // bug: `started === head` is a reason not to *start* the head, but it also returned before
