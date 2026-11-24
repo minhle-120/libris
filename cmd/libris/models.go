@@ -30,7 +30,7 @@ func modelSource(clients *clientCache, embedders *index.Supplier, rerankerInstal
 	return func(cfg config.Config) (app.Models, error) {
 		// Resolved once, so the names and the URLs cannot come from different modes
 		// (ADR 0020).
-		cfg = cfg.Served(clients.port())
+		cfg = clients.Served(cfg)
 
 		client, err := clients.For(cfg)
 		if err != nil {

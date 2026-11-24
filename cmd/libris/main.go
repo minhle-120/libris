@@ -170,9 +170,7 @@ func main() {
 		},
 		// Likewise the embedder: a job embeds against the server configured when
 		// that job ran, not the one that was set when libris booted.
-		Embedder: func(cfg config.Config) (app.Embedder, error) {
-			return embedders.For(cfg)
-		},
+		Embedder: servedEmbedder(&clients, embedders),
 		// The answer path. Chats and Search are the same database the sources live
 		// in — one process owns the directory — and the models are resolved per
 		// question for the same reason the embedder is.

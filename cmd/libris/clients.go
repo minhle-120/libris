@@ -8,6 +8,7 @@ import (
 
 	"libris/internal/app"
 	"libris/internal/config"
+	"libris/internal/index"
 	"libris/internal/llm"
 )
 
@@ -43,10 +44,36 @@ func (c *clientCache) port() int {
 	return c.servePort()
 }
 
+// Served is the configuration as a model request should read it: in managed mode the three
+// addresses *and* the three model names are facts about the router libris runs, and the port is
+// a fact about that process (ADR 0020, ADR 0024).
+//
+// It is a method a caller can apply, rather than something buried inside For, because For can
+// only fix what For reads — the addresses. Anything that reads a model *name* out of a config
+// first is reading the stored one, and `internal/app` hands out the settings it saved: an
+// ingest came to dial the correct router with `cfg.EmbedModel`, which in managed mode is either
+// blank or a name from the days of pointing libris at somebody else's server.
+func (c *clientCache) Served(cfg config.Config) config.Config {
+	return cfg.Served(c.port())
+}
+
+// servedEmbedder is the embedder factory libris hands to the app, with the derivation the
+// supplier needs and does not do for itself: the supplier reads a model *name* out of the
+// config it is given, while clientCache.For can only derive the address on the way past it.
+// Without this, an ingest in managed mode asked the running router for `cfg.EmbedModel` — blank
+// in a fresh settings file, or a name typed for a different machine once — and the router had
+// no reason to recognise it. The same shape as the research call's model name, one seam further
+// down (ADR 0020).
+func servedEmbedder(clients *clientCache, embedders *index.Supplier) func(config.Config) (app.Embedder, error) {
+	return func(cfg config.Config) (app.Embedder, error) {
+		return embedders.For(clients.Served(cfg))
+	}
+}
+
 func (c *clientCache) For(cfg config.Config) (*llm.Client, error) {
 	// The address a request goes to is decided here and nowhere else. In managed mode it is
 	// the router libris runs; in external mode it is what the settings say (ADR 0020).
-	cfg = cfg.Served(c.port())
+	cfg = c.Served(cfg)
 	if cfg.EngineMode == config.EngineManaged && cfg.ChatURL == "" {
 		// Managed mode with nothing running. There is no address to build a client for, and
 		// inventing one would produce a socket error blaming a server that was never asked —

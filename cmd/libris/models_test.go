@@ -173,6 +173,35 @@ func TestModelsRerankIsOptional(t *testing.T) {
 	}
 }
 
+// In managed mode the embedder has to be named for the router it is dialling, not for the
+// settings file. `embedModel` there is blank on a fresh install, and after a move off external
+// mode it is a name from somebody else's server; the router libris runs knows its embedder as
+// `libris-embed`, the preset's section name. The address is derived inside clientCache.For,
+// which is precisely the trap: the name is read *upstream* of For, by the supplier, so deriving
+// only the address produced an ingest that dialled the right process and asked it for a model it
+// had never heard of. Identity() is the name the vectors are keyed on, so it is the wire.
+func TestTheEmbedderIsNamedForTheRouterItDials(t *testing.T) {
+	cfg, clients, supplier := configured(t)
+	cfg.EngineMode = config.EngineManaged
+	cfg.EmbedModel = "LFM3-VL-2B"
+	clients.servePort = func() int { return 41234 }
+
+	got, err := servedEmbedder(clients, supplier)(cfg)
+	if err != nil {
+		t.Fatalf("embedder: %v", err)
+	}
+	ident, ok := got.(interface{ Identity() string })
+	if !ok {
+		t.Fatal("the embedder reports no identity, so nothing keys the vectors it returns")
+	}
+	if !strings.Contains(ident.Identity(), "libris-embed") {
+		t.Errorf("identity = %q, want the alias this router answers to", ident.Identity())
+	}
+	if strings.Contains(ident.Identity(), "LFM3-VL-2B") {
+		t.Errorf("identity = %q, still carries the stored name", ident.Identity())
+	}
+}
+
 // The probe carries the model name the vectors are keyed on, and it comes from the
 // settings handed in — not from whatever was current when libris started. Two
 // questions with different embeddingModel settings must not search the same space.
