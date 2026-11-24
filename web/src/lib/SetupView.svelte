@@ -14,7 +14,7 @@
     startEngineServe,
   } from './api';
   import type { EngineView, ModelsView, DeviceReport, Device } from './types';
-  import { DEVICE_ACK, type Setup } from './setup';
+  import { ackKey, DEVICE_ACK, type Setup } from './setup';
   import { remaining } from './setup';
   import { formatBytes } from './format';
 
@@ -200,7 +200,7 @@
     // A blank setting means libris picks, so choosing that leaves nothing behind to show the
     // step was answered — without this the wizard would ask again after every reload.
     try {
-      localStorage.setItem(DEVICE_ACK, '1');
+      localStorage.setItem(DEVICE_ACK, ackKey(engine, devices));
     } catch {
       // Private mode, a locked profile: the step asks again next time, which is the older and
       // gentler bug rather than a reason to fail the save that just worked.
@@ -251,6 +251,13 @@
           you can change it later in Settings.
         </p>
         <ul class="devices">
+          {#if !devices?.devices.length}
+            <li>
+              <span class="desc">
+                the engine has not reported an accelerator — Libris will use the CPU
+              </span>
+            </li>
+          {/if}
           {#each devices?.devices ?? [] as d (d.name)}
             <li>
               <span class="dev">

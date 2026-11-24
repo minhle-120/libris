@@ -31,15 +31,22 @@ const complete = (e?: ModelEntry): boolean => !!e && e.complete;
  * instead, beside the other per-user view state (§7). */
 export const DEVICE_ACK = 'libris.device-ack';
 
-/** Has the device step been answered? A stored slot name means yes; a blank one means either
- *  that libris picks or that nobody has been asked yet, and only the browser knows which. */
-export function deviceAsked(engineDevice: string, ack = hasAck()): boolean {
-  return engineDevice.trim() !== '' || ack;
+/** What the browser records for "this machine's device was looked at", keyed to the machine and
+ *  the engine build rather than being a bare yes. The wizard is a per-installation thing and
+ *  localStorage is per-origin, so a plain flag from one test silently answered the question for
+ *  every data directory opened in that browser afterwards — which is how the step came to be
+ *  skipped "again" on a machine that had never been asked. An upgraded engine has a different
+ *  device list, and that is worth looking at once more too. */
+export function ackKey(engine: EngineView | null, devices: DeviceReport | null): string {
+  return `${engine?.installed?.tag ?? 'no-engine'}:${devices?.fingerprint ?? devices?.os ?? 'unknown'}`;
 }
 
-function hasAck(): boolean {
+/** Has the device step been answered? A stored slot name means yes; a blank one means either
+ *  that libris picks or that nobody has been asked yet, and only the browser knows which. */
+export function deviceAsked(engineDevice: string, expected: string): boolean {
+  if (engineDevice.trim() !== '') return true;
   try {
-    return localStorage.getItem(DEVICE_ACK) === '1';
+    return localStorage.getItem(DEVICE_ACK) === expected;
   } catch {
     return false;
   }
@@ -77,10 +84,13 @@ export function readSetup(
   // reported a device" was true before anyone saw the row, and the choice was skipped every
   // single time. A blank `engineDevice` is genuinely ambiguous — libris picks, or nobody was
   // asked — so the confirmation lives in the browser rather than pretending to be a setting.
-  // With nothing reported there is no choice to make and no reason to stop anyone (ADR 0019).
-  const reported = (devices?.devices.length ?? 0) > 0;
-  const asked = deviceAsked(engineDevice);
-  const deviceOk = engineOk && (!reported || asked);
+  // An empty report is NOT a reason to pass. The cache is written the first time anything asks,
+  // which on a fresh install is before the engine exists — so "the engine reported no
+  // accelerator" is the normal first answer, not proof that nobody needs picking (ADR 0019 says
+  // the engine is the only probe; it does not say the probe ran yet). The step shows, says what
+  // is true, and offers the way forward.
+  const asked = deviceAsked(engineDevice, ackKey(engine, devices));
+  const deviceOk = engineOk && asked;
   // A turn needs the chat model and the embedder both: without one, nothing indexes; without
   // the other, nothing answers.
   const modelsOk = complete(chat) && complete(embed);
