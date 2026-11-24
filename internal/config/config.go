@@ -89,7 +89,16 @@ type Config struct {
 	// The port libris binds its own server to. A setting because libris is the thing that
 	// binds it (ADR 0011: a setting is an ability the app can apply), and a loopback port
 	// rather than a URL because "which address" is not a choice when the process is ours.
-	EnginePort int `key:"enginePort" group:"servers" label:"Server port" help:"The loopback port libris runs llama.cpp on. Chat, embeddings and reranking share it." min:"1024" max:"65535" mode:"managed"`
+	// EnginePort is which loopback port libris binds when it runs the servers. Zero means
+	// Auto: the kernel is asked for a free port every time the server starts, so two libris
+	// installs, a dev server and anything else already holding 8080 cannot collide with it.
+	// A number is a request for that exact port and is tried once — the reason to name a port
+	// is usually that something else was told that address, so binding a different one
+	// silently would break the thing it was pinned for.
+	//
+	// The floor is 1024 and 0 is legal anyway, because ports below 1024 need root on Linux and
+	// setting one would produce a failure about permissions rather than about the choice.
+	EnginePort int `key:"enginePort" group:"servers" label:"Server port" help:"0 lets libris take a free port each time the server starts. A number asks for that exact port, and the start fails if something else already holds it. Chat, embeddings and reranking share whatever port is chosen." min:"1024" max:"65535" autoZero:"true" mode:"managed"`
 
 	// Which device llama.cpp offloads to, written into the preset as --device. A setting
 	// because libris is the thing that writes it (ADR 0011), and a string rather than an enum
@@ -154,7 +163,9 @@ func Default() Config {
 		// three URLs and three names still have defaults, because external mode is a real
 		// mode and a saved config that validates in one mode must validate in the other.
 		EngineMode: EngineManaged,
-		EnginePort: 8080,
+		// Auto. A fixed default was the collision: 8080 is the port every local dev server
+		// reaches for first, and libris's own settings page could not tell you which one won.
+		EnginePort: 0,
 
 		ChatURL:        "http://127.0.0.1:8081",
 		EmbedURL:       "http://127.0.0.1:8082",
@@ -188,17 +199,47 @@ func Default() Config {
 // value turns into a request (ADR 0020). External mode is the identity, and that asymmetry
 // is the point — the fields a person typed are used exactly as typed, and the ones libris
 // derives are never stored, so there is nothing for a page to disagree with.
-func (c Config) Served() Config {
+//
+// The port is an argument rather than c.EnginePort because it is a fact about a process, and
+// with the port on Auto that process was given one by the kernel at start. Pass the port the
+// router answers on; zero means none is, and the three addresses come back empty rather than
+// aimed at a port nobody holds. Saying so in words is the caller's job — this function's job
+// is to make "just try it anyway" impossible.
+func (c Config) Served(port int) Config {
 	if c.EngineMode != EngineManaged {
 		return c
 	}
-	base := fmt.Sprintf("http://127.0.0.1:%d", c.EnginePort)
 	out := c
-	out.ChatURL, out.EmbedURL, out.RerankURL = base, base, base
 	out.ChatModel = string(engine.AliasChat)
 	out.EmbedModel = string(engine.AliasEmbed)
 	out.RerankModel = string(engine.AliasRerank)
+	if port <= 0 {
+		out.ChatURL, out.EmbedURL, out.RerankURL = "", "", ""
+		return out
+	}
+	base := fmt.Sprintf("http://127.0.0.1:%d", port)
+	out.ChatURL, out.EmbedURL, out.RerankURL = base, base, base
 	return out
+}
+
+// intRange checks an int field against the min/max its tags declare, so a range is declared
+// once and the generated form and the API cannot disagree about it.
+//
+// autoZero:"true" is the one exception the reflection understands: zero is a legal value that
+// means "choose for me", which lets a field keep a floor that excludes the privileged ports
+// while still allowing the value that turns choosing off.
+func intRange(key string, v int64, f reflect.StructField) error {
+	if s := f.Tag.Get("min"); s != "" && !(v == 0 && f.Tag.Get("autoZero") == "true") {
+		if min, _ := strconv.ParseInt(s, 10, 64); v < min {
+			return fmt.Errorf("config: %s = %d, below minimum %d", key, v, min)
+		}
+	}
+	if s := f.Tag.Get("max"); s != "" {
+		if max, _ := strconv.ParseInt(s, 10, 64); v > max {
+			return fmt.Errorf("config: %s = %d, above maximum %d", key, v, max)
+		}
+	}
+	return nil
 }
 
 // MaxFileBytes is derived, never configured directly: one unit, one field.
@@ -251,15 +292,8 @@ func (c Config) Validate() error {
 
 		switch fv.Kind() {
 		case reflect.Int:
-			if s := f.Tag.Get("min"); s != "" {
-				if min, _ := strconv.ParseInt(s, 10, 64); fv.Int() < min {
-					return fmt.Errorf("config: %s = %d, below minimum %d", key, fv.Int(), min)
-				}
-			}
-			if s := f.Tag.Get("max"); s != "" {
-				if max, _ := strconv.ParseInt(s, 10, 64); fv.Int() > max {
-					return fmt.Errorf("config: %s = %d, above maximum %d", key, fv.Int(), max)
-				}
+			if err := intRange(key, fv.Int(), f); err != nil {
+				return err
 			}
 		case reflect.String:
 			if f.Tag.Get("required") == "true" && strings.TrimSpace(fv.String()) == "" {

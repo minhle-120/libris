@@ -71,7 +71,7 @@ export const settingGroups: SettingGroup[] = [
 			{
 				"key": "enginePort",
 				"label": "Server port",
-				"help": "The loopback port libris runs llama.cpp on. Chat, embeddings and reranking share it.",
+				"help": "0 lets libris take a free port each time the server starts. A number asks for that exact port, and the start fails if something else already holds it. Chat, embeddings and reranking share whatever port is chosen.",
 				"kind": "number",
 				"min": 1024,
 				"max": 65535,
@@ -280,7 +280,7 @@ export const settingGroups: SettingGroup[] = [
 export function defaultSettings(): Settings {
 	return {
 		engineMode: "managed",
-		enginePort: 8080,
+		enginePort: 0,
 		engineDevice: "",
 		chatURL: "http://127.0.0.1:8081",
 		embedURL: "http://127.0.0.1:8082",

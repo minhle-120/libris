@@ -766,12 +766,20 @@ type fakeServer struct {
 	// device it carries are facts the page shows, so they are worth asserting.
 	opts    engine.ServeOptions
 	stopErr error
+	// startErr is what a start answers with when it is refused — already running, or a port
+	// somebody else holds — so the sentence the page gets can be tested without a process.
+	startErr error
 }
 
 func (s *fakeServer) Start(_ context.Context, o engine.ServeOptions, mods []engine.Model) (engine.Serving, error) {
 	s.starts++
 	s.opts = o
 	s.specs = mods
+	if s.startErr != nil {
+		// The refused start still reports what is running, because "already running on port
+		// 41234" is only useful if the answer carries the port.
+		return s.status, s.startErr
+	}
 	return s.status, nil
 }
 
@@ -1077,38 +1085,7 @@ func TestPresetIsWrittenWhereItWasToldAndNotBesideTheEngine(t *testing.T) {
 	presetPath := filepath.Join(dir, "presets", "libris.ini")
 
 	// One complete model on disk, or the start refuses for a better reason than this tests.
-	// "Complete" means each part is exactly the size the manifest says, so these are sparse:
-	// truncate costs no blocks and no time, and the app's only question here is whether the
-	// sizes agree. The hash sibling is what a download leaves behind, and a model that has not
-	// been hashed is a model the router is not started for.
-	md := filepath.Join(modelsDir, "lfm3-vl-2b")
-	if err := os.MkdirAll(md, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	for _, p := range []struct {
-		name  string
-		bytes int64
-	}{
-		{"LFM3-VL-2B-QAD-Q4_0.gguf", 1_049_615_648},
-		{"mmproj-LFM3-VL-2B-BF16.gguf", 378_996_032},
-	} {
-		path := filepath.Join(md, p.name)
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o644)
-		if err != nil {
-			t.Fatal(err)
-		}
-		// Sparse: the size is the fact the app checks, and it costs no blocks.
-		if err := f.Truncate(p.bytes); err != nil {
-			f.Close()
-			t.Fatal(err)
-		}
-		if err := f.Close(); err != nil {
-			t.Fatal(err)
-		}
-		if err := models.MarkVerified(path, "0000000000000000000000000000000000000000000000000000000000000000"); err != nil {
-			t.Fatal(err)
-		}
-	}
+	completeModel(t, modelsDir)
 
 	srv := &fakeServer{status: engine.Serving{Running: true, Port: 8080}}
 	eng := &fakeEngine{
@@ -1143,5 +1120,114 @@ func TestPresetPathIsUnderTheDataDirectory(t *testing.T) {
 	}
 	if strings.HasPrefix(got, filepath.Join("/data/libris", "bin")) {
 		t.Errorf("%q is under bin/, which the engine owns and Remove deletes", got)
+	}
+}
+
+// The address the page is told is the address a request would succeed against. Under Auto the
+// stored setting is 0 and says nothing about the running process, so the process answers. With
+// nothing running, Auto names no address at all rather than a port that does not exist yet —
+// while a pinned one is still worth showing, because that is what libris would bind.
+func TestEngineEndpointFollowsTheRunningProcess(t *testing.T) {
+	cases := []struct {
+		name    string
+		stored  int
+		serving engine.Serving
+		want    string
+	}{
+		{"auto, running on a port nobody chose", 0,
+			engine.Serving{Running: true, Port: 41234}, "http://127.0.0.1:41234"},
+		{"auto, nothing running", 0, engine.Serving{}, ""},
+		{"pinned, nothing running", 9000, engine.Serving{}, "http://127.0.0.1:9000"},
+		// The record wins over the setting even when both name a number: the setting is what
+		// was asked for, the record is what answered, and an answer came out of the process.
+		{"pinned, running on another port", 9000,
+			engine.Serving{Running: true, Port: 41234}, "http://127.0.0.1:41234"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			eng := &fakeEngine{dir: t.TempDir()}
+			h, _ := newTestHostWith(t, eng,
+				config.Config{EngineMode: config.EngineManaged, EnginePort: tc.stored},
+				HostOptions{Serve: &fakeServer{status: tc.serving}})
+
+			v, err := h.Engine(context.Background(), false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if v.Endpoint != tc.want {
+				t.Errorf("Endpoint = %q, want %q", v.Endpoint, tc.want)
+			}
+		})
+	}
+}
+
+// A start on Auto must not be told to move to another port: the setting already says to ask,
+// so the only thing a person can do is stop what is running. And the port in the sentence is
+// the one the running process holds, which is the fact they need in order to stop the right
+// thing.
+func TestAlreadyRunningSaysWhatToStop(t *testing.T) {
+	serve := &fakeServer{status: engine.Serving{Running: true, Port: 41234}, startErr: engine.ErrAlreadyServing}
+	dir := t.TempDir()
+	modelsDir := filepath.Join(dir, "models")
+	completeModel(t, modelsDir)
+	eng := &fakeEngine{
+		dir:       filepath.Join(dir, "bin"),
+		installed: &engine.Installed{Tag: "b1", Path: "/tmp/llama-server"},
+	}
+	for _, tc := range []struct {
+		stored int
+		want   string
+		deny   string
+	}{{0, "41234", "Settings"}, {9000, "41234", ""}} {
+		h, _ := newTestHostWith(t, eng,
+			config.Config{EngineMode: config.EngineManaged, EnginePort: tc.stored},
+			HostOptions{Serve: serve, ModelsDir: modelsDir})
+		_, err := h.EngineServeStart(context.Background())
+		if !errors.Is(err, ErrEngineRunning) {
+			t.Fatalf("stored port %d: %v, want ErrEngineRunning", tc.stored, err)
+		}
+		if !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("stored port %d said %q, which does not name the port in use", tc.stored, err)
+		}
+		if tc.deny != "" && strings.Contains(err.Error(), tc.deny) {
+			t.Errorf("stored port %d said %q — Auto has no port to change in Settings", tc.stored, err)
+		}
+	}
+}
+
+// completeModel puts one complete catalogue entry on disk, because EngineServeStart refuses to
+// start a router with nothing to run — and that refusal is worth more than what these tests
+// would otherwise see. "Complete" means each part is exactly the size the manifest says and
+// has its hash sibling, so these files are sparse: truncate costs no blocks and no time, and
+// the app's only question is whether the sizes agree and the digest was ever checked.
+func completeModel(t *testing.T, modelsDir string) {
+	t.Helper()
+
+	md := filepath.Join(modelsDir, "lfm3-vl-2b")
+	if err := os.MkdirAll(md, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []struct {
+		name  string
+		bytes int64
+	}{
+		{"LFM3-VL-2B-QAD-Q4_0.gguf", 1_049_615_648},
+		{"mmproj-LFM3-VL-2B-BF16.gguf", 378_996_032},
+	} {
+		path := filepath.Join(md, p.name)
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o644)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := f.Truncate(p.bytes); err != nil {
+			f.Close()
+			t.Fatal(err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := models.MarkVerified(path, "0000000000000000000000000000000000000000000000000000000000000000"); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

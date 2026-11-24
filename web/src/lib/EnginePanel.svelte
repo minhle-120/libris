@@ -89,6 +89,19 @@
   const running = $derived(serve?.running ?? false);
   const serveDevice = $derived(serve?.device ?? '');
 
+  // The address a request would reach, or nothing. Auto has no address before a start — the
+  // port is whatever the kernel handed the process — and a row reading
+  // `http://127.0.0.1:0` would be a URL that points at nothing, which is worse than saying
+  // what happens instead.
+  const endpoint = $derived(
+    running && serve?.port ? `http://127.0.0.1:${serve.port}` : (view?.endpoint ?? '')
+  );
+  const startTitle = $derived.by(() => {
+    const n = view?.models?.length ?? 0;
+    if (n === 0) return 'There is no model to run yet';
+    return `Run one llama.cpp on ${endpoint || 'a free port chosen at start'} with ${n} model(s)`;
+  });
+
   onMount(() => {
     void refresh(false);
     void refreshDevices(false);
@@ -317,16 +330,43 @@
           {:else if !serve}
             <span class="muted">this build has no data directory to run one from</span>
           {:else}
-            <span class="tag" title="One llama.cpp in router mode answers all three model roles (ADR 0020)">
-              {view.endpoint ?? `http://127.0.0.1:${serve.port}`}
-            </span>
-            {#if serve.running}
-              <span class="badge">running · pid {serve.pid}</span>
-            {:else if serve.error}
-              <span class="badge warn">did not start</span>
-            {:else}
-              <span class="muted">stopped</span>
-            {/if}
+            <div class="server">
+              <span class="state">
+                <span
+                  class="tag"
+                  title="One llama.cpp in router mode answers all three model roles (ADR 0020)"
+                >
+                  {endpoint || 'a free port, chosen at start'}
+                </span>
+                {#if serve.running}
+                  <span class="badge">running · pid {serve.pid}</span>
+                {:else if serve.error}
+                  <span class="badge warn">did not start</span>
+                {:else}
+                  <span class="muted">stopped</span>
+                {/if}
+              </span>
+
+              <!-- One control, in the row that shows the state it changes. This is the verb of
+                   the section, and it used to sit at the bottom of the page next to the
+                   download button — where pressing it meant scrolling away to find out what
+                   happened, and where "Stop the server" shared a row with "Stop" a download. -->
+              <Button
+                variant={running ? 'default' : 'primary'}
+                onclick={running ? stopServe : startServe}
+                disabled={serving || (!running && !(view.models?.length))}
+                title={running
+                  ? 'Stops libris’s own llama-server, model instances included'
+                  : startTitle}
+              >
+                <Icon name={running ? 'stop' : 'pulse'} size={14} />
+                {#if serving}
+                  {running ? 'Stopping…' : 'Starting…'}
+                {:else}
+                  {running ? 'Stop the server' : 'Start the server'}
+                {/if}
+              </Button>
+            </div>
             <p class="models">
               {#each view.models ?? [] as model (model.path)}
                 <span class="device" title={model.path}>
@@ -494,26 +534,6 @@
 
   {#if view}
   <div class="actions">
-    {#if installed && !busy}
-      {#if serve?.running}
-        <Button onclick={stopServe} disabled={serving} title="Stops libris's own llama-server">
-          <Icon name="stop" size={14} /> Stop the server
-        </Button>
-      {:else}
-        <Button
-          variant="primary"
-          onclick={startServe}
-          disabled={serving || !(view.models?.length)}
-          title={view.models?.length
-            ? `Run one llama.cpp on port ${view.port} with ${view.models?.length} model(s)`
-            : 'There is no model to run yet'}
-        >
-          <Icon name="pulse" size={14} />
-          {#if serving}Starting…{:else}Start the server{/if}
-        </Button>
-      {/if}
-    {/if}
-
     {#if busy}
       <Button onclick={stop} title="Keeps the bytes downloaded so far; the next attempt resumes">
         <Icon name="stop" size={14} /> Stop
@@ -630,14 +650,36 @@
   .facts dd > * {
     min-width: 0;
   }
-  .facts code,
-  .facts .mono {
-    overflow-wrap: anywhere;
-  }
   /* The control fills the column rather than sizing to its widest option, which is a long
      Vulkan device name. */
   .facts select {
     width: 100%;
+  }
+
+  /* The state and its verb in one row. The button that starts a server belongs beside the line
+     that says whether one is running — not at the foot of the section, where it shared a row
+     with the download button and reading the result meant scrolling back. Wraps instead of
+     squeezing, because at the panel's narrowest the address is the thing that has to stay
+     readable, and a button that drops below is still a button. */
+  .server {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px 12px;
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+  .server .state {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+  .server .tag {
+    /* A mono address has no break opportunity, and a flex item's minimum is its content's
+       minimum: without this the tag set the row's width and the button was pushed out. */
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
 
   .tag {

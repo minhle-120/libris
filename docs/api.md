@@ -39,7 +39,12 @@ POST   /api/host/engine/stop              ends a download and keeps its bytes to
 DELETE /api/host/engine                   the engine, unless a server is running on it
 DELETE /api/host/engine/parts             kept download bytes, and their resume records
 GET    /api/host/devices                  what the machine has, cached for a night
-GET    /api/host/engine/serve             libris's own router: running, port, models, device
+GET    /api/host/engine/serve             libris's own router: running, port, models, device.
+                                          The port is the process's, not the setting's: on
+                                          Auto the number came from the kernel at start and is
+                                          in no settings file (ADR 0024). `endpoint` on the
+                                          engine view is the address a request would reach, and
+                                          is empty when nothing is running on an Auto port
 POST   /api/host/engine/serve             start it, and wait until the router answers — so a
                                           200 is a server that replied, not a process that
                                           exists. 409 already running (autostart makes this

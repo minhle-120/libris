@@ -375,8 +375,15 @@ type Serving struct {
 type ServeOptions struct {
 	// Bin is the installed llama-server. Empty means nothing is installed, which is a state
 	// the page shows as a download button rather than an error.
-	Bin    string
-	Host   string
+	Bin  string
+	Host string
+
+	// Port is the loopback port to bind. Zero means Auto: the kernel is asked for a free port
+	// at each attempt, and an attempt that loses the race between probing a port and
+	// llama-server binding it is retried. A non-zero port is tried exactly once and a
+	// collision fails with the port named, because the reason a person pins a port is usually
+	// that something else was already told that address — moving it silently would break the
+	// thing they pinned it for.
 	Port   int
 	Preset string
 	Log    string
@@ -555,13 +562,58 @@ func (s *Supervisor) Start(ctx context.Context, o ServeOptions, models []Model) 
 	}
 	defer logFile.Close()
 
+	// A pinned port gets one attempt and no second guess. Auto asks the kernel each time.
+	attempts := 1
+	if o.Port <= 0 {
+		attempts = autoPortAttempts
+	}
+
+	var (
+		last    Serving
+		lastErr error
+	)
+	for range attempts {
+		port := o.Port
+		if port <= 0 {
+			if port, lastErr = freePort(o.Host); lastErr != nil {
+				return Serving{}, lastErr
+			}
+		}
+		if last, lastErr = s.startOnce(ctx, o, port, logFile, have); lastErr == nil {
+			return s.Status(), nil
+		}
+		// Only a lost port is worth another try. Anything else — a preset key the build
+		// refused, a model that would not load — would fail identically on the next port, and
+		// retrying it would only spend another thirty seconds saying the same thing.
+		if !errors.Is(lastErr, ErrPortTaken) {
+			return last, lastErr
+		}
+	}
+	if o.Port <= 0 {
+		// Every attempt collided. Naming the last port would send someone to look at a socket
+		// that is almost certainly free again by now, so this says what was actually tried.
+		last.Error = noPortSentence
+	}
+	return last, lastErr
+}
+
+// startOnce runs the router on one port and decides whether it came up. The port is a
+// parameter rather than o.Port because a start on Auto may try several, and the argument,
+// the record and the URL waited on all have to agree on which one was used.
+func (s *Supervisor) startOnce(ctx context.Context, o ServeOptions, port int, logFile *os.File, have *PresetFile) (Serving, error) {
 	// The router is llama-server with no model of its own. --models-preset names the file
 	// that says which models exist and how each is loaded; --models-max and
 	// --models-memory-margin are what keep three of them on one card.
+	//
+	// The port is an argument and not a key in that file on purpose: the file is the model
+	// server's configuration and is only rewritten when what libris derives about the models
+	// or the device has moved (ADR 0023). A port chosen per start would rewrite it on every
+	// start, and hand edits to a capacity number would be stomped by something that has
+	// nothing to do with them.
 	args := []string{
 		"--models-preset", o.Preset,
 		"--host", o.Host,
-		"--port", strconv.Itoa(o.Port),
+		"--port", strconv.Itoa(port),
 		"--models-max", strconv.Itoa(o.ModelsMax),
 		"--no-ui",
 	}
@@ -587,7 +639,7 @@ func (s *Supervisor) Start(ctx context.Context, o ServeOptions, models []Model) 
 	if pid <= 0 {
 		return Serving{}, fmt.Errorf("engine: start %s: no process id", o.Bin)
 	}
-	rec := serveFile{PID: pid, Port: o.Port, StartedAt: s.now(), Log: o.Log, Device: have.Device}
+	rec := serveFile{PID: pid, Port: port, StartedAt: s.now(), Log: o.Log, Device: have.Device}
 	for _, m := range have.Models {
 		if m.Alias != "" {
 			rec.Models = append(rec.Models, string(m.Alias))
@@ -600,23 +652,23 @@ func (s *Supervisor) Start(ctx context.Context, o ServeOptions, models []Model) 
 		return Serving{}, err
 	}
 
-	url := Endpoint(o.Host, o.Port) + "/models"
-	if err := s.waitReady(ctx, url); err != nil {
+	url := Endpoint(o.Host, port) + "/models"
+	if err := s.waitReady(ctx, url, pid, o.Log); err != nil {
 		// Whatever the router said on its way out is the answer the user needs — a port
 		// already taken, a preset key it refused — and it is in the log and nowhere else.
 		tail := tailOf(o.Log, 4096)
 		s.Stop()
 		if portTaken(tail) {
-			return Serving{Port: o.Port, Log: o.Log, Error: portSentence(o.Port)}, ErrPortTaken
+			return Serving{Port: port, Log: o.Log, Error: portSentence(port)}, ErrPortTaken
 		}
 		why := lastLine(tail)
 		if why == "" {
 			why = oneSentence(err.Error())
 		}
-		return Serving{Port: o.Port, Log: o.Log, Error: why},
+		return Serving{Port: port, Log: o.Log, Error: why},
 			fmt.Errorf("engine: the engine did not come up: %s", why)
 	}
-	return s.Status(), nil
+	return Serving{}, nil
 }
 
 // Stop asks the router to shut down, and waits. SIGINT (SIGTERM is what llama-server treats
@@ -711,12 +763,28 @@ func (s *Supervisor) reap(cmd *exec.Cmd) (int, error) {
 // waitReady polls until the router answers. The router answers /models as soon as it is up —
 // before any model has finished loading, which is the point: a model that will not load is a
 // fact about that model, and the page shows it from /models rather than by never coming back.
-func (s *Supervisor) waitReady(ctx context.Context, url string) error {
+// waitReady polls until the router answers, or until the process it was waiting for is gone.
+//
+// The second condition is the whole point. A router that dies on the way up — a port it could
+// not bind, a preset key it refused — stops answering immediately, and a probe that only asks
+// the socket would keep asking for the full readyTimeout before admitting that nobody is
+// home: ninety seconds of "Starting…" for a failure that happened in two hundred milliseconds.
+func (s *Supervisor) waitReady(ctx context.Context, url string, pid int, log string) error {
 	deadline := time.Now().Add(readyTimeout)
 	var last error
 	for time.Now().Before(deadline) {
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+		if !alive(pid, s.signal) {
+			return fmt.Errorf("engine: the process exited before it answered")
+		}
+		// The log is read as well as the socket, because llama.cpp's router prints
+		// "couldn't bind HTTP server socket" and then *stays alive* for the better part of a
+		// minute, measuring models that will never be served. Nothing will ever answer on that
+		// socket, so the one fact worth knowing this early is in the only place it is written.
+		if portTaken(tailOf(log, 4096)) {
+			return fmt.Errorf("engine: the server said the port is already taken")
 		}
 		if err := s.probe(ctx, url); err == nil {
 			return nil
@@ -759,9 +827,19 @@ func probeModels(ctx context.Context, url string) error {
 
 // portTaken reads the router's own complaint about the port. libris does not bind the socket
 // itself — the child does — so "address already in use" is only ever visible in its output.
+// portTaken is whether the server's own log says the socket belonged to somebody else.
+//
+// The phrase that matters is llama.cpp's, not Go's: what it prints is
+// `couldn't bind HTTP server socket, hostname: 127.0.0.1, port: 9999`, and it does not carry
+// the errno's sentence with it. Matching only "address already in use" — what net.Listen
+// writes — matched a string this program never sees, so every real collision was reported as
+// a mysterious failure that would not start again, on a port that was never going to free up.
+// The line here is what a real llama.cpp prints when something else holds the port; the
+// fixture in port_test.go quotes it.
 func portTaken(log string) bool {
 	l := strings.ToLower(log)
-	return strings.Contains(l, "address already in use") ||
+	return strings.Contains(l, "couldn't bind http server socket") ||
+		strings.Contains(l, "address already in use") ||
 		strings.Contains(l, "only one usage of each socket address")
 }
 

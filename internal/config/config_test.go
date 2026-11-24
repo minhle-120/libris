@@ -143,7 +143,7 @@ func TestServedDerivesManagedMode(t *testing.T) {
 	c.EnginePort = 9099
 	c.ChatModel = "something-somebody-typed"
 
-	got := c.Served()
+	got := c.Served(9099)
 	for _, u := range []string{got.ChatURL, got.EmbedURL, got.RerankURL} {
 		if u != "http://127.0.0.1:9099" {
 			t.Errorf("managed URL = %q, want the loopback port libris binds", u)
@@ -164,8 +164,78 @@ func TestServedDerivesManagedMode(t *testing.T) {
 func TestServedIsTheIdentityInExternalMode(t *testing.T) {
 	c := Default()
 	c.EngineMode = EngineExternal
-	if got := c.Served(); got != c {
+	if got := c.Served(0); got != c {
 		t.Errorf("external mode changed the config: %+v", got)
+	}
+	// External mode's addresses are what a person typed, so the absence of a running router is
+	// none of this function's business.
+	c.ChatURL, c.EmbedURL = "http://elsewhere:9/v1", "http://elsewhere:9/v1"
+	if got := c.Served(0); got.ChatURL != c.ChatURL || got.EmbedURL != c.EmbedURL {
+		t.Errorf("external mode's addresses were dropped: %+v", got)
+	}
+}
+
+// With the port on Auto there is no address before a start, and one cannot be guessed: the
+// number comes from the kernel at start and lives in no settings file. So the addresses come
+// back empty, which makes "just dial it anyway" a compile error rather than a socket error
+// blaming a server that was never asked.
+func TestServedWithoutAPortNamesNoAddress(t *testing.T) {
+	c := Default()
+	c.EnginePort = 8080 // stored, but not what the running process was given
+	got := c.Served(0)
+	for _, u := range []string{got.ChatURL, got.EmbedURL, got.RerankURL} {
+		if u != "" {
+			t.Errorf("managed mode with no running server produced %q", u)
+		}
+	}
+	// The names are still derived: they are facts about the preset, which exists whether or
+	// not anything is reading it.
+	if got.ChatModel != "libris-chat" || got.EmbedModel != "libris-embed" {
+		t.Errorf("managed models = %q/%q", got.ChatModel, got.EmbedModel)
+	}
+	if got.EnginePort != 8080 {
+		t.Errorf("Served changed a stored setting: %d", got.EnginePort)
+	}
+}
+
+// The port is a parameter because it is a fact about a process. Deriving from c.EnginePort
+// instead would be the bug in a new place: under Auto the stored value is 0, and the running
+// router is on something the settings never knew.
+func TestServedIgnoresTheStoredPortWhenGivenOne(t *testing.T) {
+	c := Default()
+	c.EnginePort = 0
+	if got := c.Served(41234); got.ChatURL != "http://127.0.0.1:41234" {
+		t.Errorf("managed URL = %q, want the port the running server reports", got.ChatURL)
+	}
+}
+
+// autoZero is one field's rule, not a general exemption: a number whose zero means "choose
+// for me" may sit below its floor, and every other number may not.
+func TestAutoZeroIsOneFieldsRuleNotAGeneralOne(t *testing.T) {
+	c := Default()
+	if c.EnginePort != 0 {
+		t.Fatalf("a new install should ask for a free port, got %d", c.EnginePort)
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("the default port (Auto) should validate: %v", err)
+	}
+	for _, port := range []int{80, 1023} {
+		next := c
+		next.EnginePort = port
+		if err := next.Validate(); err == nil {
+			t.Errorf("port %d should be refused: below the floor, and reserved on Linux", port)
+		}
+	}
+	pinned := c
+	pinned.EnginePort = 8080
+	if err := pinned.Validate(); err != nil {
+		t.Fatalf("a pinned port should validate: %v", err)
+	}
+
+	next := c
+	next.TimeoutSeconds = 0
+	if err := next.Validate(); err == nil {
+		t.Error("a zero timeout should still be refused — autoZero is not a rule about zeros")
 	}
 }
 

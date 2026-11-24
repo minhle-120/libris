@@ -250,10 +250,26 @@ func serveFixture(t *testing.T) (*engine.Supervisor, *engine.ServeOptions, *spaw
 			sp.called = true
 			sp.alive = true
 			sp.cmd = cmd
+			// Every --port the supervisor asked for, in order, so a test can see how many
+			// ports a start tried and in what order.
+			for i, a := range cmd.Args {
+				if a == "--port" && i+1 < len(cmd.Args) {
+					sp.ports = append(sp.ports, cmd.Args[i+1])
+				}
+			}
 			// This test's own pid is the only pid it may claim is alive.
 			return os.Getpid(), nil
 		},
-		Probe: func(ctx context.Context, url string) error { sp.probed = url; return nil },
+		Probe: func(ctx context.Context, url string) error {
+			sp.probed = url
+			// Killing the fake process the first time anything asks it a question is how a test
+			// says "it died": aliveness here is what Signal reports, never what the operating
+			// system thinks of the pid a fake handed back.
+			if sp.dies {
+				sp.alive = false
+			}
+			return sp.probeErr
+		},
 		Signal: func(pid int, sig syscall.Signal) error {
 			sp.signals = append(sp.signals, sig)
 			if sig == 0 {
@@ -284,7 +300,14 @@ type spawned struct {
 	alive   bool
 	cmd     *exec.Cmd
 	probed  string
+	ports   []string
 	signals []syscall.Signal
+	// probeErr is what readiness answers instead of "up", so a test can say the port was
+	// taken without starting anything that could take it.
+	probeErr error
+	// dies kills the fake process the first time it is probed, which is how a test asks
+	// whether a death is noticed rather than waited out.
+	dies bool
 }
 
 func TestServeRecordsAndReports(t *testing.T) {

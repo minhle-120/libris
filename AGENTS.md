@@ -111,6 +111,8 @@ next one, so what each one settles, in the order an agent is likely to need it:
 | a setting, or a field in the UI | 0001, 0011 | config is defined once in Go and the frontend is generated from it; a setting is an ability libris can apply, never capacity or a model name |
 | a request to a model server | 0006 | sampling and inference config never travel per request |
 | how libris's own model server is configured | 0022 | the preset file in the data directory is that configuration; libris constructs it, reads it back, and rewrites it only when the models or the device move — so its numbers are not settings and its hand edits are not stomped |
+| where the file lives, and what may delete it | 0023 | `<data>/presets/`, not beside the binary: "Remove" deletes the engine tree, and the configuration is not the engine tree |
+| what port the model server runs on | 0024 | Auto by default — the kernel is asked for a free port at start and the running process reports it; a number pins it and is tried once, because 8080 is the most contested port on a developer machine |
 | the shape of an answer | 0007 | a question is two model calls: research, then synthesis |
 | citations, re-ingest, what a chunk points at | 0008 | a citation is copied out of the segment, not referenced |
 | `Source.Status`, embeddings, "done" | 0004 | `ready` means searchable, so embedding is part of ingest |
@@ -327,12 +329,19 @@ PDFDPI int `key:"pdfDPI" group:"ingest" label:"PDF raster DPI" help:"…"
   changes — model names are not part of the key, they travel per request. Anything new
   that caches a client, a pool or a path from settings must go through the same
   discipline, or the settings UI lies.
-- **Managed mode's addresses are derived, never stored.** `Config.Served()` is the one place
-  a stored value becomes a request: in managed mode the three URLs and the three model names
-  come from the port and the preset's aliases, and `settings.json` keeps holding whatever it
-  held (ADR 0020). Anything new that needs an endpoint calls `Served()` rather than reading
-  `ChatURL` — a derived value saved once is a second source of truth that goes stale the
-  moment the port changes. A settings file that predates the field means external mode,
+- **Managed mode's addresses are derived, never stored.** `Config.Served(port)` is the one
+  place a stored value becomes a request: in managed mode the three URLs and the three model
+  names come from the port and the preset's aliases, and `settings.json` keeps holding
+  whatever it held (ADR 0020). Anything new that needs an endpoint calls `Served()` rather
+  than reading `ChatURL` — a derived value saved once is a second source of truth that goes
+  stale the moment the port changes.
+- **The port is a fact about the process, so the process answers for it** (ADR 0024).
+  `enginePort` defaults to 0 = Auto: libris asks the kernel for a free port, llama.cpp is
+  given it as `--port` (never as a preset key, so a start never rewrites the file), and the
+  record is what `Host.ServePort` reads. So a caller passes the *live* port to `Served()`;
+  with nothing running and the port on Auto there is no address to name, and the answer is
+  `app.ErrEngineDown` in words rather than a client aimed at a port nobody holds. A pinned
+  port is honoured and tried once. A settings file that predates the field means external mode,
   because that is the only mode the file can have described.
 
 ---

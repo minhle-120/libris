@@ -475,14 +475,41 @@ var aliasNames = []string{
 	string(engine.AliasRerank),
 }
 
+// ServePort is the port libris's own model server is answering on, or zero when it is not
+// running. Wiring asks this rather than reading the setting: managed mode's addresses are
+// derived from the process (ADR 0020), and with the port on Auto the kernel chose this number
+// at start, so the settings file never knew it.
+func (h *Host) ServePort() int { return h.servePort() }
+
+func (h *Host) servePort() int {
+	if h.serve == nil {
+		return 0
+	}
+	if srv := h.serve.Status(); srv.Running && srv.Port > 0 {
+		return srv.Port
+	}
+	return 0
+}
+
 // endpoint is the one address managed mode talks to. External mode has none: the three
 // addresses are in the settings the user typed, and inventing a single one there would be
 // the old confusion in a new place.
+//
+// A running server wins over the setting, because that is the address a request would succeed
+// against. When nothing is running the setting is what the page is told — what libris would
+// bind — and Auto shows no address rather than one that does not exist yet.
 func (h *Host) endpoint(cfg config.Config) string {
 	if cfg.EngineMode != config.EngineManaged {
 		return ""
 	}
-	return engine.Endpoint("127.0.0.1", cfg.EnginePort)
+	port := h.servePort()
+	if port <= 0 {
+		port = cfg.EnginePort
+	}
+	if port <= 0 {
+		return ""
+	}
+	return engine.Endpoint("127.0.0.1", port)
 }
 
 // modelViews is what the router would load right now: one row per complete entry. A directory
@@ -714,6 +741,13 @@ var ErrEngineRunning = errors.New("app: the model server is already running")
 // sentence deserves.
 var ErrEngineStart = errors.New("app: the model server did not start")
 
+// ErrEngineDown is managed mode with no server running. It exists because the port may be one
+// the kernel chose at start, so when nothing is running there is no address left to name:
+// "try the configured port anyway" is not an option once the configured port says *ask me*,
+// and a request aimed at a port nobody holds fails as a socket error that blames a server
+// which was never asked.
+var ErrEngineDown = errors.New("app: the model server is not running")
+
 // EngineServe starts libris's own llama-server: one router process, every model on disk, one
 // port (ADR 0020). It blocks until the router answers or the wait runs out, because a page
 // that said "running" about a process that dies while loading a GGUF would be a page that
@@ -756,8 +790,13 @@ func (h *Host) EngineServeStart(ctx context.Context) (engine.Serving, error) {
 		// up are all the user's to fix, and each is a sentence; only an unhandled one should read
 		// as a bug.
 		if errors.Is(err, engine.ErrAlreadyServing) {
-			return srv, fmt.Errorf("%w (port %d) — stop it first, or move it to another port",
-				ErrEngineRunning, cfg.EnginePort)
+			// The port is the one the running process holds, which under Auto is not the
+			// setting — so "choose another" is only said when there is a setting to choose in.
+			if cfg.EnginePort > 0 {
+				return srv, fmt.Errorf("%w on port %d — stop it first, or choose another port in Settings",
+					ErrEngineRunning, srv.Port)
+			}
+			return srv, fmt.Errorf("%w on port %d — stop it first", ErrEngineRunning, srv.Port)
 		}
 		if errors.Is(err, engine.ErrPortTaken) || errors.Is(err, context.DeadlineExceeded) {
 			return srv, fmt.Errorf("%w: %s", ErrEngineStart, srv.Error)

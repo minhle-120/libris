@@ -105,10 +105,14 @@ func main() {
 	// job rather than once at boot: a URL or API key saved through the UI has to
 	// reach the pipeline on the next upload, and a client frozen at startup makes
 	// the failure text name a server libris is no longer configured to use.
-	var clients clientCache
-	if _, err := clients.For(settings.Get()); err != nil {
-		fail(log, "llm client", err)
-	}
+	// The process that would answer is built before the client that dials it, because under
+	// Auto the port is whatever that process was given at start: the client has to ask it, and
+	// it cannot ask something that does not exist yet (ADR 0020).
+	serve := engine.NewSupervisor(filepath.Join(*dataDir, "bin"), engine.Seams{Logger: log})
+	servePort := func() int { return serve.Status().Port }
+
+	clients := clientCache{servePort: servePort}
+	warmClient(log, &clients, settings.Get())
 
 	// The embedding server is probed the first time it is needed, and its vector
 	// length is written back into the settings so the UI shows what the store is
@@ -133,7 +137,7 @@ func main() {
 	modelsDir := models.Dir(*dataDir)
 	host, err := app.NewHost(app.HostOptions{
 		Engine:      engine.Open(filepath.Join(*dataDir, "bin"), log),
-		Serve:       engine.NewSupervisor(filepath.Join(*dataDir, "bin"), engine.Seams{Logger: log}),
+		Serve:       serve,
 		ModelsDir:   modelsDir,
 		PresetPath:  engine.PresetPath(*dataDir, engine.RouterID),
 		Downloads:   models.NewFetcher(modelsDir, models.Seams{}),
@@ -244,6 +248,23 @@ func main() {
 		}
 	}
 	service.Close()
+}
+
+// warmClient builds the client the first job would use, so a settings file that cannot
+// produce one is found out here rather than inside an upload.
+//
+// Managed mode with nothing running is not that discovery — it is what a first run looks
+// like, before an engine or a model has been downloaded — so it is said out loud and boot
+// continues. Refusing to boot because a server a person has not started yet is not running
+// would be a strange way to introduce the app.
+func warmClient(log *slog.Logger, clients *clientCache, cfg config.Config) {
+	if _, err := clients.For(cfg); err != nil {
+		if errors.Is(err, app.ErrEngineDown) {
+			log.Info("no model server is running yet; ask one from Settings")
+			return
+		}
+		fail(log, "llm client", err)
+	}
 }
 
 func fail(log *slog.Logger, what string, err error) {

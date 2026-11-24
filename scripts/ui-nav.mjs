@@ -1070,6 +1070,16 @@ const code = await withBrowser(
           /Run models on/.test(l.textContent)
         ),
         deviceRow: dd('Run models on'),
+        // The model server gets one control, in the row that shows the state it changes. It
+        // used to live in the section's action row, where "Stop the server" and "Stop" a
+        // download read as one verb with two objects — and reading the result meant scrolling.
+        serveButtonInActions: [...root.querySelectorAll('.actions button')].some((b) =>
+          /Start the server|Stop the server/.test(b.textContent)
+        ),
+        // Nothing installed yet, so the row says what has to happen first. It must not do it by
+        // printing an address: with the port on Auto the number does not exist until a process
+        // is running to hold one, and "127.0.0.1:0" is a URL that points at nothing.
+        serveText: dd('Model server'),
         warnings: [...root.querySelectorAll('.warnings li')]
           .map((li) => li.textContent.trim().replace(/\\s+/g, ' '))
           .join(' | '),
@@ -1131,6 +1141,22 @@ const code = await withBrowser(
       "managed mode asks for no addresses",
       eng.addresses === "",
       eng.addresses,
+    );
+
+    checks.check(
+      'the model server has no second verb in the action row',
+      eng.serveButtonInActions === false,
+      `start/stop present in .actions=${eng.serveButtonInActions}`,
+    );
+    checks.check(
+      'with nothing installed the row says what has to happen first',
+      /download/i.test(eng.serveText || ''),
+      (eng.serveText || '').slice(0, 70)
+    );
+    checks.check(
+      'and an Auto port is never printed as port 0',
+      !/127\.0\.0\.1:0/.test(eng.serveText || ''),
+      (eng.serveText || '').slice(0, 70)
     );
 
     // The picker lists what the engine reported, so it has nothing to list yet — and the

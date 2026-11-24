@@ -171,6 +171,20 @@ The router answers `GET /models` before any model has finished loading, which is
 readiness probe short and honest: a model that will not load is a fact about that model, not a
 reason the process cannot report its state.
 
+### The port it binds, and why it is not in the file
+
+`--port` is an argument, not a preset key (ADR 0024). The file is the model server's
+configuration and is rewritten only when a model or the device moved; a port chosen per start
+would rewrite it every start and stomp whatever a person edited in it.
+
+| fact | where it came from |
+|---|---|
+| `--port 0` works | `tools/server/server-http.cpp` calls `bind_to_any_port()` and adopts the number it gets back. So llama.cpp can pick one |
+| …and the number it picks is **only in its own log** | `listening_addresses` is built after binding and printed. Nothing on the wire reports it. `libris` downloads unpinned builds (ADR 0018), so a log line is not a place to learn the address every request is aimed at |
+| therefore libris asks the kernel itself | bind `127.0.0.1:0`, read the port, close, hand it over. One socket, understood on Windows too |
+| the race is real and is answered by retrying | between closing and llama.cpp binding, anything may take the port. Auto tries up to four and then says "no free port could be found", which is a different sentence from "8080 is taken" and carries different advice |
+| a pinned port is tried once | the reason to name a port is usually that something else was told that address. Moving it quietly would break the thing the pin was for and report success while doing it |
+
 ## The GGUFs it loads: pinned files on Hugging Face
 
 ADR 0021 decides *which* models, and `internal/models/models.go` is the only list — this page

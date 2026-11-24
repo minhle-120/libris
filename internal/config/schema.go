@@ -136,7 +136,7 @@ func generateSchema(w io.Writer, cfg any) error {
 	b.WriteString(GeneratedHeader)
 	b.WriteString("\nexport type SettingKind = 'text' | 'url' | 'password' | 'number' | 'bool' | 'enum';\n")
 	b.WriteString("export type SettingOption = { value: string; label: string };\n")
-	b.WriteString("export type SettingField = {\n\tkey: keyof Settings;\n\tlabel: string;\n\thelp: string;\n\tkind: SettingKind;\n\tunit?: string;\n\tmin?: number;\n\tmax?: number;\n\treadonly?: boolean;\n\t/** Saved, validated and generated like the rest; rendered by a hand-written control elsewhere. */\n\thidden?: boolean;\n\toptions?: SettingOption[];\n\t/** Which engine mode this field means anything in; absent means both. */\n\tmode?: 'managed' | 'external';\n};\n")
+	b.WriteString("export type SettingField = {\n\tkey: keyof Settings;\n\tlabel: string;\n\thelp: string;\n\tkind: SettingKind;\n\tunit?: string;\n\tmin?: number;\n\tmax?: number;\n\treadonly?: boolean;\n	/** Saved, validated and generated like the rest; rendered by a hand-written control elsewhere. */\n	hidden?: boolean;\n\toptions?: SettingOption[];\n\t/** Which engine mode this field means anything in; absent means both. */\n\tmode?: 'managed' | 'external';\n};\n")
 	b.WriteString("export type SettingGroup = { id: string; label: string; help: string; fields: SettingField[] };\n\n")
 
 	b.WriteString("export type Settings = {\n")

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"libris/internal/app"
 	"libris/internal/config"
 	"libris/internal/index"
 	"libris/internal/llm"
@@ -34,6 +36,37 @@ func testLogger() *slog.Logger {
 // disk? Tests that do not care answer true; the one that cares says no.
 func installed(onDisk bool) func() bool {
 	return func() bool { return onDisk }
+}
+
+// Managed mode with the port on Auto has no address until something is running: the number
+// comes from the kernel at start and is in no settings file. Building a client anyway would
+// aim a request at a port nobody holds, which fails as a socket error blaming a server that
+// was never asked — the mistake libris already made once about an embedding base URL.
+func TestNothingIsDialedForAServerThatIsNotRunning(t *testing.T) {
+	cfg := config.Default() // managed, and the port is Auto: nothing stored names a server
+
+	var dark clientCache
+	if _, err := dark.For(cfg); !errors.Is(err, app.ErrEngineDown) {
+		t.Fatalf("client for a router that is not running: %v, want ErrEngineDown", err)
+	}
+
+	lit := clientCache{servePort: func() int { return 41234 }}
+	if _, err := lit.For(cfg); err != nil {
+		t.Fatalf("client for a running router: %v", err)
+	}
+	// The same fact reaches a question through the cache, so nothing else has to be told:
+	// one place answers "where does a request go", including for reranking.
+	if _, err := modelSource(&lit, index.NewSupplier(lit.For, testLogger(), nil), installed(false))(cfg); err != nil {
+		t.Fatalf("models for a running router: %v", err)
+	}
+
+	// The question sees the same answer, since a failed question deserves a sentence rather
+	// than a port number.
+	var clients clientCache
+	supplier := index.NewSupplier(clients.For, testLogger(), nil)
+	if _, err := modelSource(&clients, supplier, installed(false))(cfg); !errors.Is(err, app.ErrEngineDown) {
+		t.Fatalf("models for a router that is not running: %v, want ErrEngineDown", err)
+	}
 }
 
 func configured(t *testing.T) (config.Config, *clientCache, *index.Supplier) {
@@ -122,6 +155,13 @@ func TestModelsRerankIsOptional(t *testing.T) {
 	for name, tc := range cases {
 		cfg, clients, supplier := configured(t)
 		tc.mut(&cfg)
+
+		if cfg.EngineMode == config.EngineManaged {
+			// Managed mode asks what the running process holds, and under Auto that number is
+			// nowhere in the settings. This case is about a reranker that is not on disk, so the
+			// router is simply said to be up — on the port the cache is told to ask for.
+			clients.servePort = func() int { return 41234 }
+		}
 
 		m, err := modelSource(clients, supplier, installed(tc.reranker))(cfg)
 		if err != nil {

@@ -22,11 +22,15 @@ import (
 //
 // The probe embedder is resolved here rather than once at boot because it carries
 // the model name and vector length the vectors are keyed on.
+//
+// The port comes from the client cache, because that is what already owns "where a request
+// goes": a second copy of it here would be a second answer to that question, and under Auto
+// the number can move between two lines of the same function.
 func modelSource(clients *clientCache, embedders *index.Supplier, rerankerInstalled func() bool) app.ModelsFor {
 	return func(cfg config.Config) (app.Models, error) {
 		// Resolved once, so the names and the URLs cannot come from different modes
 		// (ADR 0020).
-		cfg = cfg.Served()
+		cfg = cfg.Served(clients.port())
 
 		client, err := clients.For(cfg)
 		if err != nil {
