@@ -4,9 +4,13 @@
 #
 # No tests run here. They run locally, before the tag is cut — `make check`,
 # and `make e2e` / `make ui` where the change reaches that far. What this
-# workflow does with a commit is compile it for two platforms and nothing more,
-# so nothing in it can fail for a reason the local gates would not already have
-# caught.
+# workflow does with a commit is build the UI and compile it for two platforms,
+# so the only surprises left here are the ones a single machine cannot produce:
+# the Windows leg, and a tag whose UI does not build from clean.
+#
+# It builds from clean on purpose. web/dist is a build artifact and not a
+# source file, so a released asset holds the UI at the tag rather than whatever
+# minified bundle someone last remembered to commit.
 name: release
 
 on:
@@ -42,6 +46,25 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # The UI is a build input: web/embed.go embeds web/dist, which is not in
+      # git, so the asset does not exist until Vite has run. Node 22 because
+      # that is the oldest release Vite 8 supports, and the tag is the version
+      # the release page will offer to the world.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: build the UI
+        run: |
+          set -eu
+          npm --prefix web ci
+          npm --prefix web run build
+          # go:embed would fail on its own, but with a pattern error that reads
+          # like a missing file rather than a missing build. This says which.
+          test -f web/dist/index.html
+
       # `go build` and not `make`, on both legs: a Windows runner does not
       # promise make on PATH, and one command line that works on either is one
       # less thing that can differ between the two files being published.
@@ -50,11 +73,6 @@ jobs:
       # static, so the binary never asks a stranger's distribution for a glibc
       # it may not have. -s -w drops the symbol and DWARF tables, 22 MB of
       # binary into 14 MB of download.
-      #
-      # The web UI is not built either. web/dist is committed and go:embed
-      # reads the tree, so an asset holds exactly the UI in its own tag — and
-      # that is also why keeping that UI current is a local-commit
-      # responsibility. It is the one thing this workflow cannot see.
       - name: build
         env:
           CGO_ENABLED: '0'

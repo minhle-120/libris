@@ -5,13 +5,21 @@
 *.test
 cover.out
 
+# working notes and tickets that are not the repo's own documentation
+/.scratch/
+
 # local data (never commit)
 /data/
 *.db
 *.db-wal
 *.db-shm
 
-# node (web/dist IS committed — it is embedded into the binary)
+# The web build output is embedded into the binary by web/embed.go, so it has to
+# exist before `go build` — but it is a build artifact (`make web`, or `make
+# build` which runs it first), never a source file. Committing it meant every UI
+# change arrived in the repo as an unreadable diff of minified JavaScript.
+/web/dist/
+
 node_modules/
 
 # editors / OS
