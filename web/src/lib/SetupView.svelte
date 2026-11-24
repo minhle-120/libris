@@ -14,7 +14,7 @@
     startEngineServe,
   } from './api';
   import type { EngineView, ModelsView, DeviceReport, Device } from './types';
-  import type { Setup } from './setup';
+  import { DEVICE_ACK, type Setup } from './setup';
   import { remaining } from './setup';
   import { formatBytes } from './format';
 
@@ -54,8 +54,12 @@ let busy = $state('');
       key: 'device' as const,
       title: 'Inference device',
       done: setup.device,
+      // "Two available" is not the same sentence as "not chosen yet", and the row is the only
+      // place the difference shows before the step is open.
       detail: devices?.devices.length
-        ? `${devices.devices.length} available`
+        ? setup.device
+          ? `${devices.devices.length} available`
+          : 'not chosen'
         : setup.engine
           ? 'asking the engine'
           : 'waiting for the engine',
@@ -102,6 +106,14 @@ let busy = $state('');
     // they were: a draft the page keeps is a second copy of a value with an owner (§6).
     const current = await getSettings();
     await putSettings({ ...current, engineDevice: device ? device.name : '' });
+    // A blank setting means libris picks, so choosing that leaves nothing behind to show the
+    // step was answered — without this the wizard would ask again after every reload.
+    try {
+      localStorage.setItem(DEVICE_ACK, '1');
+    } catch {
+      // Private mode, a locked profile: the step asks again next time, which is the older and
+      // gentler bug rather than a reason to fail the save that just worked.
+    }
   }
 </script>
 

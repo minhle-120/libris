@@ -25,8 +25,42 @@ const code = await withBrowser(
         rows: s ? s.querySelectorAll('.steps li').length : 0,
         active: s ? s.querySelector('.steps li.active .name')?.textContent ?? '' : '',
         buttons: s ? [...s.querySelectorAll('button')].map((b) => b.textContent.trim()).join('|') : '',
+        slots: s ? [...s.querySelectorAll('.devices .slot')].map((e) => e.textContent.trim()).join('|') : '',
       };
     `);
+
+    if (process.env.EXPECT_STEP) {
+      // A machine with an engine on disk and no device chosen: the step the last version of
+      // this screen could never show, because "the machine reported a device" was true before
+      // anyone saw the row.
+      checks.check(
+        `it stops on the ${process.env.EXPECT_STEP} step`,
+        seen.active === process.env.EXPECT_STEP,
+        seen.active,
+      );
+      if (process.env.EXPECT_STEP === 'Inference device') {
+        checks.check(
+          "and it offers the slots the engine itself reported",
+          /(^|\|)(Vulkan|CUDA)\d/.test(seen.slots),
+          seen.slots,
+        );
+        if (process.env.CLICK === '1') {
+          // Choosing has to let go of the step, or the fix only moved where the wall is.
+          await ui.eval(`document.querySelector('.devices button').click(); return true`);
+          await ui.settle(2500);
+          const after = await ui.eval(
+            `return document.querySelector('.steps li.active .name')?.textContent ?? 'gone'`,
+          );
+          // Either the next step, or the whole screen gone: on a machine that only lacked a device
+  // choice, choosing one is the last thing standing between it and a running Libris.
+  checks.check(
+    'choosing one lets go of the step',
+    after === 'Models' || after === 'gone',
+    after,
+  );
+        }
+      }
+    }
 
     if (ready) {
       checks.check("a ready machine goes straight in", !seen.wizard && seen.shell, JSON.stringify(seen));
@@ -35,8 +69,10 @@ const code = await withBrowser(
       checks.check("the app behind it is not mounted", !seen.shell, JSON.stringify(seen));
       checks.check("it says what it is", seen.words);
       checks.check("three steps are listed", seen.rows === 3, String(seen.rows));
-      checks.check("it opens on the engine step", seen.active === "Engine", seen.active);
-      checks.check("it offers the engine download", /Download llama\.cpp/.test(seen.buttons), seen.buttons);
+      if (!process.env.EXPECT_STEP) {
+        checks.check("it opens on the engine step", seen.active === "Engine", seen.active);
+        checks.check("it offers the engine download", /Download llama\.cpp/.test(seen.buttons), seen.buttons);
+      }
     }
 
     checks.check(
