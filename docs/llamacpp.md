@@ -142,7 +142,30 @@ a router that refuses to start, and the only place it says so is its own log.
 `pooling` is **absent on purpose**: `--pooling`'s help says “use model default if
 unspecified” (`common/arg.cpp:2286`), and forcing `mean` onto an embedder whose default is
 something else quietly changes the vector space. It was in the first version of the preset on
-the strength of a different project's flag list.
+the strength of a different project's flag list. Measured 2026-11-23 with the catalogue's own
+embedder through a b12651 router: with and without `pooling = mean`, `POST /v1/embeddings`
+returns one row of 768 with an identical digest — the file's default is already mean, so the
+key would have been an override of a correct answer by an assumed one.
+
+### The preset file, and what libris writes into it
+
+`<data>/presets/libris.ini` is the model server's configuration and the only place its
+arguments exist (ADR 0022; ADR 0023 moved it out of `bin/`, which Remove deletes). `engine.Preset` constructs it; the server reads it; libris
+re-reads it before every start and rewrites it only when one of the three things it derives
+has moved — which models are complete, where their files are, which device to offload to. A
+number edited by hand in between survives, which is the point of it being a file.
+
+What is in it, and why each line is there rather than somewhere else:
+
+| key | where it came from |
+|---|---|
+| `device` | the one value that varies by machine, and it is not free-form: see the `--list-devices` table below. Written as `none` when the build reports no GPU, absent when libris could not ask |
+| `ctx-size` 32768 / 4096 / 2048 | per architecture: what the chat template and the research loop's history want; the embedder's own training limit; a reranker's. `-fit` does **not** shrink a `ctx-size` that was set — it adjusts arguments left unset — so the number is a request libris is making, and 32768 on the chat model was confirmed to load (`GET /models` reports `n_ctx` 32768 for `libris-chat`) rather than assumed |
+| `temp 0.1`, `top-k 50`, `top-p 1.0`, `min-p 0.0`, `repeat-penalty 1.1` on the chat model | ADR 0006 puts sampling on the server; this file is the server. Cold enough that a research turn answers with a tool call instead of inventing a fifth search, open enough to still write an answer |
+| `cache-ram` 2048 / 0 | the chat model holds a KV cache in host memory because reloading its 32k context is the slowest thing a question can pay for; the two small models hold none, because an embedding pass does not reuse a cache. `--cache-ram`'s help: “0 for decision models, -1 no limit, 0 disable” |
+| `backend-sampling = true` | sampling in the backend rather than in Go (`common/arg.cpp`, “enable backend sampling (experimental)”). Written because it was measured on, and marked experimental here so the next reader knows what they are turning off |
+| `reasoning-preserve = true` | its default is already “enabled”, and it is written out anyway: the chat model is a reasoning model, the synthesis call is handed the real history, and whether 250–900 characters of thinking survive into the next turn is a fact about answers someone may eventually ask about |
+| `jinja`, `flash-attn on`, `no-warmup`, `parallel 1`, `cache-type-k/v = q8_0`, `fit on` | the local-notebook defaults: do not guess a chat template, do not burn the first question warming up, do not run two slots on a laptop, halve the KV cache's memory, and let llama.cpp fit what libris did not name |
 
 The router answers `GET /models` before any model has finished loading, which is what makes a
 readiness probe short and honest: a model that will not load is a fact about that model, not a
@@ -182,6 +205,25 @@ GitHub's, stdout and stderr captured separately — and read from
 
 The `(none)` shape is read from the source, not run: the machine this was checked on has two
 adapters, and the CPU-only build that would print it was not downloaded.
+
+### The slot names are the only device names, and a wrong one is fatal
+
+The same binary asked twice, on the laptop this was written on:
+
+```
+$ llama-b12651-bin-ubuntu-vulkan-x64/llama-server --list-devices   # what libris downloads
+  Vulkan0: AMD Radeon 660M (RADV REMBRANDT) (16142 MiB, 14914 MiB free)
+  Vulkan1: NVIDIA GeForce RTX 3050 Ti Laptop GPU (4096 MiB, 3764 MiB free)
+
+$ ~/llama.cpp/build/bin/llama-server --list-devices                # a self-built CUDA engine
+  CUDA0: NVIDIA GeForce RTX 3050 Ti Laptop GPU (3790 MiB, 3676 MiB free)
+```
+
+| | |
+|---|---|
+| **`--device` accepts nothing else**, and a name the build does not know is not ignored | `llama-server --device CUDA0 …` on the Vulkan build: `error while handling argument "--device": invalid device: CUDA0`, then exit. So a preset copied from someone's CUDA machine is a model server that never starts, which is why `engineDevice` is a picker over this list and not a text field |
+| order is ggml's, not alphabetical | the 16 GiB shared Radeon is `Vulkan0` here and the 4 GiB NVIDIA is `Vulkan1`, so “the first device” is a real choice with a consequence, and the report says which one it took |
+| `--device none` means do not offload | it is llama.cpp's own word for the CPU, and `CPU` is not a device name: the CPU row `deviceinfo` adds to the report describes the machine, it is not something to pass back |
 
 `TestDetectAgainstARealEngine` runs the flag for real and is skipped unless
 `LIBRIS_ENGINE_BIN` names an installed `llama-server`.

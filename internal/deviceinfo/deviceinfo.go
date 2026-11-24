@@ -210,8 +210,24 @@ func warn(dev []Device) []string {
 		for _, d := range gpus {
 			names = append(names, d.Name)
 		}
+		// It used to refuse to choose, which was honest and useless: nothing downstream read
+		// the refusal, so the effect was that llama.cpp chose and this page declined to say
+		// which. Now the report states the pick it makes, because the pick is knowable —
+		// DefaultDevice is the rule the preset is written with — and because a person with a
+		// 4 GiB card and a 16 GiB one needs to know which is being used, not that the app
+		// washed its hands of it.
+		def := defaultDevice(gpus)
+		if def == DeviceNone {
+			// Not "it will not choose": it chose the CPU, and the reason is that the rule it
+			// chose by only knows the backend libris downloads. A person who built llama.cpp
+			// with CUDA themselves sees this sentence and knows to name CUDA0.
+			w = append(w, "Several graphics adapters were found ("+strings.Join(names, ", ")+
+				"), but none of them is a device the build libris downloads offloads to by default, "+
+				"so it will run on the CPU until the settings page names one.")
+			break
+		}
 		w = append(w, "Several graphics adapters were found ("+strings.Join(names, ", ")+
-			"). Libris will not guess which one to run on.")
+			"). Libris runs on "+def+" unless the settings page names another.")
 	}
 
 	for _, d := range gpus {
@@ -220,6 +236,38 @@ func warn(dev []Device) []string {
 		}
 	}
 	return w
+}
+
+// DeviceNone is llama.cpp's own word for "do not offload" (--device none, common/arg.cpp),
+// which is the only device string that means CPU. It is not "CPU": a CPU row belongs in the
+// report (this package states it, because --list-devices filters CPU devices out), and
+// naming it to ggml is an argument error.
+const DeviceNone = "none"
+
+// DefaultDevice is the slot libris runs on when nobody has chosen one: the first Vulkan
+// device the engine reported, or DeviceNone when it reported no Vulkan device at all.
+//
+// Vulkan because it is the backend libris downloads (ADR 0018), and a name taken from this
+// report is the only thing that build accepts — "CUDA0" on the build libris installs is a
+// hard parse error, and llama.cpp exits rather than falling back to something that works.
+// Falling back to DeviceNone rather than to "no device key" is deliberate: a build that
+// listed no Vulkan device has no GPU it can use, and CPU is the honest answer rather than a
+// second guess.
+func (r Report) DefaultDevice() string { return defaultDevice(r.Devices) }
+
+func defaultDevice(dev []Device) string {
+	for _, d := range dev {
+		if d.Kind == CPU {
+			continue
+		}
+		// The slot name is what --device takes, and the Vulkan backend's is always Vulkan<n>
+		// (ggml-vulkan registers it with that prefix); the description is the card's marketing
+		// words and is never a device name.
+		if strings.HasPrefix(d.Name, "Vulkan") {
+			return d.Name
+		}
+	}
+	return DeviceNone
 }
 
 // oneLine keeps a subprocess's complaint inside one sentence: --list-devices writes ggml's

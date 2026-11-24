@@ -12,6 +12,8 @@ export type SettingField = {
 	min?: number;
 	max?: number;
 	readonly?: boolean;
+	/** Saved, validated and generated like the rest; rendered by a hand-written control elsewhere. */
+	hidden?: boolean;
 	options?: SettingOption[];
 	/** Which engine mode this field means anything in; absent means both. */
 	mode?: 'managed' | 'external';
@@ -21,6 +23,7 @@ export type SettingGroup = { id: string; label: string; help: string; fields: Se
 export type Settings = {
 	engineMode: 'managed' | 'external';
 	enginePort: number;
+	engineDevice: string;
 	chatURL: string;
 	embedURL: string;
 	rerankURL: string;
@@ -72,6 +75,14 @@ export const settingGroups: SettingGroup[] = [
 				"kind": "number",
 				"min": 1024,
 				"max": 65535,
+				"mode": "managed"
+			},
+			{
+				"key": "engineDevice",
+				"label": "Run models on",
+				"help": "Which device llama.cpp offloads to. The choices are what the installed engine reports; Auto uses the first device that build can use, which is CPU only when the engine found no GPU.",
+				"kind": "text",
+				"hidden": true,
 				"mode": "managed"
 			},
 			{
@@ -270,6 +281,7 @@ export function defaultSettings(): Settings {
 	return {
 		engineMode: "managed",
 		enginePort: 8080,
+		engineDevice: "",
 		chatURL: "http://127.0.0.1:8081",
 		embedURL: "http://127.0.0.1:8082",
 		rerankURL: "http://127.0.0.1:8083",

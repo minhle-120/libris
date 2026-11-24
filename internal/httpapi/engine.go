@@ -206,7 +206,9 @@ func (s *Server) handleEngineServe(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case errors.Is(err, app.ErrEngineMode), errors.Is(err, app.ErrInvalid):
 			writeError(w, http.StatusUnprocessableEntity, err.Error())
-		case errors.Is(err, app.ErrBusy):
+		case errors.Is(err, app.ErrEngineRunning), errors.Is(err, app.ErrEngineStart):
+			// Both are "the world is not in the state this request assumed", which is what 409
+			// means, and both carry a sentence about the port or the model to fix.
 			writeError(w, http.StatusConflict, err.Error())
 		default:
 			s.fail(w, "engine", err)

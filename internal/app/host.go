@@ -19,6 +19,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -101,7 +102,12 @@ type HostOptions struct {
 	// managed mode then says so rather than pretending.
 	Serve     Server
 	ModelsDir string
-	Downloads ModelFetcher
+	// PresetPath is the file libris constructs for llama-server to read: the model servers'
+	// configuration, kept in the data directory rather than beside the binary, because Remove
+	// deletes the binary and must not delete what a person hand-tuned (ADR 0022). The format
+	// and the file name are engine's; the app only says where libris keeps its files.
+	PresetPath string
+	Downloads  ModelFetcher
 
 	// Probe asks the installed engine what it can run on. It is a field so the caching around it can be tested on a
 	// machine with neither a GPU nor permission to run anything; nil means the real one.
@@ -109,15 +115,16 @@ type HostOptions struct {
 }
 
 type Host struct {
-	engine    EngineManager
-	settings  Settings
-	devCache  string
-	serve     Server
-	fetch     ModelFetcher
-	modelsDir string
-	probe     func(context.Context, deviceinfo.Options) (deviceinfo.Report, error)
-	log       *slog.Logger
-	now       func() time.Time
+	engine     EngineManager
+	settings   Settings
+	devCache   string
+	serve      Server
+	presetPath string
+	fetch      ModelFetcher
+	modelsDir  string
+	probe      func(context.Context, deviceinfo.Options) (deviceinfo.Report, error)
+	log        *slog.Logger
+	now        func() time.Time
 
 	// The update check is a background act, so its state is process state: one in flight, and
 	// the sentence from the last one that failed. Guarded because the page can be open in two
@@ -147,15 +154,16 @@ func NewHost(opts HostOptions) (*Host, error) {
 	}
 
 	return &Host{
-		engine:    opts.Engine,
-		settings:  opts.Settings,
-		devCache:  opts.DeviceCache,
-		serve:     opts.Serve,
-		fetch:     opts.Downloads,
-		modelsDir: opts.ModelsDir,
-		probe:     probe,
-		log:       log,
-		now:       func() time.Time { return time.Now().UTC() },
+		engine:     opts.Engine,
+		settings:   opts.Settings,
+		devCache:   opts.DeviceCache,
+		serve:      opts.Serve,
+		fetch:      opts.Downloads,
+		modelsDir:  opts.ModelsDir,
+		presetPath: opts.PresetPath,
+		probe:      probe,
+		log:        log,
+		now:        func() time.Time { return time.Now().UTC() },
 	}, nil
 }
 
@@ -693,6 +701,19 @@ func (h *Host) ModelRemove(id string) (*ModelsView, error) {
 // because the fix is a setting, not a retry.
 var ErrEngineMode = errors.New("app: libris is set to talk to servers you run yourself")
 
+// ErrEngineRunning is a start asked for while libris's own server is already up — which the
+// autostart on boot makes an everyday event rather than a race. It is deliberately not ErrBusy:
+// that sentence is about the ingest queue, and answering "ingest queue is full" to a person who
+// pressed Start on a server they can see is running tells them to wait for something that was
+// never running.
+var ErrEngineRunning = errors.New("app: the model server is already running")
+
+// ErrEngineStart is a start that got as far as llama.cpp and was refused: somebody else holds
+// the port, or a model would not load. The sentence a person can act on is already in
+// Serving.Error, taken from the server's own log; this sentinel only says which status code that
+// sentence deserves.
+var ErrEngineStart = errors.New("app: the model server did not start")
+
 // EngineServe starts libris's own llama-server: one router process, every model on disk, one
 // port (ADR 0020). It blocks until the router answers or the wait runs out, because a page
 // that said "running" about a process that dies while loading a GGUF would be a page that
@@ -716,24 +737,71 @@ func (h *Host) EngineServeStart(ctx context.Context) (engine.Serving, error) {
 			ErrInvalid, h.modelsDir)
 	}
 
+	device, why := h.presetDevice(ctx, cfg)
+	if why != "" {
+		h.log.Warn("engine: not using the device that was asked for", "why", why)
+	}
+
 	srv, err := h.serve.Start(ctx, engine.ServeOptions{
 		Bin:             inst.Path,
 		Port:            cfg.EnginePort,
-		Preset:          filepath.Join(h.engine.Dir(), "presets", "libris.ini"),
+		Preset:          h.presetPath,
 		Log:             filepath.Join(h.engine.Dir(), "logs", "server.log"),
 		MemoryMarginMiB: memoryMarginMiB,
+		Device:          device,
 	}, specs)
 	if err != nil {
 		h.log.Warn("engine serve", "err", err)
-		// A port conflict and a dead model are both the user's to fix, and both are
-		// sentences; only an unhandled one should read as a bug.
-		if errors.Is(err, engine.ErrAlreadyServing) || errors.Is(err, engine.ErrPortTaken) ||
-			errors.Is(err, context.DeadlineExceeded) {
-			return srv, fmt.Errorf("%w: %s", ErrBusy, srv.Error)
+		// A port somebody else holds, a model that would not load, and a server that is already
+		// up are all the user's to fix, and each is a sentence; only an unhandled one should read
+		// as a bug.
+		if errors.Is(err, engine.ErrAlreadyServing) {
+			return srv, fmt.Errorf("%w (port %d) — stop it first, or move it to another port",
+				ErrEngineRunning, cfg.EnginePort)
+		}
+		if errors.Is(err, engine.ErrPortTaken) || errors.Is(err, context.DeadlineExceeded) {
+			return srv, fmt.Errorf("%w: %s", ErrEngineStart, srv.Error)
 		}
 		return srv, fmt.Errorf("%w: %s", ErrInvalid, srv.Error)
 	}
 	return srv, nil
+}
+
+// presetDevice is the --device value the preset gets, and the reason it is not the one the
+// setting names, if there is one.
+//
+// A saved name is honoured only while the installed engine still reports it. Device slots are
+// not stable facts: an eGPU goes unplugged, a re-downloaded build renumbers its backends, and
+// llama.cpp does not degrade gracefully about a name it does not know — `invalid device: CUDA0`
+// is an argument error and the server exits. So a name that has gone away falls back to what
+// this build can use, loudly in the log, rather than to a preset that cannot start.
+//
+// "none" is llama.cpp's own word for "do not offload", and it is never a reported slot name, so
+// it passes through without being looked up.
+func (h *Host) presetDevice(ctx context.Context, cfg config.Config) (device, why string) {
+	want := strings.TrimSpace(cfg.EngineDevice)
+	if want == deviceinfo.DeviceNone {
+		return deviceinfo.DeviceNone, ""
+	}
+
+	rep, err := h.Devices(ctx, false)
+	if err != nil {
+		// Nothing was asked, so nothing is known about what this build can use. Writing a
+		// guess here would be worse than writing nothing: an absent device key means llama.cpp
+		// decides, which is what it would do on a machine libris cannot interrogate anyway.
+		return "", "the machine could not be asked what it can run on, so no device was set"
+	}
+
+	if want == "" {
+		return rep.DefaultDevice(), ""
+	}
+	for _, d := range rep.Devices {
+		if strings.EqualFold(d.Name, want) {
+			return d.Name, ""
+		}
+	}
+	def := rep.DefaultDevice()
+	return def, fmt.Sprintf("%q is not among the devices the installed engine reports; running on %s instead", want, def)
 }
 
 // EngineAutostart brings the router up on boot when managed mode asked for a server and one

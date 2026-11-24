@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -185,12 +186,16 @@ func newTestHostWith(t *testing.T, eng EngineManager, cfg config.Config, extra H
 	if extra.ModelsDir == "" {
 		extra.ModelsDir = filepath.Join(dir, "models")
 	}
+	if extra.PresetPath == "" {
+		extra.PresetPath = filepath.Join(dir, "presets", "libris.ini")
+	}
 	h, err := NewHost(HostOptions{
 		Engine:      eng,
 		Settings:    &hostSettings{cfg: cfg},
 		Serve:       extra.Serve,
 		Downloads:   extra.Downloads,
 		ModelsDir:   extra.ModelsDir,
+		PresetPath:  extra.PresetPath,
 		DeviceCache: cache,
 		Probe: func(context.Context, deviceinfo.Options) (deviceinfo.Report, error) {
 			return deviceinfo.Report{
@@ -754,14 +759,18 @@ func (f *fakeFetch) seen() (started []string, stopped int, discarded []string) {
 
 // fakeServer is libris's own llama-server, without the process.
 type fakeServer struct {
-	status  engine.Serving
-	starts  int
-	specs   []engine.Model
+	status engine.Serving
+	starts int
+	specs  []engine.Model
+	// opts is the last thing the app asked to run with. The path of the preset file and the
+	// device it carries are facts the page shows, so they are worth asserting.
+	opts    engine.ServeOptions
 	stopErr error
 }
 
-func (s *fakeServer) Start(_ context.Context, _ engine.ServeOptions, mods []engine.Model) (engine.Serving, error) {
+func (s *fakeServer) Start(_ context.Context, o engine.ServeOptions, mods []engine.Model) (engine.Serving, error) {
 	s.starts++
+	s.opts = o
 	s.specs = mods
 	return s.status, nil
 }
@@ -978,5 +987,161 @@ func TestModelCatalogSaysWhenTheServerMustBeRestarted(t *testing.T) {
 	srv.status.Models = []string{string(e.Role.Alias())}
 	if h.ModelCatalog().NeedsRestart {
 		t.Error("every complete model loaded, and it still wants a restart")
+	}
+}
+
+// The device a model server runs on is a slot name from the installed build's own
+// --list-devices, and a name that build does not know is not a fallback — llama.cpp answers
+// `invalid device: CUDA0` and exits. So a saved name is honoured only while it still exists,
+// and the fallback is stated in the log rather than silently taken.
+func TestPresetDeviceHonoursASavedNameOnlyWhileItExists(t *testing.T) {
+	twoGPUs := deviceinfo.Report{Devices: []deviceinfo.Device{
+		{Kind: "amd", Name: "Vulkan0", Description: "AMD Radeon 660M", Source: "llama-server"},
+		{Kind: "nvidia", Name: "Vulkan1", Description: "NVIDIA GeForce RTX 3050 Ti", Source: "llama-server"},
+	}}
+
+	cases := []struct {
+		name     string
+		saved    string
+		report   deviceinfo.Report
+		want     string
+		wantWhy  bool
+		noProbe  bool
+		probeErr bool
+	}{
+		{name: "blank takes the first device the build can use", report: twoGPUs, want: "Vulkan0"},
+		{name: "the case a hand-edited preset uses is accepted", saved: "vulkan1", report: twoGPUs, want: "Vulkan1"},
+		{
+			name:  "a device that has gone away falls back, and says so",
+			saved: "Vulkan7", report: twoGPUs, want: "Vulkan0", wantWhy: true,
+		},
+		{
+			name:  "CPU-only is llama.cpp's own word and needs no lookup",
+			saved: deviceinfo.DeviceNone, report: twoGPUs, want: deviceinfo.DeviceNone, noProbe: true,
+		},
+		{
+			name: "no Vulkan device is the CPU", saved: "",
+			report: deviceinfo.Report{Devices: []deviceinfo.Device{{Kind: "nvidia", Name: "CUDA0"}}},
+			want:   deviceinfo.DeviceNone,
+		},
+		{
+			name: "a machine that cannot be asked gets no device key at all", saved: "Vulkan0",
+			report: twoGPUs, want: "", wantWhy: true, probeErr: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.Default()
+			cfg.EngineMode = config.EngineManaged
+			cfg.EngineDevice = tc.saved
+			h, _ := newTestHost(t, &fakeEngine{}, cfg)
+
+			probed := 0
+			h.probe = func(context.Context, deviceinfo.Options) (deviceinfo.Report, error) {
+				probed++
+				if tc.probeErr {
+					return deviceinfo.Report{}, errors.New("no engine to ask")
+				}
+				return tc.report, nil
+			}
+
+			got, why := h.presetDevice(context.Background(), h.settings.Get())
+			if got != tc.want {
+				t.Errorf("device = %q, want %q", got, tc.want)
+			}
+			if (why != "") != tc.wantWhy {
+				t.Errorf("why = %q, want a reason: %v", why, tc.wantWhy)
+			}
+			if tc.noProbe && probed != 0 {
+				t.Errorf("looked up a device name %d times when the answer is not a lookup", probed)
+			}
+		})
+	}
+}
+
+// TestPresetIsWrittenWhereItWasToldAndNotBesideTheEngine pins where the model servers'
+// configuration lands.
+//
+// It used to live in <data>/bin/presets, beside the llama-server that reads it, which read as
+// tidy until "Remove" was pressed: that button deletes the engine directory, and with it the
+// one file where a person's hand-edited cache-ram or ctx-size existed (ADR 0022 says the file
+// *is* the configuration, so deleting it with the binary deletes a fact the app still
+// believes). The app is told the path now, and the engine directory is a sibling of the data
+// directory below — so a regression back to filepath.Join(engine.Dir(), "presets") cannot pass
+// by both happening to sit under one tree.
+func TestPresetIsWrittenWhereItWasToldAndNotBesideTheEngine(t *testing.T) {
+	dir := t.TempDir()
+	engDir := filepath.Join(dir, "bin") // where Remove deletes to
+	modelsDir := filepath.Join(dir, "models")
+	presetPath := filepath.Join(dir, "presets", "libris.ini")
+
+	// One complete model on disk, or the start refuses for a better reason than this tests.
+	// "Complete" means each part is exactly the size the manifest says, so these are sparse:
+	// truncate costs no blocks and no time, and the app's only question here is whether the
+	// sizes agree. The hash sibling is what a download leaves behind, and a model that has not
+	// been hashed is a model the router is not started for.
+	md := filepath.Join(modelsDir, "lfm3-vl-2b")
+	if err := os.MkdirAll(md, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []struct {
+		name  string
+		bytes int64
+	}{
+		{"LFM3-VL-2B-QAD-Q4_0.gguf", 1_049_615_648},
+		{"mmproj-LFM3-VL-2B-BF16.gguf", 378_996_032},
+	} {
+		path := filepath.Join(md, p.name)
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o644)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Sparse: the size is the fact the app checks, and it costs no blocks.
+		if err := f.Truncate(p.bytes); err != nil {
+			f.Close()
+			t.Fatal(err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := models.MarkVerified(path, "0000000000000000000000000000000000000000000000000000000000000000"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	srv := &fakeServer{status: engine.Serving{Running: true, Port: 8080}}
+	eng := &fakeEngine{
+		installed: &engine.Installed{Tag: "b1", Path: filepath.Join(engDir, "b1", "llama-server")},
+		dir:       engDir,
+	}
+	h, _ := newTestHostWith(t, eng, config.Config{EngineMode: config.EngineManaged, EnginePort: 8080}, HostOptions{
+		Serve:      srv,
+		ModelsDir:  modelsDir,
+		PresetPath: presetPath,
+	})
+
+	if _, err := h.EngineServeStart(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if srv.opts.Preset != presetPath {
+		t.Errorf("Preset = %q, want the path the app was given (%q)", srv.opts.Preset, presetPath)
+	}
+	if strings.HasPrefix(srv.opts.Preset, engDir+string(filepath.Separator)) {
+		t.Errorf("the preset %q is under the engine directory %q — Remove deletes that tree",
+			srv.opts.Preset, engDir)
+	}
+}
+
+// TestPresetPathIsUnderTheDataDirectory checks the locator itself: cmd computes it from the
+// -data flag, and nothing else in this repo would notice a wrong answer until a button
+// deleted a file nobody expected to lose.
+func TestPresetPathIsUnderTheDataDirectory(t *testing.T) {
+	got := engine.PresetPath("/data/libris", engine.RouterID)
+	if want := filepath.Join("/data/libris", "presets", "libris.ini"); got != want {
+		t.Errorf("PresetPath = %q, want %q", got, want)
+	}
+	if strings.HasPrefix(got, filepath.Join("/data/libris", "bin")) {
+		t.Errorf("%q is under bin/, which the engine owns and Remove deletes", got)
 	}
 }

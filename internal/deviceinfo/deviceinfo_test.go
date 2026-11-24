@@ -28,6 +28,15 @@ const engineTwoGPUs = `Available devices:
   HIP0: AMD Radeon RX 6600 (8192 MiB, 7100 MiB free)
 `
 
+// engineVulkanTwo is verbatim what the build libris downloads printed with --list-devices on
+// the machine this was written on: the 16 GB shared Radeon first, the 4 GB NVIDIA second. The
+// order is ggml's, not alphabetical, and it is why the default picks Vulkan0 rather than the
+// card a person might expect to be named first.
+const engineVulkanTwo = `Available devices:
+  Vulkan0: AMD Radeon 660M (RADV REMBRANDT) (16142 MiB, 14914 MiB free)
+  Vulkan1: NVIDIA GeForce RTX 3050 Ti Laptop GPU (4096 MiB, 3764 MiB free)
+`
+
 // engineOneCardTwoBackends is one physical card through two loaded backends. The row is
 // still one card, and a report that says otherwise tells a user to choose between a GPU and
 // itself.
@@ -145,15 +154,42 @@ func TestDetectNoneIsAnAnswerNotAFailure(t *testing.T) {
 	}
 }
 
-func TestDetectTwoCardsRefuseToChoose(t *testing.T) {
-	rep := detect(&machine{out: engineTwoGPUs}, "/bin/llama-server", "b1")
+// The two-Vulkan case is this repository's own machine, printed by the build libris downloads.
+// The report used to refuse to choose, which was honest and useless: nothing downstream read the
+// refusal, so llama.cpp chose anyway and the page declined to say which.
+func TestDetectTwoCardsNamesTheOneItWillUse(t *testing.T) {
+	rep := detect(&machine{out: engineVulkanTwo}, "/bin/llama-server", "b1")
 
 	if len(gpus(rep)) != 2 {
 		t.Fatalf("both adapters must be reported: %+v", gpus(rep))
 	}
+	if got := rep.DefaultDevice(); got != "Vulkan0" {
+		t.Errorf("the first Vulkan device is the default, got %q", got)
+	}
 	joined := strings.Join(rep.Warnings, " | ")
-	if !strings.Contains(joined, "will not guess") {
-		t.Errorf("want a warning that refuses to pick a device, got %q", rep.Warnings)
+	if !strings.Contains(joined, "Libris runs on Vulkan0") {
+		t.Errorf("the warning must name the device it picked, got %q", rep.Warnings)
+	}
+}
+
+// A report with no Vulkan row is a build libris did not download, and the default is then the
+// CPU — stated as such rather than left as an empty pick. The device picker still offers these
+// names, because a person who built llama.cpp with CUDA themselves can name CUDA0.
+func TestDefaultDeviceWithoutVulkanIsTheCPU(t *testing.T) {
+	rep := detect(&machine{out: engineTwoGPUs}, "/bin/llama-server", "b1")
+
+	if got := rep.DefaultDevice(); got != DeviceNone {
+		t.Errorf("no Vulkan device means do not offload; got %q", got)
+	}
+	joined := strings.Join(rep.Warnings, " | ")
+	if !strings.Contains(joined, "run on the CPU") {
+		t.Errorf("want a sentence saying the CPU is what it will use, got %q", rep.Warnings)
+	}
+
+	// A box with no GPU at all says the same thing, from the Go-stated CPU row alone.
+	only := Report{Devices: []Device{cpuDevice()}}
+	if got := only.DefaultDevice(); got != DeviceNone {
+		t.Errorf("%q", got)
 	}
 }
 

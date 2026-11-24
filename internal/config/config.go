@@ -91,6 +91,18 @@ type Config struct {
 	// rather than a URL because "which address" is not a choice when the process is ours.
 	EnginePort int `key:"enginePort" group:"servers" label:"Server port" help:"The loopback port libris runs llama.cpp on. Chat, embeddings and reranking share it." min:"1024" max:"65535" mode:"managed"`
 
+	// Which device llama.cpp offloads to, written into the preset as --device. A setting
+	// because libris is the thing that writes it (ADR 0011), and a string rather than an enum
+	// because the legal values are not a list this program can know: they are the slot names
+	// the installed build prints with --list-devices, which differ per machine and per build —
+	// "Vulkan0" on the build libris downloads, "CUDA0" on one a person built themselves — and a
+	// name that build does not know is an argument error, not a fallback. Blank means libris
+	// picks the first device that build can use (deviceinfo.Report.DefaultDevice).
+	//
+	// noview: the control is the picker beside the device report in EnginePanel, because a text
+	// field would ask someone to type a name they can only learn by running a command.
+	EngineDevice string `key:"engineDevice" group:"servers" label:"Run models on" help:"Which device llama.cpp offloads to. The choices are what the installed engine reports; Auto uses the first device that build can use, which is CPU only when the engine found no GPU." mode:"managed" noview:"true"`
+
 	ChatURL        string `key:"chatURL" group:"servers" label:"Chat server" help:"Text, image and audio input." kind:"url" required:"true" mode:"external"`
 	EmbedURL       string `key:"embedURL" group:"servers" label:"Embedding server" help:"Multimodal embeddings for text, page images and audio." kind:"url" required:"true" mode:"external"`
 	RerankURL      string `key:"rerankURL" group:"servers" label:"Rerank server" help:"Optional. Degrades to vector order when unset." kind:"url" mode:"external"`

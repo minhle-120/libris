@@ -28,8 +28,12 @@
   // became confusing.
   const mode = $derived(settings.engineMode);
 
-  function shown(field: { mode?: 'managed' | 'external' }): boolean {
-    return !field.mode || field.mode === mode;
+  function shown(field: { mode?: 'managed' | 'external'; hidden?: boolean }): boolean {
+    // hidden is `noview:"true"` in internal/config: the setting is defined, saved, validated
+    // and generated exactly like the others, and its control lives beside the facts it needs
+    // — for the device, the list the installed engine printed — rather than as a text field
+    // asking someone to type a name they can only learn from a command line.
+    return (!field.mode || field.mode === mode) && !field.hidden;
   }
 
   // A group whose every field is hidden is a heading with nothing under it.
@@ -207,7 +211,11 @@
                has in it are read from /api/host/*, and its buttons are verbs — so this lives
                under the group that names it rather than among the generated fields above. -->
           {#if group.id === 'servers' && mode === 'managed'}
-            <EnginePanel saved={savedToken} />
+            <EnginePanel
+              saved={savedToken}
+              device={str('engineDevice')}
+              onDevice={(v) => set('engineDevice', v)}
+            />
           {/if}
 
           <!-- The model files a managed engine loads are not settings — nothing in this card

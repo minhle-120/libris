@@ -3,7 +3,9 @@
 Date: 2026-11-09
 Recorded: 2026-11-21, after the fact.
 Status: accepted, implemented (`internal/llm/wire.go`); pinned by
-`TestNoSamplingOrInferenceConfig`
+`TestNoSamplingOrInferenceConfig`. Where the sampling lives instead was still open when this
+was written; ADR 0022 settles it for managed mode — the preset file libris constructs, and the
+five keys the chat model runs with are named there.
 
 ## Context
 

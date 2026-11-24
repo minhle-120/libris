@@ -5,7 +5,9 @@ Status: accepted, and implemented. The mode switch, the router, its preset and t
 endpoints are in `internal/config`, `internal/engine` (`serve.go`), `internal/models` and the
 generated settings page. The download that was left open here — which models, at what
 quantisation, and where their bytes come from — is decided by **ADR 0021**, which also
-supersedes the `pooling = mean` line in the preset sketch below.
+supersedes the `pooling = mean` line in the preset sketch below. Who owns what is *in* the
+preset, and the rule for when libris writes it again, is **ADR 0022**; the sketch's
+`ctx-size = 8192` was an unmeasured guess and is superseded there too.
 It follows ADR 0018 (the engine is fetched, not shipped) and ADR 0019 (the engine is the only
 device probe), and it is the point where libris stops downloading a program and starts
 running it.

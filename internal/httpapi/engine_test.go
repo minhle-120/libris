@@ -408,7 +408,7 @@ func TestEngineServeMapsTheFailuresAPageMustShow(t *testing.T) {
 	// change the port, or stop the other server — belongs to the person reading it.
 	h2 := newFakeHost()
 	h2.serving = engine.Serving{Port: 8080, Error: "Something else is already using port 8080."}
-	h2.serveErr = fmt.Errorf("%w: %s", app.ErrBusy, h2.serving.Error)
+	h2.serveErr = fmt.Errorf("%w: %s", app.ErrEngineStart, h2.serving.Error)
 	srv2 := hostServer(t, h2)
 	code, body = hostCall(t, srv2, http.MethodPost, "/api/host/engine/serve", "")
 	if code != http.StatusConflict {
@@ -416,6 +416,20 @@ func TestEngineServeMapsTheFailuresAPageMustShow(t *testing.T) {
 	}
 	if !strings.Contains(body, "using port 8080") {
 		t.Errorf("port taken: body = %s, want the sentence the user can act on", body)
+	}
+
+	// Pressing Start when autostart already brought the server up is the ordinary case, not an
+	// error worth a red box: 409 with a sentence about the running process, and no sentence
+	// about a queue nobody asked about.
+	hRun := newFakeHost()
+	hRun.serveErr = fmt.Errorf("%w (port 8080)", app.ErrEngineRunning)
+	srvRun := hostServer(t, hRun)
+	code, body = hostCall(t, srvRun, http.MethodPost, "/api/host/engine/serve", "")
+	if code != http.StatusConflict {
+		t.Errorf("already running: status = %d, want 409 (%s)", code, body)
+	}
+	if strings.Contains(body, "ingest") {
+		t.Errorf("already running: body = %s, must not talk about the ingest queue", body)
 	}
 
 	// A start asked for in external mode is a 422: the request names a thing this mode does

@@ -110,6 +110,7 @@ next one, so what each one settles, in the order an agent is likely to need it:
 |---|---|---|
 | a setting, or a field in the UI | 0001, 0011 | config is defined once in Go and the frontend is generated from it; a setting is an ability libris can apply, never capacity or a model name |
 | a request to a model server | 0006 | sampling and inference config never travel per request |
+| how libris's own model server is configured | 0022 | the preset file in the data directory is that configuration; libris constructs it, reads it back, and rewrites it only when the models or the device move — so its numbers are not settings and its hand edits are not stomped |
 | the shape of an answer | 0007 | a question is two model calls: research, then synthesis |
 | citations, re-ingest, what a chunk points at | 0008 | a citation is copied out of the segment, not referenced |
 | `Source.Status`, embeddings, "done" | 0004 | `ready` means searchable, so embedding is part of ingest |
@@ -297,10 +298,18 @@ PDFDPI int `key:"pdfDPI" group:"ingest" label:"PDF raster DPI" help:"…"
   from the same tags.
 - `schema.go` reflects the struct into `web/src/lib/config.gen.ts`.
   `TestGeneratedSchemaIsCurrent` fails the build when that file is stale — run
-  `make generate`. **Never hand-edit it, never add a setting to the frontend.** 22
+  `make generate`. **Never hand-edit it, never add a setting to the frontend.** 23
   settings exist today — capacity is deliberately absent (rule 1 of the
   non-negotiables), and the three model names default to blank because a prefilled name
   is a guess about someone else's server that looks configured and fails anyway.
+- `noview:"true"` is the one exception the generator supports to "the form renders every
+  setting": the field is defined, saved, validated and generated exactly like the others, and
+  the generated form renders no control for it because the control lives beside the facts it
+  needs. `engineDevice` is the only such field, and it has to be one: its legal values are the
+  device slots the installed build prints (`--list-devices`), so a text box would ask someone to
+  type a name they can only learn from a command line — and a name that build does not know stops
+  it from starting at all. The control is a picker in `EnginePanel`, which already fetches that
+  report; the label, help and value still come from `config.gen`.
 - Env var names derive from keys (`pdfDPI` → `LIBRIS_PDF_DPI`); load order is defaults →
   env → `<data>/settings.json`. `MarshalJSON`/`ApplyJSON` use the same `key` tags, so the
   API and the schema cannot disagree; `ApplyJSON` merges partials and rejects unknown
@@ -416,6 +425,13 @@ PDFDPI int `key:"pdfDPI" group:"ingest" label:"PDF raster DPI" help:"…"
   what goes (chats, answers, memberships — the last two by cascade) and what stays (the
   files, because sources are shared and nothing re-derives a raster cheaply), because the
   thing a user fears losing is the file.
+- The engine section owns one control over a setting, and only because the values are machine
+  facts: the **Run models on** picker writes `engineDevice`. It reads its label and help from
+  `config.gen` (so the definition is still `internal/config`'s), it lists the devices the
+  installed engine reported rather than a list this file invents, and it hands the value up to
+  `SettingsView` instead of saving it itself — one draft, one Save button, and the dirty bar at
+  the top of the page still tells the truth about it. When the server is up the section says which
+  device the *process* is using (`serve.device`), which is the preset's answer, not the form's.
 - `lib/api.ts` is the only module that talks to `/api`. `lib/types.ts` mirrors the
   **JSON**, not the Go — snake_case, because that is what `internal/domain` marshals.
   `lib/format.ts` holds the only display formatting rules, so byte and duration strings
@@ -696,6 +712,17 @@ Found the hard way. Browser-harness and fixture traps are in `docs/testing.md`.
   `cmd/libris` has to call it on the way out: the first build that did not left three
   `llama-server` processes running after libris was gone, invisible to a page that reads its
   state from a process record nobody cleared.
+- `-fit on` adjusts arguments that were **left unset**. A preset that names `ctx-size` and leans
+  on `-fit` to keep it out of trouble is not leaning on anything: the number is a request, and
+  llama.cpp honours it or refuses to load. So every capacity number in the generated preset is one
+  that was confirmed to load, and dropping a key so `-fit` decides is a real option — it is what
+  the embedder's absence of `pooling` looks like, done on purpose.
+- Device slots are not stable identifiers, and a wrong one is not ignored. The build libris
+  downloads prints `Vulkan0`/`Vulkan1`; a CUDA build of llama.cpp on the same laptop prints
+  `CUDA0`; passing the second name to the first binary is
+  `error while handling argument "--device": invalid device: CUDA0` and an exit. Which is why the
+  value is resolved against the live `--list-devices` report at start (and logged when the saved
+  name has gone away) instead of being trusted because it is in `settings.json`.
 - Grid items with `align-items: start` do not stretch, so a sticky sub-nav needs its
   containing row to be tall. Check layout at 640 / 900 / 1180 px before declaring a
   settings-style page done.

@@ -178,6 +178,10 @@ export type Serving = {
   started_at?: string;
   port: number;
   models?: string[];
+  /** The device key the preset the router read actually carried — which is not always the
+   *  setting: a blank setting means libris picked, and a hand-edited preset means the file
+   *  picked. The page shows this, because the process is what an answer came out of. */
+  device?: string;
   /** Where the server's own output went. A model that will not load says why there. */
   log?: string;
   /** The last start that failed, in one sentence. Cleared by a good one, so it cannot

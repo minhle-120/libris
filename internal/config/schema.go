@@ -28,6 +28,11 @@ type schemaField struct {
 	Max      *int        `json:"max,omitempty"`
 	Options  []EnumValue `json:"options,omitempty"`
 	Readonly bool        `json:"readonly,omitempty"`
+	// Hidden comes from noview:"true": the setting exists, is saved, validated and generated
+	// like every other one, and the generated form renders no control for it because a better
+	// one lives beside the facts it needs. Hiding a field is not dropping it from the schema —
+	// the value still round-trips through the API.
+	Hidden bool `json:"hidden,omitempty"`
 	// Mode is which engine mode a field means anything in, and it is empty for the fields
 	// that mean the same thing either way. It is generated rather than written in the
 	// frontend so "which fields does managed mode hide" cannot disagree with the struct
@@ -91,6 +96,7 @@ func generateSchema(w io.Writer, cfg any) error {
 			Kind:     kind,
 			Unit:     f.Tag.Get("unit"),
 			Readonly: f.Tag.Get("readonly") == "true",
+			Hidden:   f.Tag.Get("noview") == "true",
 			Mode:     f.Tag.Get("mode"),
 		}
 		switch sf.Mode {
@@ -130,7 +136,7 @@ func generateSchema(w io.Writer, cfg any) error {
 	b.WriteString(GeneratedHeader)
 	b.WriteString("\nexport type SettingKind = 'text' | 'url' | 'password' | 'number' | 'bool' | 'enum';\n")
 	b.WriteString("export type SettingOption = { value: string; label: string };\n")
-	b.WriteString("export type SettingField = {\n\tkey: keyof Settings;\n\tlabel: string;\n\thelp: string;\n\tkind: SettingKind;\n\tunit?: string;\n\tmin?: number;\n\tmax?: number;\n\treadonly?: boolean;\n\toptions?: SettingOption[];\n\t/** Which engine mode this field means anything in; absent means both. */\n\tmode?: 'managed' | 'external';\n};\n")
+	b.WriteString("export type SettingField = {\n\tkey: keyof Settings;\n\tlabel: string;\n\thelp: string;\n\tkind: SettingKind;\n\tunit?: string;\n\tmin?: number;\n\tmax?: number;\n\treadonly?: boolean;\n\t/** Saved, validated and generated like the rest; rendered by a hand-written control elsewhere. */\n\thidden?: boolean;\n\toptions?: SettingOption[];\n\t/** Which engine mode this field means anything in; absent means both. */\n\tmode?: 'managed' | 'external';\n};\n")
 	b.WriteString("export type SettingGroup = { id: string; label: string; help: string; fields: SettingField[] };\n\n")
 
 	b.WriteString("export type Settings = {\n")

@@ -12,6 +12,7 @@
   } from '../lib/api';
   import type { DeviceReport, EngineView } from '../lib/types';
   import { formatBytes, formatDate, formatSince } from '../lib/format';
+  import { settingGroups } from '../lib/config.gen';
   import Button from '../lib/Button.svelte';
   import Icon from '../lib/Icon.svelte';
   import ConfirmDialog from '../lib/ConfirmDialog.svelte';
@@ -27,12 +28,19 @@
    * follows: a destructive action asks first, and Cancel is the button Enter lands on.
    */
   let {
-    saved = 0
+    saved = 0,
+    device = '',
+    onDevice = () => {}
   }: {
     /** Bumped by the parent on every save, which is what makes this refetch: the port and
      *  the mode are settings, so the section must not still be showing the port that was
      *  saved before the one being typed. */
     saved?: number;
+    /** The `engineDevice` setting, owned by the form above: this section lists the choices,
+     *  because the choices are the facts below them, and the draft stays in one place so one
+     *  Save button still means "save everything on this page". */
+    device?: string;
+    onDevice?: (name: string) => void;
   } = $props();
 
   let view = $state<EngineView | null>(null);
@@ -64,6 +72,22 @@
   // The report always carries a CPU row, so "the machine has no GPU" is the *absence* of a
   // non-CPU row rather than an empty list — and the list length cannot be the test.
   const gpus = $derived((devices?.devices ?? []).filter((d) => d.kind !== 'cpu'));
+
+  // The label and the help come from the generated schema, because `internal/config` defines
+  // this setting. What lives here is the list of values, which the schema cannot know: the
+  // legal device names are whatever this installed build prints with --list-devices, and a
+  // name it does not know stops the server from starting at all. That is also why this is a
+  // picker and not a text field — a field would ask someone to type a name they can only
+  // learn by running a command.
+  const deviceField = $derived(
+    settingGroups
+      .flatMap((g) => g.fields)
+      .find((f) => (f.key as string) === 'engineDevice')
+  );
+  // What the process is actually using, as opposed to what was asked for: the server answers
+  // with the device key the preset it read carried, which is also the one a hand-edit set.
+  const running = $derived(serve?.running ?? false);
+  const serveDevice = $derived(serve?.device ?? '');
 
   onMount(() => {
     void refresh(false);
@@ -327,6 +351,48 @@
       </div>
     {/if}
 
+    {#if devices && installed}
+      <div>
+        <dt>{deviceField?.label ?? 'Run models on'}</dt>
+        <dd>
+          <select
+            class="input select"
+            value={device}
+            title={deviceField?.help}
+            onchange={(e) => onDevice(e.currentTarget.value)}
+          >
+            <!-- The label does not name the pick, because the rule that makes it belongs to
+                 the backend; when it matters — several adapters, so one of them is being
+                 passed over — the warning under this list already says which device libris
+                 runs on, in the same words it uses everywhere. -->
+            <option value="">Auto — the first device this build can use</option>
+            {#each gpus as gpu (gpu.name)}
+              <option value={gpu.name}>
+                {gpu.name} — {gpu.description || 'graphics device'}{#if gpu.total_bytes}
+                  {' '}
+                  ({formatBytes(gpu.total_bytes)}){/if}
+              </option>
+            {/each}
+            <option value="none">CPU only — do not offload</option>
+          </select>
+          <p class="muted asof">
+            {#if running}
+              <!-- The device the running process read out of the preset, not the one the form
+                   is holding: a hand-edited preset, or a pick taken while the setting was on
+                   Auto, are both reasons those two differ, and the process is what an answer
+                   came out of. -->
+              Running on <strong>{serveDevice || 'whatever llama.cpp chose'}</strong>
+              {#if device && serveDevice !== device}
+                — save and restart to switch to {device}
+              {/if}
+              ·
+            {/if}
+            takes effect on the next start, and is saved with the rest of this page
+          </p>
+        </dd>
+      </div>
+    {/if}
+
     {#if devices}
       <div>
         <dt>Detected</dt>
@@ -537,6 +603,10 @@
     grid-template-columns: 140px 1fr;
     align-items: baseline;
     gap: 12px;
+    /* Also a grid item, and its automatic minimum is the sum of its tracks' minimums —
+       which is why shrinking dd alone was not enough: the row kept the 140 + 12 + widest
+       value, and the card clipped it. */
+    min-width: 0;
   }
   .facts dt {
     color: var(--fg-muted);
@@ -545,11 +615,29 @@
   }
   .facts dd {
     margin: 0;
+    min-width: 0;
     display: flex;
     flex-wrap: wrap;
     align-items: baseline;
     gap: 8px;
     font-size: 13px;
+  }
+
+  /* A flex item's min-width is its content's minimum, and a data-directory path has no
+     break opportunity in it — so one long path set the whole row wider than the card and
+     every value in it was cut off at the card's edge. Zero says "shrink as far as the
+     column goes"; `anywhere` on the monospace bits gives them a place to break. */
+  .facts dd > * {
+    min-width: 0;
+  }
+  .facts code,
+  .facts .mono {
+    overflow-wrap: anywhere;
+  }
+  /* The control fills the column rather than sizing to its widest option, which is a long
+     Vulkan device name. */
+  .facts select {
+    width: 100%;
   }
 
   .tag {
@@ -580,6 +668,10 @@
     color: var(--success);
     background: color-mix(in srgb, var(--success) 14%, transparent);
   }
+  .select {
+    width: 100%;
+  }
+
   .device {
     display: inline-flex;
     align-items: baseline;
@@ -691,6 +783,11 @@
     .facts > div {
       grid-template-columns: 1fr;
       gap: 2px;
+    }
+    /* Stacked, so a value gets the card's whole width instead of sharing it with a label
+       that would leave it 60% of a narrow pane. */
+    .facts select {
+      max-width: 320px;
     }
   }
 </style>

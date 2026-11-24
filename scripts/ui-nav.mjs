@@ -1060,6 +1060,16 @@ const code = await withBrowser(
         stored: dd('Stored in'),
         storedDir: attr('Stored in', 'title'),
         detected: dd('Detected'),
+        // noview:"true" in internal/config — the setting is defined, saved and generated like
+        // every other one, and the generated form renders no control for it, because the control
+        // lives here and its values are the slots the installed engine prints. If hidden ever
+        // stopped being honoured this would be a stray text box asking someone to type a device
+        // name they can only learn from a command line, and a wrong one is a model server that
+        // does not start.
+        deviceLabel: [...card.querySelectorAll('.label')].some((l) =>
+          /Run models on/.test(l.textContent)
+        ),
+        deviceRow: dd('Run models on'),
         warnings: [...root.querySelectorAll('.warnings li')]
           .map((li) => li.textContent.trim().replace(/\\s+/g, ' '))
           .join(' | '),
@@ -1105,6 +1115,7 @@ const code = await withBrowser(
     `);
     checks.check('the device row arrives', detected.length > 10, detected.slice(0, 70));
 
+
     const eng = await ui.eval(engine);
     checks.check(
       "the engine section is on the page",
@@ -1121,6 +1132,52 @@ const code = await withBrowser(
       eng.addresses === "",
       eng.addresses,
     );
+
+    // The picker lists what the engine reported, so it has nothing to list yet — and the
+    // generated form must not have quietly grown a text field for the same setting.
+    checks.check(
+      'no device picker until an engine can report devices',
+      eng.deviceRow === null,
+      String(eng.deviceRow),
+    );
+    checks.check(
+      'and no generated field for it either',
+      eng.deviceLabel === false,
+      `generated "Run models on" label present=${eng.deviceLabel}`,
+    );
+    // Nothing on the card may be wider than the card. Its values are paths, URLs and device
+    // names — long tokens with no break opportunity — and a flex row's minimum width is its
+    // content's minimum, so one unbreakable path made the row wider than the card and
+    // clipped EVERY value in it at the card's edge, not just the path. Measured at the width
+    // where the card is narrowest beside the sidebar and nav, and below the card's own
+    // stacking breakpoint.
+    for (const w of [900, 680]) {
+      await ui.setViewport(w, 900);
+      await ui.settle(400);
+      const fit = await ui.eval(`
+        const card = document.querySelector("#servers .engine")?.closest(".card");
+        if (!card) return { error: "no engine card at ${w}" };
+        const cs = getComputedStyle(card);
+        const inner = card.getBoundingClientRect().width
+          - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+        const rows = [...document.querySelectorAll("#servers .engine .facts > div")];
+        return {
+          inner: Math.round(inner),
+          over: rows
+            .filter((r) => r.getBoundingClientRect().width > inner + 1)
+            .map((r) => Math.round(r.getBoundingClientRect().width)
+              + ":" + (r.querySelector("dt")?.textContent ?? "?")),
+        };
+      `);
+      checks.check(
+        `every engine row fits its card at ${w}px`,
+        !fit.error && fit.over.length === 0,
+        JSON.stringify(fit),
+      );
+    }
+    await ui.setViewport(1400, 900);
+    await ui.settle(400);
+
     checks.check(
       "and says what it would run instead of leaving the row blank",
       /nothing to run until the engine/i.test(eng.serve ?? ""),

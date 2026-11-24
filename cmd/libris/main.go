@@ -133,8 +133,9 @@ func main() {
 	modelsDir := models.Dir(*dataDir)
 	host, err := app.NewHost(app.HostOptions{
 		Engine:      engine.Open(filepath.Join(*dataDir, "bin"), log),
-		Serve:       engine.NewSupervisor(filepath.Join(*dataDir, "bin"), engine.Seams{}),
+		Serve:       engine.NewSupervisor(filepath.Join(*dataDir, "bin"), engine.Seams{Logger: log}),
 		ModelsDir:   modelsDir,
+		PresetPath:  engine.PresetPath(*dataDir, engine.RouterID),
 		Downloads:   models.NewFetcher(modelsDir, models.Seams{}),
 		Settings:    settings,
 		DeviceCache: filepath.Join(*dataDir, "devices.json"),

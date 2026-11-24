@@ -39,7 +39,31 @@ POST   /api/host/engine/stop              ends a download and keeps its bytes to
 DELETE /api/host/engine                   the engine, unless a server is running on it
 DELETE /api/host/engine/parts             kept download bytes, and their resume records
 GET    /api/host/devices                  what the machine has, cached for a night
+GET    /api/host/engine/serve             libris's own router: running, port, models, device
+POST   /api/host/engine/serve             start it, and wait until the router answers — so a
+                                          200 is a server that replied, not a process that
+                                          exists. 409 already running (autostart makes this
+                                          ordinary), or did not start: port taken, a model
+                                          that would not load. The sentence is the router's own,
+                                          read off its log
+DELETE /api/host/engine/serve             stop it. Not running is the state the caller wanted,
+                                          so it is a 200 and not a 404
+GET    /api/host/models                   the catalogue: every entry, its bytes, whether the
+                                          files are on disk and verified, and the download
+                                          progress folded in
+POST   /api/host/models                   {"id":…} → 202 with the whole view; 409 another
+                                          download is running; 422 an id the catalogue
+                                          does not have
+POST   /api/host/models/stop              end a download and keep its bytes to resume
+POST   /api/host/models/discard           end it and throw those bytes away
+DELETE /api/host/models/{id}              the entry's whole folder. 409 while the router has the
+                                          model open — nothing deletes what something is using
+                                          (ADR 0013's rule, said about a process)
 ```
+
+Managed mode's five endpoints share one rule with the rest of the API: **a call that answers
+returns the state it just caused**, so a 202 carries the whole view and the page does not have
+to ask again to find out whether its own request worked.
 
 Neither host endpoint waits on GitHub. `GET /api/host/engine` answers from the local record
 in microseconds and starts the lookup behind the response, saying `{"checking":true}`; the
@@ -56,6 +80,13 @@ Planned, not built: SSE progress for ingest instead of the UI's polling, and `/m
 plus a log line. Nothing else in the transport guesses at statuses, which is why a use
 case picking the wrong sentinel is a visible bug: a bare `errors.New` from `app` is a
 500 about a user's typo.
+
+The `/api/host/*` handlers map their own sentinels, because the states they report are not
+retryable-in-a-moment and 429 would be a lie: `app.ErrEngineMode` and `app.ErrInvalid` → 422
+(the fix is a setting, or a different id), and `app.ErrEngineRunning`, `app.ErrEngineStart`
+and the model-in-use refusal → 409, which is what "the world is not in the state this request
+assumed" means. Each carries a sentence a person can act on — a port to change, a server to
+stop, an id that exists — because the page shows the message and not the status.
 
 A 202 body is not decoration: the UI decides whether to keep polling from the status in
 the response, so an action must return the state it just caused, not the row it read
