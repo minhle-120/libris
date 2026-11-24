@@ -396,8 +396,13 @@ func TestProcessImageStoreFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Unsupported == "" || len(res.Warnings) == 0 {
-		t.Fatalf("result = %+v", res)
+	// A storage failure is the one failure whose own words survive into the row: a full disk
+	// and a rejected filename want different answers. And it is not also a finding.
+	if !strings.Contains(res.Unsupported, "disk full") {
+		t.Fatalf("unsupported = %q, want the storage error's own words", res.Unsupported)
+	}
+	if len(res.Findings) != 0 {
+		t.Errorf("findings = %v, want none", res.Findings)
 	}
 }
 
@@ -523,10 +528,27 @@ func TestProcessPDFWithoutTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Warnings) != 2 {
-		t.Fatalf("warnings = %v", res.Warnings)
+	// Two programs missing, so both stages report the machine's fault...
+	if len(res.Findings) != 2 {
+		t.Fatalf("findings = %v", res.Findings)
 	}
-	if res.Unsupported == "" {
-		t.Fatal("expected unsupported reason when nothing could be extracted")
+	for _, want := range []string{"pdftotext", "pdftoppm"} {
+		found := false
+		for _, f := range res.Findings {
+			if f.Detail == want {
+				found = true
+				if f.Code != domain.FindingToolMissing {
+					t.Errorf("%s: code = %q, want tool_missing", want, f.Code)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("no finding names %q: %v", want, res.Findings)
+		}
+	}
+	// ...and the row has to say so, rather than blaming a PDF that no machine without poppler
+	// could have read. This is the sentence a person acts on: install the tools, run it again.
+	if res.Unsupported != "no PDF tools on this machine" {
+		t.Errorf("unsupported = %q", res.Unsupported)
 	}
 }

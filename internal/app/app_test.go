@@ -794,14 +794,20 @@ func TestAddUploadRequeuesAFailedSource(t *testing.T) {
 	}
 }
 
-func TestAddUploadRecordsUnsupported(t *testing.T) {
+// A verdict and its findings travel together and both reach the row: the status says this file
+// is not searchable, the findings say whether to blame the file or install something. The
+// fixture is the pair the pipeline really produces when poppler is missing.
+func TestAddUploadRecordsUnsupportedAndItsFindings(t *testing.T) {
 	proc := &fakeProcessor{res: &ingest.Result{
-		Unsupported: "no text layer; optical character recognition is not built yet",
-		Warnings:    []string{"page 3 is a scan"},
+		Unsupported: "no PDF tools on this machine",
+		Findings: []domain.Finding{
+			domain.ToolMissing("pdftotext"),
+			domain.ToolMissing("pdftoppm"),
+		},
 	}}
 	svc, db, _ := testService(t, proc)
 
-	nb, _ := svc.CreateNotebook(context.Background(), "scans")
+	nb, _ := svc.CreateNotebook(context.Background(), "pdfs")
 	src, err := svc.AddUpload(context.Background(), nb.ID, strings.NewReader("binary"), "scan.djvu")
 	if err != nil {
 		t.Fatal(err)
@@ -811,11 +817,22 @@ func TestAddUploadRecordsUnsupported(t *testing.T) {
 	})
 
 	got := sourceStatus(t, db, src.ID)
-	if !strings.Contains(got.Detail, "text layer") {
+	if !strings.Contains(got.Detail, "no PDF tools") {
 		t.Errorf("detail = %q", got.Detail)
 	}
-	if len(got.Warnings) != 1 {
-		t.Errorf("warnings = %v", got.Warnings)
+	if len(got.Findings) != 2 {
+		t.Fatalf("findings = %+v", got.Findings)
+	}
+	for _, want := range []string{"pdftotext", "pdftoppm"} {
+		found := false
+		for _, f := range got.Findings {
+			if f.Detail == want && f.Code == domain.FindingToolMissing {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("no tool_missing finding for %s: %+v", want, got.Findings)
+		}
 	}
 	if got.SegmentCount != 0 {
 		t.Errorf("segment_count = %d, want 0", got.SegmentCount)

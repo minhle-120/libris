@@ -30,6 +30,44 @@ const (
 	SourceUnsupported SourceKind = "unsupported" // stored, not searchable
 )
 
+// FindingCode says which kind of thing went wrong on the way to a status. It is a small
+// vocabulary, and it is small because it answers a question a sentence cannot: what can the
+// person reading this actually do?
+//
+// Tool missing is the only kind whose fix lives outside libris — install the program, then run
+// the file again, and the run is worth doing. Stage failed is everything the pipeline noticed
+// about this one file: re-running it is a guess, so the UI says what was lost and lets the
+// person decide. Anything that would need a third word to explain is not a finding, it is the
+// failure itself, and belongs in Detail with a status.
+type FindingCode string
+
+const (
+	// FindingToolMissing names a program libris shells out to that this machine does not
+	// have. The file is fine; the run was not able to finish.
+	FindingToolMissing FindingCode = "tool_missing"
+	// FindingStageFailed names a stage that gave up on this file while the rest of the run
+	// stood — a page raster that would not render, an extraction that errored.
+	FindingStageFailed FindingCode = "stage_failed"
+)
+
+// Finding is one non-fatal thing a run noticed. The code is the vocabulary; Detail is the half
+// the code cannot say — which program was missing, or what the stage actually reported — and it
+// is free text because that half is for a human reading a row, not for a program to switch on.
+type Finding struct {
+	Code   FindingCode `json:"code"`
+	Detail string      `json:"detail"`
+}
+
+// ToolMissing is a finding for a program that was not on PATH.
+func ToolMissing(tool string) Finding {
+	return Finding{Code: FindingToolMissing, Detail: tool}
+}
+
+// StageFailed is a finding for a stage that gave up, named and with what it said.
+func StageFailed(stage string, err error) Finding {
+	return Finding{Code: FindingStageFailed, Detail: stage + ": " + err.Error()}
+}
+
 // Source is the uploaded file. The original is kept on disk while any notebook
 // lists this source, so a citation can be opened later; the last membership to let
 // go is the one act that may remove it.
@@ -48,10 +86,14 @@ type Source struct {
 	// the browser never needs to know where the data directory is.
 	OriginalPath string `json:"-"`
 
-	Status   SourceStatus `json:"status"`
-	Detail   string       `json:"detail,omitempty"`   // why unsupported or failed
-	Warnings []string     `json:"warnings,omitempty"` // non-fatal findings
-	AddedAt  int64        `json:"added_at"`           // unix seconds
+	Status SourceStatus `json:"status"`
+	Detail string       `json:"detail,omitempty"` // why unsupported or failed
+	// Findings is what a run noticed on its way to the status above: a stage that
+	// did not run, a tool this machine does not have. It is typed rather than
+	// prose because the three things a person can do about a finding are
+	// different, and a sentence cannot be asked which one applies.
+	Findings []Finding `json:"findings,omitempty"`
+	AddedAt  int64     `json:"added_at"` // unix seconds
 
 	// SegmentCount is read from the database rather than stored: it is how the
 	// UI shows "8 chunks" next to a finished source, and is 0 while processing.

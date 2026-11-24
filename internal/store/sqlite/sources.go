@@ -16,7 +16,7 @@ import (
 // returned unchanged — an already-ready source stays ready and never re-runs
 // poppler.
 func (db *DB) AddSource(ctx context.Context, notebookID string, source domain.Source) (domain.Source, bool, error) {
-	warnings, err := json.Marshal(source.Warnings)
+	findings, err := json.Marshal(source.Findings)
 	if err != nil {
 		return domain.Source{}, false, err
 	}
@@ -35,7 +35,7 @@ func (db *DB) AddSource(ctx context.Context, notebookID string, source domain.So
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (id) DO NOTHING`,
 		source.ID, source.Name, string(source.Kind), source.SHA256, source.Bytes,
-		source.OriginalPath, string(source.Status), source.Detail, string(warnings), source.AddedAt)
+		source.OriginalPath, string(source.Status), source.Detail, string(findings), source.AddedAt)
 	if err != nil {
 		return domain.Source{}, false, fmt.Errorf("store: add source: %w", err)
 	}
@@ -59,7 +59,7 @@ func (db *DB) AddSource(ctx context.Context, notebookID string, source domain.So
 		existing, err := db.GetSource(ctx, source.ID)
 		return existing, false, err
 	}
-	source.Warnings = nil
+	source.Findings = nil
 	return source, true, nil
 }
 
@@ -122,11 +122,13 @@ func (db *DB) DetachSource(ctx context.Context, notebookID, sourceID string) ([]
 	return orphans, tx.Commit()
 }
 
-// SetSourceStatus records how ingest ended. Warnings are the non-fatal findings
-// — "pdftoppm not found", "no transcript" — which the UI shows next to a
-// source that did produce something.
-func (db *DB) SetSourceStatus(ctx context.Context, id string, status domain.SourceStatus, detail string, warnings []string) error {
-	blob, err := json.Marshal(warnings)
+// SetSourceStatus records how ingest ended. Findings are the non-fatal things the run noticed —
+// a program this machine does not have, a stage that gave up — which the UI shows next to a
+// source that did produce something, and codes so the UI can say what to do rather than what was
+// said. The column is still named `warnings`: migrations here are append-only and a column name
+// is not part of what anyone reads, so renaming it would be a migration for nobody's benefit.
+func (db *DB) SetSourceStatus(ctx context.Context, id string, status domain.SourceStatus, detail string, findings []domain.Finding) error {
+	blob, err := json.Marshal(findings)
 	if err != nil {
 		return err
 	}
@@ -208,7 +210,12 @@ func scanSource(row rowScanner) (domain.Source, error) {
 	s.Kind = domain.SourceKind(kind)
 	s.Status = domain.SourceStatus(status)
 	if warnings != "" && warnings != "[]" {
-		_ = json.Unmarshal([]byte(warnings), &s.Warnings)
+		// A row written before findings were typed holds prose where a code and a detail belong,
+		// and that blob is left alone rather than guessed at: inventing a code for a sentence
+		// would tell the UI to offer an action nobody verified. The findings of a run are
+		// derivable — "run it again" re-derives them from the same original — so losing them
+		// costs a line under a row and not a fact about the file.
+		_ = json.Unmarshal([]byte(warnings), &s.Findings)
 	}
 	return s, nil
 }

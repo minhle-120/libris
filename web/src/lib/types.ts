@@ -26,6 +26,19 @@ export type SourceKind = "pdf" | "image" | "text" | "unsupported";
  */
 export type SourceStatus = "processing" | "ready" | "unsupported" | "failed";
 
+/**
+ * What a run noticed on its way to a status. `tool_missing` names a program this machine does
+ * not have — the only finding whose fix lives outside libris, so it is phrased as the action it
+ * implies. `stage_failed` is the pipeline giving up on part of this one file; re-running it is a
+ * guess, so the row says what was lost and stops there.
+ *
+ * The codes are the backend's vocabulary (`internal/domain`), and the two are all there is: a
+ * failure big enough to need a third word is the outcome itself, and arrives as `detail`.
+ */
+export type FindingCode = "tool_missing" | "stage_failed";
+
+export type Finding = { code: FindingCode; detail: string };
+
 export type Source = {
   id: string; // sha256 of the contents
   name: string;
@@ -34,7 +47,7 @@ export type Source = {
   bytes: number;
   status: SourceStatus;
   detail?: string; // why unsupported or failed
-  warnings?: string[];
+  findings?: Finding[]; // non-fatal: a stage skipped, a tool absent
   added_at: number;
   segment_count: number;
   /**

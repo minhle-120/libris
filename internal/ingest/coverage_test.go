@@ -118,8 +118,12 @@ func TestProcessCorruptImage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Unsupported == "" || len(res.Warnings) == 0 {
+	// A file that failed outright gets its reason once: no finding repeats the status.
+	if res.Unsupported == "" {
 		t.Fatalf("result = %+v", res)
+	}
+	if len(res.Findings) != 0 {
+		t.Errorf("findings = %v, want none beside a failure that is already the whole outcome", res.Findings)
 	}
 }
 
@@ -150,10 +154,26 @@ func TestPDFPartialFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Warnings) != 2 {
-		t.Fatalf("warnings = %v", res.Warnings)
+	if len(res.Findings) != 2 {
+		t.Fatalf("findings = %v", res.Findings)
 	}
-	if len(res.Segments) != 0 || res.Unsupported == "" {
+	for _, want := range []string{"page text", "page images"} {
+		found := false
+		for _, f := range res.Findings {
+			if strings.Contains(f.Detail, want) {
+				found = true
+				if f.Code != domain.FindingStageFailed {
+					t.Errorf("%s: code = %q, want stage_failed — the tools were found, they failed", want, f.Code)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("no finding names %q: %v", want, res.Findings)
+		}
+	}
+	// The file is what broke here, so the row must not read as though the machine were short a
+	// program — the distinction a typed finding exists to make.
+	if len(res.Segments) != 0 || res.Unsupported != "PDF produced no segments" {
 		t.Fatalf("result = %+v", res)
 	}
 }

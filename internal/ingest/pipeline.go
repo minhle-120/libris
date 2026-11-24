@@ -27,10 +27,14 @@ type Doc struct {
 // Result is everything the embed stage needs, and nothing that requires a
 // model.
 type Result struct {
-	Source      domain.Source
-	Docs        []Doc
-	Segments    []domain.Segment
-	Warnings    []string
+	Source   domain.Source
+	Docs     []Doc
+	Segments []domain.Segment
+	// Findings is what the run noticed on the way to the status below: a stage that gave up,
+	// a program this machine does not have. A file that produced some segments and lost others
+	// is Ready with findings; a file that produced none is Unsupported, and the findings say
+	// whose fault that was — the file's, or the machine's.
+	Findings    []domain.Finding
 	Unsupported string // non-empty reason when nothing could be extracted
 }
 
@@ -112,7 +116,10 @@ func (p *Processor) Process(ctx context.Context, path string) (*Result, error) {
 func (p *Processor) text(res *Result, path string) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		res.Warnings = append(res.Warnings, err.Error())
+		// The Go error stops here on purpose: the row's sentence is the one below, and what
+		// an OS error adds is a path inside the data directory. There is no finding either —
+		// this is the whole outcome for this file, so saying it twice would only make the
+		// row longer, not clearer.
 		res.Unsupported = "unreadable file"
 		return
 	}
@@ -130,7 +137,8 @@ func (p *Processor) text(res *Result, path string) {
 
 func (p *Processor) image(ctx context.Context, res *Result, path string) {
 	if _, err := inspectImage(path); err != nil {
-		res.Warnings = append(res.Warnings, err.Error())
+		// Same reason as the text branch: the format is the finding, and it is already the
+		// status.
 		res.Unsupported = "image format has no Go decoder"
 		return
 	}
@@ -138,8 +146,9 @@ func (p *Processor) image(ctx context.Context, res *Result, path string) {
 	ext := strings.ToLower(filepath.Ext(path))
 	asset, err := p.sink.PutFile(ctx, res.Source.ID+"/original"+ext, path)
 	if err != nil {
-		res.Warnings = append(res.Warnings, err.Error())
-		res.Unsupported = "could not store image"
+		// The one place a storage error's own words are kept: a full disk and a rejected
+		// filename want different answers from whoever is reading the row.
+		res.Unsupported = fmt.Sprintf("could not store image: %v", err)
 		return
 	}
 
@@ -163,9 +172,9 @@ func (p *Processor) pdfDoc(ctx context.Context, res *Result, path string) {
 	pages, err := p.pdf.Pages(ctx, path)
 	switch {
 	case errors.Is(err, ErrNoPDFText):
-		res.Warnings = append(res.Warnings, "pdftotext not found: PDF text extraction skipped")
+		res.Findings = append(res.Findings, domain.ToolMissing("pdftotext"))
 	case err != nil:
-		res.Warnings = append(res.Warnings, "pdf text: "+err.Error())
+		res.Findings = append(res.Findings, domain.StageFailed("page text", err))
 	default:
 		doc := Doc{ID: textDocID, Title: res.Source.Name, Kind: domain.KindText}
 		res.Docs = append(res.Docs, doc)
@@ -176,9 +185,9 @@ func (p *Processor) pdfDoc(ctx context.Context, res *Result, path string) {
 	assets, err := p.pdf.PageImages(ctx, path, p.sink, res.Source.ID+"/pages")
 	switch {
 	case errors.Is(err, ErrNoPDFRaster):
-		res.Warnings = append(res.Warnings, "pdftoppm not found: PDF page images skipped")
+		res.Findings = append(res.Findings, domain.ToolMissing("pdftoppm"))
 	case err != nil:
-		res.Warnings = append(res.Warnings, "pdf pages: "+err.Error())
+		res.Findings = append(res.Findings, domain.StageFailed("page images", err))
 	default:
 		doc := Doc{ID: pageDocID, Title: res.Source.Name + " [pages]", Kind: domain.KindImage}
 		res.Docs = append(res.Docs, doc)
@@ -196,9 +205,28 @@ func (p *Processor) pdfDoc(ctx context.Context, res *Result, path string) {
 		}
 	}
 
-	if len(res.Segments) == 0 && len(res.Warnings) > 0 {
+	if len(res.Segments) == 0 && len(res.Findings) > 0 {
+		// Nothing at all came out, so this is a status rather than a note — but which sentence
+		// depends on whose fault it was. Every finding naming a missing program means no PDF
+		// would have been read on this machine, and blaming the file would send someone looking
+		// for a broken PDF on a box that simply lacks poppler. The findings below the row name
+		// which programs; this sentence only says who is at fault.
+		if onlyToolMissing(res.Findings) {
+			res.Unsupported = "no PDF tools on this machine"
+			return
+		}
 		res.Unsupported = "PDF produced no segments"
 	}
+}
+
+// onlyToolMissing is whether every finding blames the machine rather than the file.
+func onlyToolMissing(findings []domain.Finding) bool {
+	for _, f := range findings {
+		if f.Code != domain.FindingToolMissing {
+			return false
+		}
+	}
+	return len(findings) > 0
 }
 
 // pagedTextSegments chunks the document's text as a whole, so a chunk may run

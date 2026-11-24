@@ -92,6 +92,25 @@
     failed: 'danger'
   };
 
+  /**
+   * One clause per finding, in the order the run noticed them. A missing program becomes the
+   * action it implies rather than its name, because "pdftoppm not found" leaves the reader to
+   * work out that installing it and running the file again is the point — and running it again
+   * is free here, since the original is kept. Anything else states what was lost and stops:
+   * re-running a file that simply has no more pages to give gains nothing, so the row does not
+   * imply it would.
+   */
+  function findings(source: Source): string {
+    const list = source.findings ?? [];
+    const tools = list.filter((f) => f.code === 'tool_missing').map((f) => f.detail);
+    const lost = list.filter((f) => f.code !== 'tool_missing').map((f) => f.detail);
+
+    const clauses: string[] = [];
+    if (tools.length > 0) clauses.push(`install ${tools.join(', ')}, then run it again`);
+    clauses.push(...lost);
+    return clauses.join(' · ');
+  }
+
   function pick() {
     fileInput?.click();
   }
@@ -244,8 +263,8 @@
                   {#if source.detail}
                     <p class="note {source.status === 'failed' ? 'bad' : ''}">{source.detail}</p>
                   {/if}
-                  {#if source.warnings?.length}
-                    <p class="note">{source.warnings.join(' · ')}</p>
+                  {#if source.findings?.length}
+                    <p class="note">{findings(source)}</p>
                   {/if}
                 </div>
 

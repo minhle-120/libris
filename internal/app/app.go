@@ -36,7 +36,7 @@ type Store interface {
 	DetachSource(context.Context, string, string) ([]domain.Orphan, error)
 	GetSource(context.Context, string) (domain.Source, error)
 	ListSources(context.Context, string) ([]domain.Source, error)
-	SetSourceStatus(context.Context, string, domain.SourceStatus, string, []string) error
+	SetSourceStatus(context.Context, string, domain.SourceStatus, string, []domain.Finding) error
 
 	PutAssets(context.Context, string, []domain.Asset) error
 	PutSegments(context.Context, string, []domain.Segment) error
@@ -376,7 +376,7 @@ func (s *Service) requeue(ctx context.Context, source domain.Source) (domain.Sou
 	}
 	if err := s.enqueue(source.ID); err != nil {
 		// Undo, or the row waits at "processing" for the next start's sweep.
-		if restore := s.store.SetSourceStatus(ctx, source.ID, source.Status, source.Detail, source.Warnings); restore != nil {
+		if restore := s.store.SetSourceStatus(ctx, source.ID, source.Status, source.Detail, source.Findings); restore != nil {
 			s.log.Warn("could not restore status after a refused retry",
 				"source", source.ID, "status", source.Status, "err", restore)
 		}
@@ -388,7 +388,7 @@ func (s *Service) requeue(ctx context.Context, source domain.Source) (domain.Sou
 	// that work has started.
 	source.Status = domain.StatusProcessing
 	source.Detail = ""
-	source.Warnings = nil
+	source.Findings = nil
 	return source, nil
 }
 
@@ -611,8 +611,9 @@ func (s *Service) ingest(ctx context.Context, sourceID string) {
 	}
 
 	if res.Unsupported != "" {
-		s.setStatus(ctx, sourceID, domain.StatusUnsupported, res.Unsupported, res.Warnings)
-		s.log.Info("source unsupported", "source", sourceID, "reason", res.Unsupported, "seconds", time.Since(start).Round(time.Millisecond))
+		s.setStatus(ctx, sourceID, domain.StatusUnsupported, res.Unsupported, res.Findings)
+		s.log.Info("source unsupported", "source", sourceID, "reason", res.Unsupported,
+			"findings", res.Findings, "seconds", time.Since(start).Round(time.Millisecond))
 		return
 	}
 
@@ -623,14 +624,18 @@ func (s *Service) ingest(ctx context.Context, sourceID string) {
 		s.log.Warn("embedding failed", "source", sourceID, "segments", len(res.Segments), "err", err)
 		// The chunks stay, so the source is still readable and inspectable; what
 		// is missing is retrievability, and the detail says which server to fix.
-		s.setStatus(ctx, sourceID, domain.StatusFailed, err.Error(), res.Warnings)
+		s.setStatus(ctx, sourceID, domain.StatusFailed, err.Error(), res.Findings)
 		return
 	}
 
-	s.setStatus(ctx, sourceID, domain.StatusReady, "", res.Warnings)
+	s.setStatus(ctx, sourceID, domain.StatusReady, "", res.Findings)
+	// Findings are logged even on a Ready row, because "ready" is a promise about retrieval and
+	// says nothing about a PDF whose page images were skipped: the row that looks fine and
+	// answers no visual question is explained by this line and by nothing else.
 	s.log.Info("ingest done",
 		"source", sourceID, "kind", source.Kind, "segments", len(res.Segments),
-		"assets", len(assets), "embedded", "yes", "seconds", time.Since(start).Round(time.Millisecond))
+		"assets", len(assets), "embedded", "yes", "findings", res.Findings,
+		"seconds", time.Since(start).Round(time.Millisecond))
 }
 
 // embed turns segments into vectors and stores them.
@@ -657,8 +662,8 @@ func (s *Service) embed(ctx context.Context, title string, segments []domain.Seg
 
 // setStatus records an outcome. Its own failure is logged, not propagated: the
 // only thing left to do is keep serving.
-func (s *Service) setStatus(ctx context.Context, id string, status domain.SourceStatus, detail string, warnings []string) {
-	if err := s.store.SetSourceStatus(ctx, id, status, detail, warnings); err != nil && !errors.Is(err, context.Canceled) {
+func (s *Service) setStatus(ctx context.Context, id string, status domain.SourceStatus, detail string, findings []domain.Finding) {
+	if err := s.store.SetSourceStatus(ctx, id, status, detail, findings); err != nil && !errors.Is(err, context.Canceled) {
 		s.log.Warn("could not record source status", "source", id, "status", status, "err", err)
 	}
 }

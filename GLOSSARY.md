@@ -14,6 +14,12 @@ One uploaded file, with the place it came from kept so a citation can open it. T
 in two notebooks is one source held by both.
 _Avoid_: Document, file, upload
 
+**Finding**:
+What a run noticed on its way to a source's status: a stage that gave up, a program this machine
+does not have. Two kinds, because two actions exist — install something and run the file again, or
+accept what the file gave. A finding never changes the status; it says what to do about it.
+_Avoid_: Warning, note, diagnostic
+
 **Segment**:
 One embeddable piece of a source — a chunk of page text, or one page's image. The unit a
 vector is stored against and the unit a citation names.

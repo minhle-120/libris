@@ -46,7 +46,7 @@ func TestPDFEndToEnd(t *testing.T) {
 		t.Fatalf("Process: %v", err)
 	}
 	if res.Unsupported != "" {
-		t.Fatalf("unsupported: %s (warnings %v)", res.Unsupported, res.Warnings)
+		t.Fatalf("unsupported: %s (findings %v)", res.Unsupported, res.Findings)
 	}
 
 	if len(res.Docs) != 2 {

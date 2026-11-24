@@ -272,7 +272,10 @@ func TestAddSourceKeepsExistingStatus(t *testing.T) {
 	}
 }
 
-func TestSetSourceStatusWarnings(t *testing.T) {
+// The code has to survive the round trip, because it is the part the UI acts on: one of these
+// means "install the program and run the file again", the other means "this is what the file
+// gave". Prose could not be told apart, which is why a finding is a code and a detail.
+func TestSetSourceStatusRoundTripsFindings(t *testing.T) {
 	ctx := context.Background()
 	db := openDB(t)
 	a := notebook(t, db, "A")
@@ -280,8 +283,11 @@ func TestSetSourceStatusWarnings(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	warnings := []string{"pdftoppm not found", "no transcript"}
-	if err := db.SetSourceStatus(ctx, "sha1", domain.StatusReady, "", warnings); err != nil {
+	want := []domain.Finding{
+		domain.ToolMissing("pdftoppm"),
+		domain.StageFailed("page text", errors.New("boom")),
+	}
+	if err := db.SetSourceStatus(ctx, "sha1", domain.StatusReady, "", want); err != nil {
 		t.Fatal(err)
 	}
 
@@ -289,8 +295,14 @@ func TestSetSourceStatusWarnings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Warnings) != 2 || got.Warnings[0] != warnings[0] {
-		t.Fatalf("warnings = %q", got.Warnings)
+	if len(got.Findings) != 2 {
+		t.Fatalf("findings = %+v", got.Findings)
+	}
+	if got.Findings[0] != want[0] {
+		t.Errorf("findings[0] = %+v, want %+v", got.Findings[0], want[0])
+	}
+	if got.Findings[1].Code != domain.FindingStageFailed || got.Findings[1].Detail != "page text: boom" {
+		t.Errorf("findings[1] = %+v", got.Findings[1])
 	}
 
 	if err := db.SetSourceStatus(ctx, "nope", domain.StatusReady, "", nil); !errors.Is(err, ErrNotFound) {
