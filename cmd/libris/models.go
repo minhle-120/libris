@@ -20,24 +20,27 @@ import (
 // The probe embedder is resolved here rather than once at boot because it carries
 // the model name and vector length the vectors are keyed on.
 //
-// The port comes from the client cache, because that is what already owns "where a request
-// goes": a second copy of it here would be a second answer to that question, and under Auto
-// the number can move between two lines of the same function.
+// The address and the model name come from the client cache's target, because that is what
+// already asks "what is being served": a second copy of the question here would be a second
+// answer, and under Auto the port can change between two lines of the same function.
 func modelSource(clients *clientCache, embedders *index.Supplier) app.ModelsFor {
 	return func(cfg config.Config) (app.Models, error) {
 		// Resolved once, so the names and the URLs cannot come from different modes.
-		cfg = clients.Served(cfg)
+		target, err := clients.target(cfg)
+		if err != nil {
+			return app.Models{}, err
+		}
 
 		client, err := clients.For(cfg)
 		if err != nil {
 			return app.Models{}, err
 		}
 
-		probe, err := embedders.For(cfg)
+		probe, err := embedders.For(target.Apply(cfg))
 		if err != nil {
 			return app.Models{}, err
 		}
 
-		return app.Models{ChatModel: cfg.ChatModel, Chat: client, Probe: probe}, nil
+		return app.Models{ChatModel: target.ChatModel, Chat: client, Probe: probe}, nil
 	}
 }

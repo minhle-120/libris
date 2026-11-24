@@ -9,10 +9,16 @@ import (
 	"strings"
 	"testing"
 
-	"libris/internal/app"
 	"libris/internal/config"
+	"libris/internal/engine"
 	"libris/internal/index"
+	"libris/internal/serving"
 )
+
+// fakeRouter is the supervisor as the wiring sees it: a status, on demand.
+type fakeRouter struct{ st engine.Serving }
+
+func (f fakeRouter) Status() engine.Serving { return f.st }
 
 func recordingServer(t *testing.T, response string, seen *[]byte) *httptest.Server {
 	t.Helper()
@@ -37,11 +43,11 @@ func TestNothingIsDialedForAServerThatIsNotRunning(t *testing.T) {
 	cfg := config.Default() // managed, and the port is Auto: nothing stored names a server
 
 	var dark clientCache
-	if _, err := dark.For(cfg); !errors.Is(err, app.ErrEngineDown) {
-		t.Fatalf("client for a router that is not running: %v, want ErrEngineDown", err)
+	if _, err := dark.For(cfg); !errors.Is(err, serving.ErrNotRunning) {
+		t.Fatalf("client for a router that is not running: %v, want serving.ErrNotRunning", err)
 	}
 
-	lit := clientCache{servePort: func() int { return 41234 }}
+	lit := clientCache{server: fakeRouter{engine.Serving{Running: true, Port: 41234}}}
 	if _, err := lit.For(cfg); err != nil {
 		t.Fatalf("client for a running router: %v", err)
 	}
@@ -55,8 +61,8 @@ func TestNothingIsDialedForAServerThatIsNotRunning(t *testing.T) {
 	// than a port number.
 	var clients clientCache
 	supplier := index.NewSupplier(clients.For, testLogger(), nil)
-	if _, err := modelSource(&clients, supplier)(cfg); !errors.Is(err, app.ErrEngineDown) {
-		t.Fatalf("models for a router that is not running: %v, want ErrEngineDown", err)
+	if _, err := modelSource(&clients, supplier)(cfg); !errors.Is(err, serving.ErrNotRunning) {
+		t.Fatalf("models for a router that is not running: %v, want serving.ErrNotRunning", err)
 	}
 }
 
@@ -91,7 +97,7 @@ func TestTheEmbedderIsNamedForTheRouterItDials(t *testing.T) {
 	cfg, clients, supplier := configured(t)
 	cfg.EngineMode = config.EngineManaged
 	cfg.EmbedModel = "LFM3-VL-2B"
-	clients.servePort = func() int { return 41234 }
+	clients.server = fakeRouter{engine.Serving{Running: true, Port: 41234}}
 
 	got, err := servedEmbedder(clients, supplier)(cfg)
 	if err != nil {

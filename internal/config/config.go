@@ -8,7 +8,6 @@ package config
 
 import (
 	"fmt"
-	"libris/internal/engine"
 	"os"
 	"reflect"
 	"strconv"
@@ -117,8 +116,10 @@ type Config struct {
 	TimeoutSeconds int    `key:"timeoutSeconds" group:"servers" label:"Request timeout" help:"Local CPU inference is slow. Lower it for GPU." min:"5" max:"3600" unit:"s"`
 
 	// ── models ───────────────────────────────────────────────────
-	// Model names are what the server answers to. In managed mode they are the aliases in
-	// the preset libris writes, so they are not typed anywhere; in external mode they are
+	// Model names are what the server answers to. They are settings in external mode only:
+	// managed mode's names are the aliases in the preset libris writes, derived by
+	// internal/serving, so these fields are never read there and are not typed anywhere; in
+	// external mode they are
 	// what the user's own llama-server was started with. Libris ships no guesses either
 	// way: a default that names a model nobody downloaded is a field that looks correct and
 	// fails anyway. Capacity is not here either — n_ctx and the GPU layer count belong to
@@ -183,34 +184,6 @@ func Default() Config {
 		MaxFileMB:     512,
 		KeepOriginals: true,
 	}
-}
-
-// Served returns the config as the answer path should read it. In managed mode the three
-// addresses and the three model names are not settings: they are facts about the single
-// router process libris runs, so they are derived here, at the one place where a stored
-// value turns into a request. External mode is the identity, and that asymmetry
-// is the point — the fields a person typed are used exactly as typed, and the ones libris
-// derives are never stored, so there is nothing for a page to disagree with.
-//
-// The port is an argument rather than c.EnginePort because it is a fact about a process, and
-// with the port on Auto that process was given one by the kernel at start. Pass the port the
-// router answers on; zero means none is, and the two addresses come back empty rather than
-// aimed at a port nobody holds. Saying so in words is the caller's job — this function's job
-// is to make "just try it anyway" impossible.
-func (c Config) Served(port int) Config {
-	if c.EngineMode != EngineManaged {
-		return c
-	}
-	out := c
-	out.ChatModel = string(engine.AliasChat)
-	out.EmbedModel = string(engine.AliasEmbed)
-	if port <= 0 {
-		out.ChatURL, out.EmbedURL = "", ""
-		return out
-	}
-	base := fmt.Sprintf("http://127.0.0.1:%d", port)
-	out.ChatURL, out.EmbedURL = base, base
-	return out
 }
 
 // intRange checks an int field against the min/max its tags declare, so a range is declared

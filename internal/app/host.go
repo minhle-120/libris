@@ -27,6 +27,7 @@ import (
 	"libris/internal/deviceinfo"
 	"libris/internal/engine"
 	"libris/internal/models"
+	"libris/internal/serving"
 )
 
 // deviceCacheAge bounds how long a device report stays reusable without asking again. The
@@ -178,8 +179,13 @@ type EngineView struct {
 	Mode string `json:"mode"`
 
 	// Endpoint, Port and Aliases are what managed mode derives instead of asking someone to
-	// type: one loopback address, one port, three names from the preset libris wrote. Served
-	// rather than stored, so the page cannot show an address that disagrees with the process.
+	// type: one loopback address, one port, the two names from the preset libris wrote. All
+	// three come from internal/serving, which is also what the client dials through, so the
+	// page cannot show an address that disagrees with the process answering questions.
+	//
+	// Port is the live number when a router is running and the stored one when it is not;
+	// showing the setting while a process answers elsewhere is how the page used to end up
+	// contradicting its own endpoint line.
 	Endpoint string   `json:"endpoint,omitempty"`
 	Port     int      `json:"port,omitempty"`
 	Aliases  []string `json:"aliases,omitempty"`
@@ -233,17 +239,22 @@ func (h *Host) Engine(ctx context.Context, force bool) (*EngineView, error) {
 	// probe.
 	const backend = engine.Vulkan
 
+	// The view wants the same answer the client gets, including the part that is only
+	// true when nothing is running — "stopped, and it would live here" — so the error is
+	// read as a fact about the router rather than a failure of this request.
+	served, _ := serving.Endpoints(h.serve, cfg)
+
 	v := &EngineView{
 		Mode:       string(cfg.EngineMode),
 		Backend:    string(backend),
-		Endpoint:   h.endpoint(cfg),
+		Endpoint:   served.Advertised,
 		Dir:        h.engine.Dir(),
 		Progress:   h.engine.Progress(),
 		PartsBytes: h.engine.PartsBytes(),
 	}
 	if cfg.EngineMode == config.EngineManaged {
-		v.Port = cfg.EnginePort
-		v.Aliases = aliasNames
+		v.Port = served.Port
+		v.Aliases = serving.Aliases()
 		v.Models = h.modelViews()
 		if h.serve != nil {
 			srv := h.serve.Status()
@@ -465,50 +476,6 @@ type ModelView struct {
 	Path   string `json:"path"`
 	Bytes  int64  `json:"bytes"`
 	MMProj string `json:"mmproj,omitempty"`
-}
-
-// aliasNames is what managed mode fills the model configuration in as. Two names libris
-// chose, rather than two fields asking a person to copy what the preset already says.
-var aliasNames = []string{
-	string(engine.AliasChat),
-	string(engine.AliasEmbed),
-}
-
-// ServePort is the port libris's own model server is answering on, or zero when it is not
-// running. Wiring asks this rather than reading the setting: managed mode's addresses are
-// derived from the process, and with the port on Auto the kernel chose this number
-// at start, so the settings file never knew it.
-func (h *Host) ServePort() int { return h.servePort() }
-
-func (h *Host) servePort() int {
-	if h.serve == nil {
-		return 0
-	}
-	if srv := h.serve.Status(); srv.Running && srv.Port > 0 {
-		return srv.Port
-	}
-	return 0
-}
-
-// endpoint is the one address managed mode talks to. External mode has none: the three
-// addresses are in the settings the user typed, and inventing a single one there would be
-// the old confusion in a new place.
-//
-// A running server wins over the setting, because that is the address a request would succeed
-// against. When nothing is running the setting is what the page is told — what libris would
-// bind — and Auto shows no address rather than one that does not exist yet.
-func (h *Host) endpoint(cfg config.Config) string {
-	if cfg.EngineMode != config.EngineManaged {
-		return ""
-	}
-	port := h.servePort()
-	if port <= 0 {
-		port = cfg.EnginePort
-	}
-	if port <= 0 {
-		return ""
-	}
-	return engine.Endpoint("127.0.0.1", port)
 }
 
 // modelViews is what the router would load right now: one row per complete entry. A directory
@@ -740,12 +707,9 @@ var ErrEngineRunning = errors.New("app: the model server is already running")
 // sentence deserves.
 var ErrEngineStart = errors.New("app: the model server did not start")
 
-// ErrEngineDown is managed mode with no server running. It exists because the port may be one
-// the kernel chose at start, so when nothing is running there is no address left to name:
-// "try the configured port anyway" is not an option once the configured port says *ask me*,
-// and a request aimed at a port nobody holds fails as a socket error that blames a server
-// which was never asked.
-var ErrEngineDown = errors.New("app: the model server is not running")
+// Managed mode with no server running is serving.ErrNotRunning, not a value from here: the
+// fact belongs to the module that asks the process, and a caller that invents its own address
+// for a port nobody holds fails as a socket error blaming a server which was never asked.
 
 // EngineServe starts libris's own llama-server: one router process, every model on disk, one
 // port. It blocks until the router answers or the wait runs out, because a page

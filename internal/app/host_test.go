@@ -1130,19 +1130,22 @@ func TestPresetPathIsUnderTheDataDirectory(t *testing.T) {
 // while a pinned one is still worth showing, because that is what libris would bind.
 func TestEngineEndpointFollowsTheRunningProcess(t *testing.T) {
 	cases := []struct {
-		name    string
-		stored  int
-		serving engine.Serving
-		want    string
+		name     string
+		stored   int
+		serving  engine.Serving
+		want     string
+		wantPort int
 	}{
 		{"auto, running on a port nobody chose", 0,
-			engine.Serving{Running: true, Port: 41234}, "http://127.0.0.1:41234"},
-		{"auto, nothing running", 0, engine.Serving{}, ""},
-		{"pinned, nothing running", 9000, engine.Serving{}, "http://127.0.0.1:9000"},
+			engine.Serving{Running: true, Port: 41234}, "http://127.0.0.1:41234", 41234},
+		{"auto, nothing running", 0, engine.Serving{}, "", 0},
+		{"pinned, nothing running", 9000, engine.Serving{}, "http://127.0.0.1:9000", 9000},
 		// The record wins over the setting even when both name a number: the setting is what
 		// was asked for, the record is what answered, and an answer came out of the process.
+		// The port line follows the same rule as the address line — it used to read the stored
+		// number while the address came from the process, so the page contradicted itself.
 		{"pinned, running on another port", 9000,
-			engine.Serving{Running: true, Port: 41234}, "http://127.0.0.1:41234"},
+			engine.Serving{Running: true, Port: 41234}, "http://127.0.0.1:41234", 41234},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1157,6 +1160,12 @@ func TestEngineEndpointFollowsTheRunningProcess(t *testing.T) {
 			}
 			if v.Endpoint != tc.want {
 				t.Errorf("Endpoint = %q, want %q", v.Endpoint, tc.want)
+			}
+			if v.Port != tc.wantPort {
+				t.Errorf("Port = %d, want %d — the page must name the process it is describing", v.Port, tc.wantPort)
+			}
+			if got := v.Aliases; len(got) != 2 || got[0] != "libris-chat" || got[1] != "libris-embed" {
+				t.Errorf("Aliases = %v, want the two names from the preset", got)
 			}
 		})
 	}

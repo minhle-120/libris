@@ -10,6 +10,7 @@ import (
 	"libris/internal/config"
 	"libris/internal/index"
 	"libris/internal/llm"
+	"libris/internal/serving"
 )
 
 // clientCache hands out one llm client per connection settings and rebuilds it
@@ -26,35 +27,26 @@ type clientCache struct {
 	key    string
 	client *llm.Client
 
-	// servePort is where the router libris runs answers, or zero when it is not running.
-	// Managed mode's addresses are derived from that rather than from the setting, because a
-	// port on Auto is a number the kernel chose at start and the settings file never knew it.
-	// A port change therefore rebuilds the client like any other address change.
-	servePort func() int
+	// server is the router libris might be running. The addresses managed mode dials
+	// come from that process rather than from the setting, because a port on Auto is a
+	// number the kernel chose at start and the settings file never knew it. A port
+	// change therefore rebuilds the client like any other address change.
+	//
+	// A cache built without one is a machine with no engine to run, which serving reads
+	// as "nothing is answering" — the honest reading rather than a fallback address.
+	server serving.Server
 }
 
-// For returns a client built from cfg. Only the fields that change *how libris
-// connects* are part of the key: model names and the like travel per request.
-// port is the live router's port, or zero. A cache built without a server to ask is treated
-// as one with nothing running, which is the honest reading rather than a fallback address.
-func (c *clientCache) port() int {
-	if c.servePort == nil {
-		return 0
-	}
-	return c.servePort()
-}
-
-// Served is the configuration as a model request should read it: in managed mode the three
-// addresses *and* the three model names are facts about the router libris runs, and the port is
-// a fact about that process.
+// target is what a model request should dial and name, resolved from the settings in
+// force right now.
 //
-// It is a method a caller can apply, rather than something buried inside For, because For can
-// only fix what For reads — the addresses. Anything that reads a model *name* out of a config
-// first is reading the stored one, and `internal/app` hands out the settings it saved: an
-// ingest came to dial the correct router with `cfg.EmbedModel`, which in managed mode is either
+// It is a method rather than something buried inside For because For can only fix what
+// For reads — the addresses. Anything that reads a model *name* out of a config first is
+// reading the stored one, and `internal/app` hands out the settings it saved: an ingest
+// came to dial the correct router with `cfg.EmbedModel`, which in managed mode is either
 // blank or a name from the days of pointing libris at somebody else's server.
-func (c *clientCache) Served(cfg config.Config) config.Config {
-	return cfg.Served(c.port())
+func (c *clientCache) target(cfg config.Config) (serving.Target, error) {
+	return serving.Endpoints(c.server, cfg)
 }
 
 // servedEmbedder is the embedder factory libris hands to the app, with the derivation the
@@ -66,23 +58,27 @@ func (c *clientCache) Served(cfg config.Config) config.Config {
 // down.
 func servedEmbedder(clients *clientCache, embedders *index.Supplier) func(config.Config) (app.Embedder, error) {
 	return func(cfg config.Config) (app.Embedder, error) {
-		return embedders.For(clients.Served(cfg))
+		target, err := clients.target(cfg)
+		if err != nil {
+			return nil, err
+		}
+		return embedders.For(target.Apply(cfg))
 	}
 }
 
 func (c *clientCache) For(cfg config.Config) (*llm.Client, error) {
-	// The address a request goes to is decided here and nowhere else. In managed mode it is
-	// the router libris runs; in external mode it is what the settings say.
-	cfg = c.Served(cfg)
-	if cfg.EngineMode == config.EngineManaged && cfg.ChatURL == "" {
-		// Managed mode with nothing running. There is no address to build a client for, and
-		// inventing one would produce a socket error blaming a server that was never asked —
-		// the same mistake the embedding base URL made once, in a different decade.
-		return nil, app.ErrEngineDown
+	// The address a request goes to is decided here and nowhere else: serving answers it
+	// from the router libris runs in managed mode, and from the settings in external.
+	target, err := c.target(cfg)
+	if err != nil {
+		// Managed mode with nothing running. There is no address to build a client for,
+		// and inventing one would produce a socket error blaming a server that was never
+		// asked — the same mistake the embedding base URL made once, in a different decade.
+		return nil, err
 	}
 
 	key := strings.Join([]string{
-		cfg.ChatURL, cfg.EmbedURL,
+		target.ChatURL, target.EmbedURL,
 		strconv.Itoa(cfg.TimeoutSeconds),
 	}, "\x00")
 
@@ -94,8 +90,8 @@ func (c *clientCache) For(cfg config.Config) (*llm.Client, error) {
 	}
 
 	client, err := llm.New(llm.Config{
-		ChatURL:  cfg.ChatURL,
-		EmbedURL: cfg.EmbedURL,
+		ChatURL:  target.ChatURL,
+		EmbedURL: target.EmbedURL,
 		Timeout:  time.Duration(cfg.TimeoutSeconds) * time.Second,
 	})
 	if err != nil {

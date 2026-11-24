@@ -25,6 +25,7 @@ import (
 	"libris/internal/index"
 	"libris/internal/ingest"
 	"libris/internal/models"
+	"libris/internal/serving"
 	"libris/internal/store/sqlite"
 	"libris/web"
 )
@@ -109,9 +110,11 @@ func main() {
 	// Auto the port is whatever that process was given at start: the client has to ask it, and
 	// it cannot ask something that does not exist yet.
 	serve := engine.NewSupervisor(filepath.Join(*dataDir, "bin"), engine.Seams{Logger: log})
-	servePort := func() int { return serve.Status().Port }
 
-	clients := clientCache{servePort: servePort}
+	// The supervisor is handed over rather than a port: under Auto the number is whatever the
+	// process was given at start, so the client asks the process — through serving, which is
+	// the one place allowed to decide what "running" means.
+	clients := clientCache{server: serve}
 	warmClient(log, &clients, settings.Get())
 
 	// The embedding server is probed the first time it is needed, and its vector
@@ -255,7 +258,7 @@ func main() {
 // would be a strange way to introduce the app.
 func warmClient(log *slog.Logger, clients *clientCache, cfg config.Config) {
 	if _, err := clients.For(cfg); err != nil {
-		if errors.Is(err, app.ErrEngineDown) {
+		if errors.Is(err, serving.ErrNotRunning) {
 			log.Info("no model server is running yet; ask one from Settings")
 			return
 		}
