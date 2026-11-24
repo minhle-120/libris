@@ -555,7 +555,8 @@ func TestDevicesAskTheEngineOnceItExists(t *testing.T) {
 	}
 }
 
-// The trade ADR 0019 takes, tested where the caching lives: a report from a machine that had
+// The trade of making the engine the only device probe, tested where the caching
+// lives: a report from a machine that had
 // nothing installed must not be served back once something is. The old document is not an
 // answer about the hardware — it is the admission that nothing was asked — so serving it
 // after a download would be the settings page lying about a machine it has now looked at.
@@ -657,7 +658,7 @@ func TestSettingsChangedNoticesOnlyWhatMatters(t *testing.T) {
 
 // A start asked for while libris is configured to talk to somebody else's servers is refused
 // rather than obeyed: running a second llama.cpp because a stale page pressed a button is the
-// "both at once" state the switch exists to make impossible (ADR 0020).
+// "both at once" state the switch exists to make impossible.
 func TestEngineServeRespectsTheMode(t *testing.T) {
 	cfg := config.Default()
 	cfg.EngineMode = config.EngineExternal
@@ -1073,9 +1074,9 @@ func TestPresetDeviceHonoursASavedNameOnlyWhileItExists(t *testing.T) {
 //
 // It used to live in <data>/bin/presets, beside the llama-server that reads it, which read as
 // tidy until "Remove" was pressed: that button deletes the engine directory, and with it the
-// one file where a person's hand-edited cache-ram or ctx-size existed (ADR 0022 says the file
-// *is* the configuration, so deleting it with the binary deletes a fact the app still
-// believes). The app is told the path now, and the engine directory is a sibling of the data
+// one file where a person's hand-edited cache-ram or ctx-size existed — and that file *is*
+// the configuration, so deleting it with the binary deletes a fact the app still
+// believes. The app is told the path now, and the engine directory is a sibling of the data
 // directory below — so a regression back to filepath.Join(engine.Dir(), "presets") cannot pass
 // by both happening to sit under one tree.
 func TestPresetIsWrittenWhereItWasToldAndNotBesideTheEngine(t *testing.T) {

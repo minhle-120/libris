@@ -37,7 +37,7 @@ func Enums() map[string][]EnumValue {
 			{Value: string(PDFModeFallback), Label: "Page image only when text is missing"},
 		},
 		// There is no engine *build* choice: one Vulkan asset runs on NVIDIA, AMD and Intel
-		// alike, and on pure CPU when no Vulkan device will open (ADR 0020). What is a choice
+		// alike, and on pure CPU when no Vulkan device will open. What is a choice
 		// is where the models come from — and it is exclusive, so it is one enum rather than
 		// two toggles that can both be on.
 		"engineModes": {
@@ -49,7 +49,7 @@ func Enums() map[string][]EnumValue {
 
 // EngineMode is the one answer to "where do the model servers come from", and it is
 // exclusive by construction: a machine either has libris fetching and running llama.cpp, or
-// it has servers somebody else started (ADR 0020). Both at once is what the settings page
+// it has servers somebody else started. Both at once is what the settings page
 // used to offer, and every screen of it showed fields that belong to the other answer.
 type EngineMode string
 
@@ -87,7 +87,7 @@ type Config struct {
 	EngineMode EngineMode `key:"engineMode" group:"servers" label:"Who runs them" help:"Libris can download llama.cpp, run it, and derive the addresses itself — or talk to servers you started. Not both." kind:"enum" enum:"engineModes" required:"true"`
 
 	// The port libris binds its own server to. A setting because libris is the thing that
-	// binds it (ADR 0011: a setting is an ability the app can apply), and a loopback port
+	// binds it (a setting is an ability the app can apply), and a loopback port
 	// rather than a URL because "which address" is not a choice when the process is ours.
 	// EnginePort is which loopback port libris binds when it runs the servers. Zero means
 	// Auto: the kernel is asked for a free port every time the server starts, so two libris
@@ -101,7 +101,7 @@ type Config struct {
 	EnginePort int `key:"enginePort" group:"servers" label:"Server port" help:"0 lets libris take a free port each time the server starts. A number asks for that exact port, and the start fails if something else already holds it. Chat, embeddings and reranking share whatever port is chosen." min:"1024" max:"65535" autoZero:"true" mode:"managed"`
 
 	// Which device llama.cpp offloads to, written into the preset as --device. A setting
-	// because libris is the thing that writes it (ADR 0011), and a string rather than an enum
+	// because libris is the thing that writes it, and a string rather than an enum
 	// because the legal values are not a list this program can know: they are the slot names
 	// the installed build prints with --list-devices, which differ per machine and per build —
 	// "Vulkan0" on the build libris downloads, "CUDA0" on one a person built themselves — and a
@@ -123,7 +123,7 @@ type Config struct {
 	// what the user's own llama-server was started with. Libris ships no guesses either
 	// way: a default that names a model nobody downloaded is a field that looks correct and
 	// fails anyway. Capacity is not here either — n_ctx and the GPU layer count belong to
-	// the server's command line (ADR 0011), and in managed mode to its preset file.
+	// the server's command line, and in managed mode to its preset file.
 	ChatModel     string `key:"chatModel" group:"models" label:"Chat model" help:"The name your chat server answers to. Must support tool calls for the research loop." mode:"external"`
 	EmbedModel    string `key:"embedModel" group:"models" label:"Embedding model" help:"The name your embedding server answers to." mode:"external"`
 	EmbedDim      string `key:"embedDimensions" group:"models" label:"Embedding dimensions" help:"Probed once at startup and recorded with every segment." readonly:"true"`
@@ -152,7 +152,7 @@ func groups() []struct{ ID, Label, Help string } {
 		{"servers", "Model servers", "Either libris runs llama.cpp for you, or it talks to servers you started. The switch decides which of these fields exist — libris does not ask for an address it is about to compute."},
 		{"models", "Models", "The model that answers, and the one that finds. Changing the embedder re-indexes every source."},
 		{"retrieval", "Retrieval", "Research loop budget. Every extra iteration costs one search round trip."},
-		{"ingest", "Ingest", "Extraction is a background job. An original is kept until no notebook uses it (ADR 0013)."},
+		{"ingest", "Ingest", "Extraction is a background job. An original is kept until no notebook uses it."},
 	}
 }
 
@@ -177,7 +177,7 @@ func Default() Config {
 		EmbedDim:    "",
 		RerankModel: "",
 		// Off, because nothing on a fresh install can rerank: there is no reranker in the
-		// catalogue (ADR 0021), so in managed mode the derived address is well-formed and
+		// catalogue, so in managed mode the derived address is well-formed and
 		// nothing answers it, and in external mode it is a server a person has not started yet.
 		// A default that is on would make the one retrieval stage that is a *choice* look
 		// configured when the machine cannot honour it — the same mistake as a prefilled model
@@ -202,7 +202,7 @@ func Default() Config {
 // Served returns the config as the answer path should read it. In managed mode the three
 // addresses and the three model names are not settings: they are facts about the single
 // router process libris runs, so they are derived here, at the one place where a stored
-// value turns into a request (ADR 0020). External mode is the identity, and that asymmetry
+// value turns into a request. External mode is the identity, and that asymmetry
 // is the point — the fields a person typed are used exactly as typed, and the ones libris
 // derives are never stored, so there is nothing for a page to disagree with.
 //

@@ -20,7 +20,7 @@
    * one fetches the weights that program loads, and the difference is why they are two cards:
    * a program can be replaced by a newer one, while a model file is the thing a corpus was
    * embedded *with*. So the catalogue here is pinned to a commit and a digest on the server
-   * (ADR 0021) and the page never offers a choice of quantisation — the choice was made when
+   * and the page never offers a choice of quantisation — the choice was made when
    * the catalogue was written, by somebody who could measure what it does to an answer.
    *
    * Nothing here is a setting. The only fields on this page that describe a model are in the

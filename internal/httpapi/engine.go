@@ -41,7 +41,7 @@ type Host interface {
 
 	// The models the catalogue offers, and the four things a person can do to one. Each of
 	// the answering calls returns the whole view, so a 202 carries the state it just caused
-	// rather than an acknowledgment the client has to go and re-read (AGENTS §11).
+	// rather than an acknowledgment the client has to go and re-read.
 	ModelCatalog() *app.ModelsView
 	ModelInstall(id string) (*app.ModelsView, error)
 	ModelStop() *app.ModelsView
@@ -197,7 +197,7 @@ func (s *Server) handleEngineParts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"parts_removed": true})
 }
 
-// handleEngineServe runs the router (ADR 0020). Everything about the answer is the process's
+// handleEngineServe runs the router. Everything about the answer is the process's
 // own: the port it bound, the models it took, and — when it would not come up — the sentence
 // it wrote to its log, which app.Host already put in Serving.Error.
 func (s *Server) handleEngineServe(w http.ResponseWriter, r *http.Request) {

@@ -25,10 +25,10 @@ import (
 // process per model behind one port (tools/server/README.md, "Using multiple models"). So
 // libris supervises one process, with one pid, one log and one stop button — and the three
 // addresses the settings page used to ask for become one address plus three names libris
-// chose itself (ADR 0020).
+// chose itself.
 //
 // The models themselves are configured by a preset file written here, not by flags
-// assembled at a call site. That distinction matters for ADR 0011: capacity and sampling are
+// assembled at a call site. That distinction matters: capacity and sampling are
 // not settings, and they are not on the wire either. They are in this file, which libris
 // writes and which a person may edit with an editor — a file in the data directory, not a
 // field in a form that would promise to apply it before the next restart.
@@ -76,8 +76,8 @@ type Model struct {
 }
 
 // What each kind of model is given. These are not settings and not per-request: they are what
-// "libris runs this model" means, and the only place they exist is this file (ADR 0006 puts
-// sampling on the server, ADR 0011 refuses to call capacity a setting).
+// "libris runs this model" means, and the only place they exist is this file: sampling
+// belongs to the server, and capacity is not a setting.
 //
 // The context sizes are per architecture, not per machine: 32k for the chat model is what its
 // template and the research loop's history want, and llama.cpp still shrinks the ones it has
@@ -105,7 +105,7 @@ const (
 	smallCacheRAMMiB = 0
 )
 
-// RouterID is the name libris gives the single llama-server it runs (ADR 0020). It is also
+// RouterID is the name libris gives the single llama-server it runs. It is also
 // the name of the preset file it reads, so the process, the file and the log say the same
 // thing about the same thing.
 const RouterID = "libris"
@@ -113,10 +113,10 @@ const RouterID = "libris"
 // PresetsDir is where the model server's configuration lives: the data directory, beside the
 // database and the models — deliberately NOT beside the binary.
 //
-// The file is the only place a model server's behaviour exists (ADR 0022), and the binary that
+// The file is the only place a model server's behaviour exists, and the binary that
 // reads it can be removed and re-fetched by a button. A hand-edited cache-ram that vanished
-// with the engine would be a setting the user did not change, which is the failure ADR 0011 is
-// about. So the configuration outlives the engine by construction, and "where is my
+// with the engine would be a setting the user did not change, which is exactly what this
+// arrangement refuses. So the configuration outlives the engine by construction, and "where is my
 // configuration" has one answer for every file libris keeps.
 func PresetsDir(dataDir string) string { return filepath.Join(dataDir, "presets") }
 
@@ -133,7 +133,7 @@ func PresetPath(dataDir, id string) string {
 // chat template is not guessed, no warmup (the first question is the user's, not a benchmark),
 // sampling done in the backend rather than in Go, and -fit left on so llama.cpp chooses the
 // arguments that fit the memory it finds rather than libris claiming numbers it cannot
-// measure (ADR 0011, and the reason ADR 0019's device report stops at reporting).
+// measure — which is also why the device report stops at reporting.
 //
 // device is the one global that varies by machine, and it is not a preference: the value is a
 // slot name from that build's --list-devices, and a name it does not know is a parse error
@@ -171,7 +171,7 @@ func Preset(path string, device string, models []Model) error {
 	b.WriteString("; llama-server reads this file; libris rewrites it only when the models or the device\n")
 	b.WriteString("; it derives have changed, so an edit to a number here survives until one of them moves.\n")
 	b.WriteString("; A name llama.cpp does not recognise here stops the server from starting at all.\n")
-	b.WriteString("; Capacity and sampling belong to the server, not to a request (ADR 0006, ADR 0011).\n")
+	b.WriteString("; Capacity and sampling belong to the server, not to a request.\n")
 	b.WriteString("; load-on-startup is off: the router comes up empty and loads a model when a request\n")
 	b.WriteString("; asks for one, so opening libris never pays for a model a question may never need.\n")
 	b.WriteString("version = 1\n\n[*]\n")
@@ -624,11 +624,11 @@ func (s *Supervisor) startOnce(ctx context.Context, o ServeOptions, port int, lo
 	// reporting` and then sat in `make_room: waiting for the memory measurement`. So the margin
 	// was not protecting a small card, it was a second way for the whole router to stop. What
 	// remains is the cap that does not need to measure anything: at most ModelsMax instances,
-	// least recently used unloaded first (ADR 0025).
+	// least recently used unloaded first.
 	//
 	// The port is an argument and not a key in that file on purpose: the file is the model
 	// server's configuration and is only rewritten when what libris derives about the models
-	// or the device has moved (ADR 0023). A port chosen per start would rewrite it on every
+	// or the device has moved. A port chosen per start would rewrite it on every
 	// start, and hand edits to a capacity number would be stomped by something that has
 	// nothing to do with them.
 	args := []string{

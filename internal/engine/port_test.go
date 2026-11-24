@@ -163,7 +163,7 @@ func TestAStartThatIsNotACollisionDoesNotChangePorts(t *testing.T) {
 // exactly that: `measure process for model name=libris-chat exited with status 1 before
 // reporting`, then `make_room: waiting for the memory measurement`. So the margin was not
 // protecting the card; it was a second way for the router to stop, and one libris cannot fix
-// from here. Counting models needs no measurement, so that is what is asked for (ADR 0025).
+// from here. Counting models needs no measurement, so that is what is asked for.
 func TestTheRouterIsNotToldToMeasureTheCard(t *testing.T) {
 	sup, opts, sp := serveFixture(t)
 	opts.Port = 0
@@ -233,7 +233,7 @@ func TestADeathIsNotWaitedOut(t *testing.T) {
 	}
 }
 
-// The port is passed to the process and is not a key in the file (ADR 0023): the file is
+// The port is passed to the process and is not a key in the file: the file is
 // rewritten only when the models or the device moved, and a number chosen per start would
 // rewrite it on every start and stomp whatever a person edited there.
 func TestTheChosenPortNeverEntersThePreset(t *testing.T) {

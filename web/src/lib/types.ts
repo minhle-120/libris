@@ -168,8 +168,8 @@ export type InstalledEngine = {
 
 /** One round trip answers the whole section: what is here, what is new, how the
  *  download is going, and how much a stopped one is still holding. */
-/** libris's own llama-server, in router mode: one process, one port, every model on disk
- *  (ADR 0020). Absent from an EngineView when libris is set to external servers, because
+/** libris's own llama-server, in router mode: one process, one port, every model on disk.
+ *  Absent from an EngineView when libris is set to external servers, because
  *  there is nothing here to run and "stopped" would be a field about a thing that does not
  *  exist in that mode. */
 export type Serving = {
@@ -198,7 +198,7 @@ export type ModelPart = {
 
 /** One model libris offers to download. The catalogue is server-side and pinned — repo,
  *  commit, digest — because a model that changes underneath a saved corpus silently
- *  invalidates every vector in it (ADR 0021). */
+ *  invalidates every vector in it. */
 export type ModelEntry = {
   id: string;
   role: string;

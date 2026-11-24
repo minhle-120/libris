@@ -2,8 +2,8 @@
 //
 // Three facts decide it and every one of them can change while the page is open: the engine
 // may still be downloading, a model may arrive or be discarded from another window, the router
-// may die. So this is derived from what the server says on each poll rather than remembered
-// (ADR 0020), and the setup screen and the app's own gate read the same rule rather than each
+// may die. So this is derived from what the server says on each poll rather than remembered,
+// and the setup screen and the app's own gate read the same rule rather than each
 // keeping a version of it.
 import type { DeviceReport, EngineView, ModelEntry, ModelsView } from './types';
 
@@ -86,8 +86,8 @@ export function readSetup(
   // asked — so the confirmation lives in the browser rather than pretending to be a setting.
   // An empty report is NOT a reason to pass. The cache is written the first time anything asks,
   // which on a fresh install is before the engine exists — so "the engine reported no
-  // accelerator" is the normal first answer, not proof that nobody needs picking (ADR 0019 says
-  // the engine is the only probe; it does not say the probe ran yet). The step shows, says what
+  // accelerator" is the normal first answer, not proof that nobody needs picking. The engine is
+  // the only probe, which does not mean the probe has run yet. The step shows, says what
   // is true, and offers the way forward.
   const asked = deviceAsked(engineDevice, ackKey(engine, devices));
   const deviceOk = engineOk && asked;

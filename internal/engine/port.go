@@ -23,7 +23,7 @@ const noPortSentence = "No free port could be found on this machine. " +
 // This is how libris learns a free port, rather than handing llama.cpp --port 0 and letting
 // it bind any port it likes. That works — llama.cpp calls bind_to_any_port and adopts the
 // number — and then the only place the chosen address exists is that build's startup log.
-// libris downloads unpinned builds (ADR 0018), so scraping a log line for the address every
+// libris downloads unpinned builds, so scraping a log line for the address every
 // request is aimed at would be a wire claim about a format that is allowed to move between
 // releases. Asking here costs one socket and keeps the knowledge on this side.
 //

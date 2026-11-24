@@ -24,7 +24,7 @@ const (
 )
 
 // PromptScheme names this prefix scheme and is recorded with every vector. The
-// store's model column is what identifies a vector space (ADR 0004), and the
+// store's model column is what identifies a vector space, and the
 // prefix is part of that space: a corpus embedded with prefixes and one embedded
 // without them both read as "Embeddinggemma-2, 768-d" and cannot be compared.
 // Bump the number whenever the wording below changes, and re-embed.

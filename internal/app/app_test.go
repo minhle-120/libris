@@ -294,8 +294,8 @@ func TestIngestEmbedsEverySegmentBeforeReady(t *testing.T) {
 		t.Errorf("%d segments embedded, want all 3", embedded)
 	}
 
-	// The promise ADR 0004 makes: ready means the vectors are in the database,
-	// not merely that ingest finished.
+	// What `ready` promises: the vectors are in the database, not merely that ingest
+	// finished.
 	if n := storedVectors(t, db, src.ID); n != 3 {
 		t.Errorf("%d of 3 segments carry a vector while the source says ready", n)
 	}
@@ -461,7 +461,7 @@ func TestAddUploadStoresThenProcesses(t *testing.T) {
 
 // The confirmation dialog tells the user what happens to their file, so this is
 // that sentence as a test. A notebook is a grouping and a transcript; the document
-// is shared and content-addressed (ADR 0003), so while another notebook lists it,
+// is shared and content-addressed, so while another notebook lists it,
 // the row, the bytes and every other notebook's membership of them outlive this one.
 // The companion tests below are the half where nothing else does.
 func TestDeleteNotebookKeepsAFileAnotherNotebookCites(t *testing.T) {

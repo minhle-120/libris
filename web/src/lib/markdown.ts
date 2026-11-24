@@ -14,7 +14,7 @@ import xml from 'highlight.js/lib/languages/xml';
 import yaml from 'highlight.js/lib/languages/yaml';
 
 /**
- * An answer body becomes HTML here, and nowhere else — ADR 0016.
+ * An answer body becomes HTML here, and nowhere else.
  *
  * Three stages, in an order that is itself the decision:
  *

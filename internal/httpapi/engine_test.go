@@ -389,7 +389,7 @@ func TestEngineViewErrorsFollowTheSameRuleAsEveryOtherRoute(t *testing.T) {
 	}
 }
 
-// The serve routes are the managed half of the settings page (ADR 0020). What is under test
+// The serve routes are the managed half of the settings page. What is under test
 // is the mapping only — app.Host owns the process, and its fake here has no GPU and no
 // llama-server any more than the unit tests do.
 func TestEngineServeMapsTheFailuresAPageMustShow(t *testing.T) {
@@ -478,7 +478,7 @@ func TestModelsGETIsTheCard(t *testing.T) {
 }
 
 // A 202 that only says "accepted" makes the client re-read the card to find out what its own
-// click did. It carries the view instead (AGENTS §11).
+// click did. It carries the view instead.
 func TestModelInstallAnswersWithTheStateItCaused(t *testing.T) {
 	h := newFakeHost()
 	h.modelsView = &app.ModelsView{Dir: "/data/models", Entries: []app.ModelEntryView{

@@ -28,8 +28,7 @@ import (
 // the number can move between two lines of the same function.
 func modelSource(clients *clientCache, embedders *index.Supplier, rerankerInstalled func() bool) app.ModelsFor {
 	return func(cfg config.Config) (app.Models, error) {
-		// Resolved once, so the names and the URLs cannot come from different modes
-		// (ADR 0020).
+		// Resolved once, so the names and the URLs cannot come from different modes.
 		cfg = clients.Served(cfg)
 
 		client, err := clients.For(cfg)
@@ -57,7 +56,7 @@ func modelSource(clients *clientCache, embedders *index.Supplier, rerankerInstal
 // answer is the address the person typed. Managed mode's is whether the file is on this disk:
 // the address there is derived from the port, so it is always well-formed, and a well-formed
 // address for a model nobody downloaded makes every question pay a 400 for a feature that was
-// never installed (ADR 0021). Retrieval staying in vector order is the documented fallback.
+// never installed. Retrieval staying in vector order is the documented fallback.
 func rerankReady(cfg config.Config, installed func() bool) bool {
 	if cfg.EngineMode != config.EngineManaged {
 		return true

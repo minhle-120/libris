@@ -36,7 +36,7 @@ type schemaField struct {
 	// Mode is which engine mode a field means anything in, and it is empty for the fields
 	// that mean the same thing either way. It is generated rather than written in the
 	// frontend so "which fields does managed mode hide" cannot disagree with the struct
-	// that defines the settings (ADR 0001).
+	// that defines the settings.
 	Mode string `json:"mode,omitempty"`
 }
 

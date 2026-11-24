@@ -21,7 +21,7 @@ import (
 // from under it. Nothing here overwrites a file. Saving is not the half of it
 // that decides a file's fate: an original is removed only once no notebook lists
 // its source any more, by app.Service.collect, which is where the ordering
-// between the database and the filesystem is argued (ADR 0013).
+// between the database and the filesystem is argued.
 type Originals struct {
 	Dir string
 }

@@ -22,7 +22,7 @@
    *
    * Everything else on this page is a choice libris can apply. This is not: what is installed
    * is a fact, what is new is somebody else's fact, and what the box can run is a fact about
-   * the installed llama.cpp — the only thing libris asks (ADR 0019). So the section is read
+   * the installed llama.cpp — the only thing libris asks. So the section is read
    * from /api/host/* and its controls are verbs —
    * download, stop, remove — with the two confirmation rules the rest of the app already
    * follows: a destructive action asks first, and Cancel is the button Enter lands on.
@@ -113,7 +113,7 @@
     void refreshDevices(false);
   });
 
-  // The engine is the only thing libris asks about the machine (ADR 0019), so the answer
+  // The engine is the only thing libris asks about the machine, so the answer
   // about what this box can run on does not exist until a download lands, and changes when a
   // newer one does. The server drops its cached report on install and on remove; this is the
   // half that asks again, so the row fills in without a reload. The `undefined` guard is what
@@ -342,7 +342,7 @@
               <span class="state">
                 <span
                   class="tag"
-                  title="One llama.cpp in router mode answers all three model roles (ADR 0020)"
+                  title="One llama.cpp in router mode answers all three model roles"
                 >
                   {endpoint || 'a free port, chosen at start'}
                 </span>

@@ -36,7 +36,7 @@
   // The gate in front of the app. Not a tour: a question and an ingest both need the
   // embedder, so until the engine, the device and the two models are here there is no
   // screen behind this one worth showing. Re-derived from the server on every poll, because
-  // a download finishing is the whole reason to redraw (ADR 0020).
+  // a download finishing is the whole reason to redraw.
   let setup = $state<Setup | null>(null);
   let facts = $state<{
     engine: EngineView | null;

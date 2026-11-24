@@ -361,7 +361,7 @@ func historyRole(r domain.Role) (llm.Role, bool) {
 // Two of these fields are not read from the settings, and the difference is not cosmetic.
 // The model's name and whether retrieval reranks are facts about the server libris is
 // talking to, and in managed mode both are derived when Models is built — from the router's
-// aliases and its port (ADR 0020) — so `Models` is the only place they are correct. From the
+// aliases and its port — so `Models` is the only place they are correct. From the
 // settings, the research call sent whatever a person had typed as a chat model's name while
 // pointing libris at somebody else's machine, and the router answered `model 'LFM3-VL-2B' not
 // found` for a model it lists as `libris-chat` — while the synthesis call, which reads

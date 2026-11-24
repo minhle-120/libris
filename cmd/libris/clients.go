@@ -28,8 +28,8 @@ type clientCache struct {
 
 	// servePort is where the router libris runs answers, or zero when it is not running.
 	// Managed mode's addresses are derived from that rather than from the setting, because a
-	// port on Auto is a number the kernel chose at start and the settings file never knew it
-	// (ADR 0020). A port change therefore rebuilds the client like any other address change.
+	// port on Auto is a number the kernel chose at start and the settings file never knew it.
+	// A port change therefore rebuilds the client like any other address change.
 	servePort func() int
 }
 
@@ -46,7 +46,7 @@ func (c *clientCache) port() int {
 
 // Served is the configuration as a model request should read it: in managed mode the three
 // addresses *and* the three model names are facts about the router libris runs, and the port is
-// a fact about that process (ADR 0020, ADR 0024).
+// a fact about that process.
 //
 // It is a method a caller can apply, rather than something buried inside For, because For can
 // only fix what For reads — the addresses. Anything that reads a model *name* out of a config
@@ -63,7 +63,7 @@ func (c *clientCache) Served(cfg config.Config) config.Config {
 // Without this, an ingest in managed mode asked the running router for `cfg.EmbedModel` — blank
 // in a fresh settings file, or a name typed for a different machine once — and the router had
 // no reason to recognise it. The same shape as the research call's model name, one seam further
-// down (ADR 0020).
+// down.
 func servedEmbedder(clients *clientCache, embedders *index.Supplier) func(config.Config) (app.Embedder, error) {
 	return func(cfg config.Config) (app.Embedder, error) {
 		return embedders.For(clients.Served(cfg))
@@ -72,7 +72,7 @@ func servedEmbedder(clients *clientCache, embedders *index.Supplier) func(config
 
 func (c *clientCache) For(cfg config.Config) (*llm.Client, error) {
 	// The address a request goes to is decided here and nowhere else. In managed mode it is
-	// the router libris runs; in external mode it is what the settings say (ADR 0020).
+	// the router libris runs; in external mode it is what the settings say.
 	cfg = c.Served(cfg)
 	if cfg.EngineMode == config.EngineManaged && cfg.ChatURL == "" {
 		// Managed mode with nothing running. There is no address to build a client for, and

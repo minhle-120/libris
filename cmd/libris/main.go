@@ -107,7 +107,7 @@ func main() {
 	// the failure text name a server libris is no longer configured to use.
 	// The process that would answer is built before the client that dials it, because under
 	// Auto the port is whatever that process was given at start: the client has to ask it, and
-	// it cannot ask something that does not exist yet (ADR 0020).
+	// it cannot ask something that does not exist yet.
 	serve := engine.NewSupervisor(filepath.Join(*dataDir, "bin"), engine.Seams{Logger: log})
 	servePort := func() int { return serve.Status().Port }
 
@@ -133,7 +133,7 @@ func main() {
 	// The machine itself: which llama.cpp build is on this disk, and what the box has to run
 	// one on. It reads settings per call, so changing the build selection takes effect on the
 	// next check rather than the next restart — the same discipline as every other cached
-	// thing in this process (AGENTS §6).
+	// thing in this process.
 	modelsDir := models.Dir(*dataDir)
 	host, err := app.NewHost(app.HostOptions{
 		Engine:      engine.Open(filepath.Join(*dataDir, "bin"), log),
@@ -237,8 +237,8 @@ func main() {
 
 	// The router is a process, not a connection, so an HTTP shutdown does not reach it: a
 	// libris that exits with llama-server holding a GPU leaves an orphan the settings page
-	// cannot stop and the next start cannot claim (ADR 0020 named this as the cost of owning
-	// a server). After srv.Shutdown, because an ask still streaming would otherwise be writing
+	// cannot stop and the next start cannot claim — a cost of owning the process rather than
+	// borrowing one. Stop runs after srv.Shutdown, because an ask still streaming would write
 	// to a store that is about to close. Stop waits for the group, children included.
 	if host != nil {
 		if err := host.EngineServeStop(shutdown); err != nil {

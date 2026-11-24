@@ -21,7 +21,7 @@ import (
 //
 // Sources are content-addressed, so "no members" is the only thing that can make
 // one disposable. A source that is merely unused by *this* notebook stays, with
-// its rasters, exactly as ADR 0003 intends.
+// its rasters, because content-addressing is what makes sharing safe.
 func collectOrphans(ctx context.Context, tx *sql.Tx, ids []string) ([]domain.Orphan, error) {
 	if len(ids) == 0 {
 		return nil, nil
@@ -90,7 +90,7 @@ func collectOrphans(ctx context.Context, tx *sql.Tx, ids []string) ([]domain.Orp
 
 		// Segments and asset rows go with it: the schema cascades both, which is
 		// why a source can never be deleted out from under a citation — the chat
-		// row keeps the text and the locator it was written from (ADR 0008).
+		// row keeps the text and the locator it was written from.
 		if _, err := tx.ExecContext(ctx, `DELETE FROM sources WHERE id = ?`, id); err != nil {
 			return nil, fmt.Errorf("store: delete orphan %s: %w", id, err)
 		}

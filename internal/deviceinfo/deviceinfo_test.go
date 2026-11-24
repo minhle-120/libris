@@ -335,8 +335,8 @@ func TestFingerprintIsThisBootAndThisEngine(t *testing.T) {
 }
 
 // TestDetectAgainstARealEngine is the only test in this package that asks an actual
-// llama.cpp, and it is skipped by default: no unit test may need a 37 MB download or a GPU
-// (docs/testing.md). It exists because every fixture here is a transcription of
+// llama.cpp, and it is skipped by default: no unit test may need a 37 MB download or a
+// GPU. It exists because every fixture here is a transcription of
 // common/arg.cpp:1159, and the first time this package was written from a remembered shape
 // it got the output format wrong. Against the b12651 vulkan build on the development laptop
 // it prints, on stdout with an empty stderr in 1.7 s:

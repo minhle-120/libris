@@ -81,7 +81,7 @@ type Entry struct {
 
 // catalog is everything libris offers. Two models, one chat and one embedding, because that
 // is what the answer path needs before it needs anything else, and a menu of twelve quants is
-// a way of asking somebody to guess (ADR 0021). The reranker is deliberately absent: without
+// a way of asking somebody to guess. The reranker is deliberately absent: without
 // one, retrieval stays in vector order, which is a documented degradation rather than a lie.
 var catalog = []Entry{
 	{
@@ -242,7 +242,7 @@ func Statuses(modelsDir string) []Status {
 
 // RolesOf lists the roles these statuses can fill right now. It is what makes "reranking is
 // available" a fact about the machine rather than a setting that promises a model nobody
-// downloaded (ADR 0021).
+// downloaded.
 func RolesOf(statuses []Status) []Role {
 	var out []Role
 	for _, s := range statuses {

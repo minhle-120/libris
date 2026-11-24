@@ -30,8 +30,8 @@ const segmentSearchSelect = `
 // It is a brute-force scan, deliberately. At 10⁴–10⁵ segments a single pass with a
 // bounded result set beats keeping a second index in sync with every ingest, and
 // the row set is already filtered by two things that matter more than speed:
-// membership (only sources this notebook holds) and `status = 'ready'` (ADR 0004 —
-// a half-ingested source must not be citable). Swapping in sqlite-vec or an ANN
+// membership (only sources this notebook holds) and `status = 'ready'` (a
+// half-ingested source must not be citable). Swapping in sqlite-vec or an ANN
 // index later is a change to this function's body, not to its signature.
 //
 // The vectors are filtered to one `model` identity and one `dim`, which is what

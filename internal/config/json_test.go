@@ -97,7 +97,7 @@ func TestUnmarshalStartsFromDefaults(t *testing.T) {
 	}
 }
 
-// The context-window and GPU-layer settings were retired (ADR 0011), but a
+// The context-window and GPU-layer settings were retired, but a
 // settings.json written by that build still names them. Starting up is not allowed
 // to depend on what an older version happened to persist.
 func TestApplyStoredJSONDropsRetiredKeys(t *testing.T) {

@@ -22,7 +22,7 @@ import (
 //
 // The two numbers are total and free-right-now. Only this source knows the second, because
 // only a live ggml init sees what another program is holding — which is why this is the
-// source libris keeps and the OS probes it dropped are not (ADR 0019).
+// source libris keeps and the OS probes it dropped are not.
 func ParseDevices(out []byte) []Device {
 	var rows []Device
 	for _, line := range strings.Split(string(out), "\n") {

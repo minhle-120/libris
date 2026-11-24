@@ -8,7 +8,7 @@ import type { Citation } from './types';
  * cited place.
  *
  * This runs on the *rendered* answer, after markdown and math, and that is the whole
- * design (ADR 0016): a DOM pass cannot be provoked by an answer that quotes the grammar,
+ * design: a DOM pass cannot be provoked by an answer that quotes the grammar,
  * and it is blind inside `<code>`, `<pre>` and `.katex` without trying. So a PDF that
  * contains the literal text `[[Chunk 3]]` inside a code block cites nothing.
  */

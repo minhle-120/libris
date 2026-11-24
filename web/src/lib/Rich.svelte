@@ -8,7 +8,7 @@
    *
    * It has no styles of its own — the content is built by hand rather than by Svelte, so
    * scoped component CSS cannot reach it. `.md` in `app.css` is where it is dressed,
-   * alongside the KaTeX and highlight.js token colours (ADR 0016).
+   * alongside the KaTeX and highlight.js token colours.
    */
   let {
     text,

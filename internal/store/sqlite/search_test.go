@@ -86,7 +86,7 @@ func TestSearchSegmentsScopesTheCorpus(t *testing.T) {
 	db.PutEmbeddings(ctx, []domain.Embedding{{SegmentID: "shax:0000", Model: "m+tp1", Dim: 3, Vector: []float32{1, 0, 0}}})
 	db.SetSourceStatus(ctx, "shax", domain.StatusReady, "", nil)
 
-	// A source still working must be invisible even in its own notebook: ADR 0004.
+	// A source still working must be invisible even in its own notebook.
 	db.AddSource(ctx, nb, source("sha9", "busy.pdf"))
 	db.PutSegments(ctx, "sha9", []domain.Segment{
 		{ID: "sha9:0000", SourceID: "sha9", DocID: "sha9", Kind: domain.KindText, Ordinal: 0, Text: "half-written"},

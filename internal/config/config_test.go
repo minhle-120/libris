@@ -134,7 +134,7 @@ func TestEnums(t *testing.T) {
 
 // Managed mode is not a label on the same three URLs: the address and the model names are
 // facts about the process libris runs, so they are derived where a stored value becomes a
-// request, and never written back as settings (ADR 0020).
+// request, and never written back as settings.
 func TestServedDerivesManagedMode(t *testing.T) {
 	c := Default()
 	if c.EngineMode != EngineManaged {

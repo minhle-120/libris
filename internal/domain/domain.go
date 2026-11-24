@@ -34,7 +34,7 @@ const (
 
 // Source is the uploaded file. The original is kept on disk while any notebook
 // lists this source, so a citation can be opened later; the last membership to let
-// go is the one act that may remove it (ADR 0013).
+// go is the one act that may remove it.
 // Field names are snake_case on the wire throughout domain, so the frontend
 // reads one convention.
 type Source struct {
@@ -152,7 +152,7 @@ type Segment struct {
 //
 // The model is recorded because a vector is only comparable with vectors from
 // the same model: changing embeddingModel invalidates every stored vector,
-// which is the consequence ADR 0004 accepts.
+// a consequence this design accepts up front.
 type Embedding struct {
 	SegmentID string
 	Model     string

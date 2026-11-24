@@ -26,7 +26,7 @@ type Store interface {
 	CreateNotebook(context.Context, string) (domain.Notebook, error)
 	RenameNotebook(context.Context, string, string) error
 	// Deleting either one answers with the sources it left without a notebook,
-	// so the caller can delete their files after the database agreed (ADR 0013).
+	// so the caller can delete their files after the database agreed.
 	DeleteNotebook(context.Context, string) ([]domain.Orphan, error)
 	GetNotebook(context.Context, string) (domain.Notebook, error)
 	ListNotebooks(context.Context) ([]domain.Notebook, error)
@@ -84,7 +84,7 @@ type Ingestor interface {
 //
 // Returning fewer vectors than it was given is an error, not a partial success.
 // A source with some vectors and not others answers questions with a silent
-// slice of itself, which is the failure ADR 0004 exists to prevent.
+// slice of itself, which is the failure this contract exists to prevent.
 type Embedder interface {
 	// Embed vectors a batch of segments belonging to one document. title is that
 	// document's display name, used by models that want their inputs steered; an
@@ -175,7 +175,7 @@ func New(opts Options) (*Service, error) {
 	case opts.Processor == nil:
 		return nil, errors.New("app: Processor is required")
 	case opts.Embedder == nil:
-		// No opt-out: "ready" means searchable (ADR 0004), so a Service that
+		// No opt-out: "ready" means searchable, so a Service that
 		// cannot embed would have to report a state that does not exist.
 		return nil, errors.New("app: Embedder is required")
 	case opts.Originals == "":
@@ -341,7 +341,7 @@ func (s *Service) AddUpload(ctx context.Context, notebookID string, r io.Reader,
 // half from one chunker and half from another. `PutSegments` already deletes the
 // source's old rows, which deletes their vectors with them, and the source spends
 // the whole job `processing` — so it is out of retrieval scope while it is
-// incomplete, which is the promise ADR 0004 makes.
+// incomplete, which is what `ready` promises.
 //
 // Sources are content-addressed and shared between notebooks, so this refreshes
 // the one copy every notebook citing this file reads from.
@@ -618,7 +618,7 @@ func (s *Service) ingest(ctx context.Context, sourceID string) {
 
 	// Embedding is part of ingest, not a stage a caller opts into. Until it
 	// succeeds this source is not `ready`, because `ready` is the promise that
-	// asking a question will search this source (ADR 0004).
+	// asking a question will search this source.
 	if err := s.embed(ctx, source.Name, res.Segments); err != nil {
 		s.log.Warn("embedding failed", "source", sourceID, "segments", len(res.Segments), "err", err)
 		// The chunks stay, so the source is still readable and inspectable; what

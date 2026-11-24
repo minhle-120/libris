@@ -40,7 +40,7 @@ func TestPresetWritesOneSectionPerModel(t *testing.T) {
 		"reasoning-preserve = true", "cache-type-k = q8_0", "no-warmup = true", "jinja = true",
 		// Written out rather than left absent, so whoever opens this file sees the choice. And
 		// it is a choice: with it absent the section would still not load, and a reader could not
-		// tell that from an oversight (ADR 0025).
+		// tell that from an oversight.
 		"load-on-startup = false",
 	} {
 		if strings.Contains(got, "load-on-startup = true") {
@@ -51,7 +51,7 @@ func TestPresetWritesOneSectionPerModel(t *testing.T) {
 		}
 	}
 
-	// Capacity is here, on the server, and never on the wire (ADR 0011). Each number is per
+	// Capacity is here, on the server, and never on the wire. Each number is per
 	// architecture: the chat model's context is what the research loop's history needs, the
 	// embedder's is its own training limit, and -fit still shrinks either one to the memory
 	// llama.cpp actually finds.
@@ -65,7 +65,7 @@ func TestPresetWritesOneSectionPerModel(t *testing.T) {
 		}
 	}
 
-	// Sampling on the chat model, because ADR 0006 puts sampling on the server and this file is
+	// Sampling on the chat model, because sampling belongs to the server and this file is
 	// the server. A research turn has to answer with a tool call, so the distribution is cold;
 	// the numbers are not settings and must not appear in the settings UI.
 	for _, want := range []string{"temp = 0.1", "top-k = 50", "top-p = 1.0", "min-p = 0.0", "repeat-penalty = 1.1"} {

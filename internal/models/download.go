@@ -129,7 +129,7 @@ func (f *Fetcher) Start(e Entry) error {
 }
 
 // Stop interrupts the running download and keeps its bytes. Stopping a download is not the
-// same act as stopping the server or cancelling a job (AGENTS §11); it is a bookmark.
+// same act as stopping the server or cancelling a job; it is a bookmark.
 func (f *Fetcher) Stop() {
 	f.mu.Lock()
 	cancel := f.cancel

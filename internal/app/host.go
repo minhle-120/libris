@@ -66,7 +66,7 @@ type EngineManager interface {
 // ModelFetcher is what Host needs of the model downloader — four methods, because those are
 // the four things the page can do to a download. models.Fetcher satisfies it. It is declared
 // here rather than used as a concrete type for the same reason EngineManager is: a test of
-// the settings page must not need a 2.4 GB network (AGENTS §2.11).
+// the settings page must not need a 2.4 GB network.
 type ModelFetcher interface {
 	Start(models.Entry) error
 	Stop()
@@ -96,7 +96,7 @@ type HostOptions struct {
 	DeviceCache string
 	Logger      *slog.Logger
 
-	// Serve, ModelsDir and Downloads are the managed half (ADR 0020): the supervisor that owns
+	// Serve, ModelsDir and Downloads are the managed half: the supervisor that owns
 	// libris's own llama-server, the directory its models come from, and the thing that fills
 	// that directory. Any of them may be nil/empty in a build without a data directory;
 	// managed mode then says so rather than pretending.
@@ -104,7 +104,7 @@ type HostOptions struct {
 	ModelsDir string
 	// PresetPath is the file libris constructs for llama-server to read: the model servers'
 	// configuration, kept in the data directory rather than beside the binary, because Remove
-	// deletes the binary and must not delete what a person hand-tuned (ADR 0022). The format
+	// deletes the binary and must not delete what a person hand-tuned. The format
 	// and the file name are engine's; the app only says where libris keeps its files.
 	PresetPath string
 	Downloads  ModelFetcher
@@ -174,7 +174,7 @@ type EngineView struct {
 	// Mode is which half of this section the page is showing: "managed" when libris runs
 	// llama.cpp, "external" when somebody else does. It is in the view because a page that
 	// inferred it from the settings response could disagree with the server about whether
-	// there is a device list to show at all (ADR 0020).
+	// there is a device list to show at all.
 	Mode string `json:"mode"`
 
 	// Endpoint, Port and Aliases are what managed mode derives instead of asking someone to
@@ -229,8 +229,8 @@ func (h *Host) Engine(ctx context.Context, force bool) (*EngineView, error) {
 	cfg := h.settings.Get()
 	// One build for every machine: Vulkan presents itself on NVIDIA, AMD and Intel alike, and
 	// on pure CPU when no Vulkan device will open. There is no setting here because there is
-	// no choice to make (ADR 0020) — which is the same reason ADR 0019 made the engine the
-	// only device probe.
+	// no choice to make — which is the same reason the engine is the only device
+	// probe.
 	const backend = engine.Vulkan
 
 	v := &EngineView{
@@ -392,7 +392,7 @@ func (h *Host) EngineDiscardParts() error { return h.engine.ClearParts() }
 // The order is the cheap one: the cache key is this boot and this engine build, so a stale
 // entry is recognised without running anything. Only then is the engine asked — and with
 // nothing installed it cannot be asked at all, which the report says instead of guessing
-// from what the operating system exposes (ADR 0019).
+// from what the operating system exposes.
 func (h *Host) Devices(ctx context.Context, refresh bool) (deviceinfo.Report, error) {
 	probe := h.engineProbe()
 	fp := deviceinfo.Fingerprint(probe)
@@ -477,7 +477,7 @@ var aliasNames = []string{
 
 // ServePort is the port libris's own model server is answering on, or zero when it is not
 // running. Wiring asks this rather than reading the setting: managed mode's addresses are
-// derived from the process (ADR 0020), and with the port on Auto the kernel chose this number
+// derived from the process, and with the port on Auto the kernel chose this number
 // at start, so the settings file never knew it.
 func (h *Host) ServePort() int { return h.servePort() }
 
@@ -541,7 +541,7 @@ type ModelPartView struct {
 
 // ModelEntryView is one catalogue entry as the page shows it. The catalogue is what makes the
 // download button possible at all: without it the page would be asking a person to paste a
-// URL and hope the file is the one their corpus was embedded with (ADR 0021).
+// URL and hope the file is the one their corpus was embedded with.
 type ModelEntryView struct {
 	ID       string          `json:"id"`
 	Role     string          `json:"role"`
@@ -749,7 +749,7 @@ var ErrEngineStart = errors.New("app: the model server did not start")
 var ErrEngineDown = errors.New("app: the model server is not running")
 
 // EngineServe starts libris's own llama-server: one router process, every model on disk, one
-// port (ADR 0020). It blocks until the router answers or the wait runs out, because a page
+// port. It blocks until the router answers or the wait runs out, because a page
 // that said "running" about a process that dies while loading a GGUF would be a page that
 // lies — and the first load of a 3 GB model is exactly when it does.
 func (h *Host) EngineServeStart(ctx context.Context) (engine.Serving, error) {
@@ -869,7 +869,7 @@ func (h *Host) EngineAutostart(ctx context.Context) {
 }
 
 // EngineServeStop stops the process. Stopping is not the same act as cancelling a job or a
-// download (AGENTS §11, and the difference EngineStop above makes): the process is ours, and
+// download (and note the difference EngineStop above makes): the process is ours, and
 // the answer to "then stop it" is a signal. Not running is not an error — the button that
 // asked has already got the state it wanted.
 func (h *Host) EngineServeStop(ctx context.Context) error {

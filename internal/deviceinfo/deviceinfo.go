@@ -2,7 +2,7 @@
 //
 // There is one source: an installed llama-server, asked with --list-devices. The OS probes
 // this package used to run — lspci, sysfs, nvidia-smi, rocm-smi, WMI, system_profiler — are
-// gone (ADR 0019). What they bought was a report on a machine that had not been downloaded
+// gone. What they bought was a report on a machine that had not been downloaded
 // to yet, and what they cost was a merge between sources that disagree: lspci calls a card
 // "GeForce RTX 3070" and says nothing about memory, nvidia-smi calls the same card "NVIDIA
 // GeForce RTX 3070" and caps at 4 GiB on Windows, and a report listing both tells a user to
@@ -17,8 +17,8 @@
 //
 // Nothing here estimates a GPU layer count or a context size. llama.cpp fits a model to
 // the memory it finds with -fit, and a number computed here would be a second, worse
-// answer to a question that is already answered downstream (ADR 0011: a setting, or a
-// claim, is only allowed where the app can apply it). The report exists to warn a person
+// answer to a question that is already answered downstream — a setting, or a
+// claim, is only allowed where the app can apply it. The report exists to warn a person
 // before they download, and to name the graphics adapter a driver problem lives on.
 package deviceinfo
 
@@ -91,7 +91,7 @@ type Report struct {
 
 // Run executes a helper binary and returns stdout. It is a field of Options rather than a
 // call to exec inside this package so the engine probe can be tested against recorded
-// output — no unit test may need a GPU, or an installed engine (docs/testing.md).
+// output — no unit test may need a GPU, or an installed engine.
 type Run func(ctx context.Context, name string, args ...string) ([]byte, error)
 
 type Options struct {
@@ -247,7 +247,7 @@ const DeviceNone = "none"
 // DefaultDevice is the slot libris runs on when nobody has chosen one: the first Vulkan
 // device the engine reported, or DeviceNone when it reported no Vulkan device at all.
 //
-// Vulkan because it is the backend libris downloads (ADR 0018), and a name taken from this
+// Vulkan because it is the backend libris downloads, and a name taken from this
 // report is the only thing that build accepts — "CUDA0" on the build libris installs is a
 // hard parse error, and llama.cpp exits rather than falling back to something that works.
 // Falling back to DeviceNone rather than to "no device key" is deliberate: a build that

@@ -136,7 +136,7 @@ func askWiring(t *testing.T, replies ...*llm.ChatResponse) (*Service, *sqlite.DB
 }
 
 // seedReady writes a ready source with one text chunk per argument, each with a
-// vector in the probe's space. Ready is what makes it retrievable at all (ADR 0004).
+// vector in the probe's space. Ready is what makes it retrievable at all.
 func seedReady(t *testing.T, db *sqlite.DB, notebookID, sourceID string, texts ...string) {
 	t.Helper()
 	ctx := context.Background()
@@ -221,7 +221,7 @@ func excluded(t *testing.T, db *sqlite.DB, id int64) bool {
 }
 
 // A question is two calls to one server, so both must name the same model — and in managed
-// mode that name is a fact about the router process, derived when Models is built (ADR 0020).
+// mode that name is a fact about the router process, derived when Models is built.
 // Read from the settings instead, the research turn was refused by the very server the answer
 // eventually came from: `model 'LFM3-VL-2B' not found`, for a model the router lists as
 // `libris-chat`. The stored name is what someone typed while pointing libris at a different

@@ -10,7 +10,7 @@ import (
 func settings(chat, embed string, timeout int) config.Config {
 	c := config.Default()
 	// These tests are about the addresses a person typed. In managed mode there are none to
-	// type — clients.For derives them from the port (ADR 0020) — so the mode is pinned here
+	// type — clients.For derives them from the port — so the mode is pinned here
 	// rather than left to a default that would test the other thing.
 	c.EngineMode = config.EngineExternal
 	c.ChatURL = chat

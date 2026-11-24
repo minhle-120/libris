@@ -17,7 +17,7 @@ import (
 const DefaultTimeout = 5 * time.Minute
 
 // Config is how the client connects. Nothing here authenticates: the servers are loopback
-// ones, either libris's own router (ADR 0020) or ones the person started, and an auth header
+// ones, either libris's own router or ones the person started, and an auth header
 // was one more field for a local box that never reads it (see the note on send).
 type Config struct {
 	ChatURL   string

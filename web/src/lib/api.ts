@@ -343,7 +343,7 @@ export function discardEngineParts(): Promise<{ parts_removed: boolean }> {
   return request("/api/host/engine/parts", { method: "DELETE" });
 }
 
-/** Runs libris's own llama-server (ADR 0020). This request is as long as the first model
+/** Runs libris's own llama-server. This request is as long as the first model
  *  load: the server answers when the router is up, rather than pretending a process that dies
  *  forty seconds later is running. Progress while it waits is polled from getEngine. */
 export function startEngineServe(): Promise<Serving> {

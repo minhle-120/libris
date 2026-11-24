@@ -28,7 +28,7 @@
 
   // Which half of the model-server group applies. It is one switch rather than two toggles
   // that can both be on, and the fields it hides are the ones libris derives for itself
-  // (ADR 0020) — a form that asks for an address it is about to compute is how this page
+  // — a form that asks for an address it is about to compute is how this page
   // became confusing.
   const mode = $derived(settings.engineMode);
 

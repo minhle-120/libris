@@ -221,7 +221,7 @@ export const settingGroups: SettingGroup[] = [
 	{
 		"id": "ingest",
 		"label": "Ingest",
-		"help": "Extraction is a background job. An original is kept until no notebook uses it (ADR 0013).",
+		"help": "Extraction is a background job. An original is kept until no notebook uses it.",
 		"fields": [
 			{
 				"key": "pdfPageImages",
