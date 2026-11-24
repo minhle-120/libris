@@ -777,12 +777,11 @@ func (h *Host) EngineServeStart(ctx context.Context) (engine.Serving, error) {
 	}
 
 	srv, err := h.serve.Start(ctx, engine.ServeOptions{
-		Bin:             inst.Path,
-		Port:            cfg.EnginePort,
-		Preset:          h.presetPath,
-		Log:             filepath.Join(h.engine.Dir(), "logs", "server.log"),
-		MemoryMarginMiB: memoryMarginMiB,
-		Device:          device,
+		Bin:    inst.Path,
+		Port:   cfg.EnginePort,
+		Preset: h.presetPath,
+		Log:    filepath.Join(h.engine.Dir(), "logs", "server.log"),
+		Device: device,
 	}, specs)
 	if err != nil {
 		h.log.Warn("engine serve", "err", err)
@@ -891,9 +890,3 @@ func (h *Host) ServeStatus() engine.Serving {
 	}
 	return h.serve.Status()
 }
-
-// memoryMarginMiB is what the router keeps free on each device before unloading the least
-// recently used model. It is a constant rather than a setting because it is not a preference
-// and not an ability libris applies — it is a number chosen for three models on a small card,
-// and a settings field would imply the page knows what the card can hold (ADR 0011).
-const memoryMarginMiB = 512

@@ -112,6 +112,7 @@ next one, so what each one settles, in the order an agent is likely to need it:
 | a request to a model server | 0006 | sampling and inference config never travel per request |
 | how libris's own model server is configured | 0022 | the preset file in the data directory is that configuration; libris constructs it, reads it back, and rewrites it only when the models or the device move — so its numbers are not settings and its hand edits are not stomped |
 | where the file lives, and what may delete it | 0023 | `<data>/presets/`, not beside the binary: "Remove" deletes the engine tree, and the configuration is not the engine tree |
+| whether the model server loads its models at start | 0025 | no: the router comes up empty and loads the model a request names. Opening the app costs a socket, a model that cannot load fails where the sentence about it belongs, and the margin flag that made llama.cpp measure the card before every load is gone with it |
 | what port the model server runs on | 0024 | Auto by default — the kernel is asked for a free port at start and the running process reports it; a number pins it and is tried once, because 8080 is the most contested port on a developer machine |
 | the shape of an answer | 0007 | a question is two model calls: research, then synthesis |
 | citations, re-ingest, what a chunk points at | 0008 | a citation is copied out of the segment, not referenced |
@@ -714,6 +715,7 @@ Found the hard way. Browser-harness and fixture traps are in `docs/testing.md`.
 - A probe after a viewport loop measures whatever the last screenshot left behind: the first
   per-width numbers here came from the 640px pass and read as the desktop layout. Set the
   viewport *inside* the loop.
+- A log file outlives the process it describes, and the engine's readiness check reads llama.cpp's log because a port collision is written *nowhere else*. Reading the tail of a log that is appended across starts therefore blamed every later start for one old collision: after a single pinned-port clash, the settings page said "no free port could be found on this machine" forever, pointing at sockets that were free, and nothing new was even appended to prove otherwise. Scope a log read to the attempt — remember the file's size before spawning, and read only what arrived after.
 - A router libris started does not die with it. `srv.Shutdown` closes sockets, not processes,
   and llama.cpp's router forks **one `llama-server` child per loaded model**, so signalling the
   pid the supervisor recorded would leave two model instances holding a port and a GPU.

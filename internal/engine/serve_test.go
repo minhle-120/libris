@@ -38,7 +38,14 @@ func TestPresetWritesOneSectionPerModel(t *testing.T) {
 		"model = /m/chat.gguf", "mmproj = /m/mmproj.gguf",
 		"embeddings = on", "reranking = on", "fit = on", "backend-sampling = true",
 		"reasoning-preserve = true", "cache-type-k = q8_0", "no-warmup = true", "jinja = true",
+		// Written out rather than left absent, so whoever opens this file sees the choice. And
+		// it is a choice: with it absent the section would still not load, and a reader could not
+		// tell that from an oversight (ADR 0025).
+		"load-on-startup = false",
 	} {
+		if strings.Contains(got, "load-on-startup = true") {
+			t.Error("a model is marked to load at startup; opening libris would pay for it")
+		}
 		if !strings.Contains(got, want) {
 			t.Errorf("preset is missing %q:\n%s", want, got)
 		}
@@ -250,6 +257,18 @@ func serveFixture(t *testing.T) (*engine.Supervisor, *engine.ServeOptions, *spaw
 			sp.called = true
 			sp.alive = true
 			sp.cmd = cmd
+			// A real llama.cpp writes its own complaint into the log after it is spawned — a
+			// port it could not bind, a key it refused — and that is the only way the fact can
+			// ever reach a caller. A test that wants a collision has to have the fake say it the
+			// same way, after the start began, rather than pre-loading the file.
+			if sp.logOnSpawn != "" {
+				f, err := os.OpenFile(filepath.Join(dir, "logs", "server.log"),
+					os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+				if err == nil {
+					_, _ = f.WriteString(sp.logOnSpawn)
+					_ = f.Close()
+				}
+			}
 			// Every --port the supervisor asked for, in order, so a test can see how many
 			// ports a start tried and in what order.
 			for i, a := range cmd.Args {
@@ -308,6 +327,9 @@ type spawned struct {
 	// dies kills the fake process the first time it is probed, which is how a test asks
 	// whether a death is noticed rather than waited out.
 	dies bool
+	// logOnSpawn is appended to the log by the fake process once it exists, which is how a
+	// test makes a fact this attempt's own rather than a predecessor's.
+	logOnSpawn string
 }
 
 func TestServeRecordsAndReports(t *testing.T) {

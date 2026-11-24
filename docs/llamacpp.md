@@ -129,11 +129,21 @@ field of every request and keeps an instance per model behind one port.
 | `--models-preset file.ini` | one `[section]` per model, keys are the CLI arguments without their dashes; a `[*]` section is shared by all |
 | `--models-dir DIR` | instead: every GGUF in a directory, by filename |
 | `--models-max N` | how many instances the router keeps (default 4) |
-| `--models-memory-margin N` | MiB kept free on each device; the least recently used model is unloaded until a new one fits |
+| `--models-memory-margin N` | MiB kept free on each device; the least recently used model is unloaded until a new one fits. **libris does not pass it** (ADR 0025): the accounting is done by a measurement subprocess per model, and a load that could not measure logged `measure process … exited with status 1 before reporting` followed by `make_room: waiting for the memory measurement` |
+| `--models-autoload`, `--no-models-autoload` | whether a request for an unloaded model loads it (default: enabled). **libris passes neither**, because the default is what it wants (ADR 0025) |
 | `--no-ui` | no browser UI; the one thing a supervised process should not open |
 
 `GET /models` at router level lists every model with `status.value` (`measuring`, `loaded`,
-`unloaded`) and a memory measurement, and `POST /models/load|unload` take it from there. The
+`unloaded`) and a memory measurement, and `POST /models/load|unload` take it from there. Those
+statuses are the reason libris can start an empty router: `unloaded` is a model that is ready
+to be asked for, and the answer to "is the corpus embeddable" is the file on disk plus this
+table, never merely "is the port answering".
+
+Startup is per model, not per process: the preset key `load-on-startup` names the models a
+router loads before it serves anything (`common/arg.cpp`, `set_preset_only`, read back with the
+truthiness whitelist `on|enabled|true|1`). libris writes `false` for every section, so opening
+the app costs a socket and a table of what could be loaded, and the first request that names a
+model pays its load (ADR 0025). The
 preset keys that matter here are `embeddings = on`, `reranking = on` and `mmproj`. The first
 two were checked against `common/arg.cpp` (`LLAMA_ARG_EMBEDDINGS`, `LLAMA_ARG_RERANKING`),
 and `--mmproj` has no `LLAMA_ARG_*` enum of its own (`common/arg.cpp:2550`) — a wrong key is

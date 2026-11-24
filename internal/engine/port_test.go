@@ -72,10 +72,11 @@ func TestStartOnAutoTakesAPortAndTellsEveryoneWhich(t *testing.T) {
 func TestStartOnAutoTriesAgainWhenThePortIsTaken(t *testing.T) {
 	sup, opts, sp := serveFixture(t)
 	opts.Port = 0
-	writeTakenLog(t, opts.Log)
 	// The generic refusal rather than a port-shaped error, because that is all the probe can
 	// ever report: the socket does not know why nothing is answering. What has to classify the
-	// collision is the log, and this is the test that it does.
+	// collision is the log — and the process has to be the one that wrote the line, which is
+	// what logOnSpawn is for.
+	sp.logOnSpawn = takenLog
 	sp.probeErr = errors.New("dial tcp 127.0.0.1: connect: connection refused")
 
 	// Bounded so a regression fails here in seconds instead of spending the readiness budget
@@ -106,7 +107,7 @@ func TestStartOnAutoTriesAgainWhenThePortIsTaken(t *testing.T) {
 func TestAPinnedPortIsTriedOnceAndNamed(t *testing.T) {
 	sup, opts, sp := serveFixture(t)
 	opts.Port = 9999
-	writeTakenLog(t, opts.Log)
+	sp.logOnSpawn = takenLog
 	sp.probeErr = errors.New("dial tcp 127.0.0.1: connect: connection refused")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -152,6 +153,58 @@ func TestAStartThatIsNotACollisionDoesNotChangePorts(t *testing.T) {
 	if len(sp.ports) != 1 {
 		t.Errorf("%d attempts on a port: %v, want one — the preset is the problem, not the port",
 			len(sp.ports), sp.ports)
+	}
+}
+
+// What the router is told about the card: a cap on how many models may be resident, and no
+// number to keep free. --models-memory-margin is the flag that switches on llama.cpp's
+// device-memory accounting, and that accounting is paid for by spawning a measurement process
+// per model and waiting for its answer. A start that did not come up on a real card logged
+// exactly that: `measure process for model name=libris-chat exited with status 1 before
+// reporting`, then `make_room: waiting for the memory measurement`. So the margin was not
+// protecting the card; it was a second way for the router to stop, and one libris cannot fix
+// from here. Counting models needs no measurement, so that is what is asked for (ADR 0025).
+func TestTheRouterIsNotToldToMeasureTheCard(t *testing.T) {
+	sup, opts, sp := serveFixture(t)
+	opts.Port = 0
+	if _, err := sup.Start(context.Background(), *opts, autoModels()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	args := strings.Join(argList(sp.cmd), " ")
+	if strings.Contains(args, "--models-memory-margin") {
+		t.Errorf("the router was told to keep memory free anyway:\n%s", args)
+	}
+	for _, want := range []string{"--models-preset", "--models-max", "--host", "--port", "--no-ui"} {
+		if !strings.Contains(args, want) {
+			t.Errorf("the router is not told %s:\n%s", want, args)
+		}
+	}
+}
+
+// The log outlives the process that wrote it, and it is appended rather than truncated — a
+// person reading it after a crash wants the whole story, not the last start's. So the words in
+// it are not all from this attempt, and treating them as if they were makes a machine that once
+// had a port collision refuse every start afterwards: "no free port could be found", pointing
+// at a socket that was free. This is the regression that happened, found because the settings
+// page said exactly that while nothing held anything.
+func TestAnOlderRunsBindFailureIsNotBlamedOnThisOne(t *testing.T) {
+	sup, opts, sp := serveFixture(t)
+	opts.Port = 0
+	// Another run's failure, already in the file before this start opens it.
+	writeTakenLog(t, opts.Log)
+	sp.probeErr = errors.New("dial tcp 127.0.0.1: connect: connection refused")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_, err := sup.Start(ctx, *opts, autoModels())
+	if err == nil {
+		t.Fatal("a start whose server never answered reported success")
+	}
+	if errors.Is(err, engine.ErrPortTaken) {
+		t.Fatalf("a start was refused as a port collision by a line another run wrote: %v", err)
+	}
+	if len(sp.ports) != 1 {
+		t.Errorf("%d ports tried (%v); only a real collision is worth another", len(sp.ports), sp.ports)
 	}
 }
 

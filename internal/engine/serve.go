@@ -172,6 +172,8 @@ func Preset(path string, device string, models []Model) error {
 	b.WriteString("; it derives have changed, so an edit to a number here survives until one of them moves.\n")
 	b.WriteString("; A name llama.cpp does not recognise here stops the server from starting at all.\n")
 	b.WriteString("; Capacity and sampling belong to the server, not to a request (ADR 0006, ADR 0011).\n")
+	b.WriteString("; load-on-startup is off: the router comes up empty and loads a model when a request\n")
+	b.WriteString("; asks for one, so opening libris never pays for a model a question may never need.\n")
 	b.WriteString("version = 1\n\n[*]\n")
 	b.WriteString("flash-attn = on\n")
 	b.WriteString("jinja = true\n")
@@ -205,7 +207,20 @@ func Preset(path string, device string, models []Model) error {
 			fmt.Fprintf(&b, "ctx-size = %d\n", chatCtx)
 			b.WriteString("temp = 0.1\ntop-k = 50\ntop-p = 1.0\nmin-p = 0.0\nrepeat-penalty = 1.1\n")
 		}
-		b.WriteString("load-on-startup = true\n\n")
+		// Off, and written as `false` rather than left out, so the choice is visible to whoever
+		// opens this file (the same reason `reasoning-preserve` is written out below its own
+		// default). `load-on-startup` is a preset-only key read back with llama.cpp's truthiness,
+		// which is a whitelist of on|enabled|true|1 (common/arg.cpp, is_truthy) — so `false` is
+		// genuinely false, and so is any spelling upstream stops understanding.
+		//
+		// Empty at start is what makes opening libris cheap, and it is not a risk: the router
+		// loads a model on the request that names it (`--models-autoload`, default enabled — not
+		// passed, so not turned off), reports `GET /models` before anything has loaded, and
+		// and `--models-max` still caps how many may be resident at once. The chat
+		// model is 1.3 GB and most questions ask for one model; loading both at boot was a
+		// startup cost — and on a 4 GB card, the two of them plus a 2 GiB KV cache were a
+		// measurement neither model survives.
+		b.WriteString("load-on-startup = false\n\n")
 	}
 
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -391,10 +406,6 @@ type ServeOptions struct {
 	// ModelsMax caps how many model instances the router keeps. Three is every model libris
 	// knows about; the cap exists so a preset with more sections is not a memory incident.
 	ModelsMax int
-	// MemoryMarginMiB is what the router keeps free on each device, unloading the least
-	// recently used model until a new one fits. On a 4 GB card this is the difference between
-	// three models and three models thrashing.
-	MemoryMarginMiB int
 	// Device is the --device value for every model in the preset, already resolved against
 	// what this build reports. Empty means write no device key at all.
 	Device string
@@ -602,8 +613,18 @@ func (s *Supervisor) Start(ctx context.Context, o ServeOptions, models []Model) 
 // the record and the URL waited on all have to agree on which one was used.
 func (s *Supervisor) startOnce(ctx context.Context, o ServeOptions, port int, logFile *os.File, have *PresetFile) (Serving, error) {
 	// The router is llama-server with no model of its own. --models-preset names the file
-	// that says which models exist and how each is loaded; --models-max and
-	// --models-memory-margin are what keep three of them on one card.
+	// that says which models exist and how each is loaded; --models-max is what keeps three
+	// sections in a preset from becoming three model instances whether or not anything asked
+	// for them.
+	//
+	// --models-memory-margin is deliberately not passed. It is the flag that turns on the
+	// router's device-memory accounting, and that accounting is paid for by launching a
+	// *measurement* process per model and waiting on its answer: the log of a start that did
+	// not come up said `measure process for model name=libris-chat exited with status 1 before
+	// reporting` and then sat in `make_room: waiting for the memory measurement`. So the margin
+	// was not protecting a small card, it was a second way for the whole router to stop. What
+	// remains is the cap that does not need to measure anything: at most ModelsMax instances,
+	// least recently used unloaded first (ADR 0025).
 	//
 	// The port is an argument and not a key in that file on purpose: the file is the model
 	// server's configuration and is only rewritten when what libris derives about the models
@@ -617,14 +638,17 @@ func (s *Supervisor) startOnce(ctx context.Context, o ServeOptions, port int, lo
 		"--models-max", strconv.Itoa(o.ModelsMax),
 		"--no-ui",
 	}
-	if o.MemoryMarginMiB > 0 {
-		args = append(args, "--models-memory-margin", strconv.Itoa(o.MemoryMarginMiB))
-	}
-
 	// Not CommandContext: the request that asked for the start goes away in a second, and a
 	// model server that dies when a browser tab closes is not the thing that was asked for.
 	// The supervisor owns this process from here, and Stop is what ends it.
 	cmd := exec.Command(o.Bin, args...)
+	// Where this attempt's own words begin. The log is appended for the life of the data
+	// directory, so whatever it already holds belongs to other starts — and reading that as if
+	// it were this process's makes a machine that once had a port collision refuse every start
+	// afterwards with "no free port could be found", because the stale bind failure is still in
+	// the last few kilobytes. That is not a hypothetical: it is what this code did on the first
+	// run after a collision, and the sentence it produced pointed at a socket that was free.
+	before := logSize(logFile)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	// Its own process group, so the signal that stops the router reaches the model
@@ -653,10 +677,11 @@ func (s *Supervisor) startOnce(ctx context.Context, o ServeOptions, port int, lo
 	}
 
 	url := Endpoint(o.Host, port) + "/models"
-	if err := s.waitReady(ctx, url, pid, o.Log); err != nil {
+	if err := s.waitReady(ctx, url, pid, o.Log, before); err != nil {
 		// Whatever the router said on its way out is the answer the user needs — a port
-		// already taken, a preset key it refused — and it is in the log and nowhere else.
-		tail := tailOf(o.Log, 4096)
+		// already taken, a preset key it refused — and it is in the log and nowhere else. This
+		// attempt's half of the log only: see logSize.
+		tail := sinceOf(o.Log, before, 4096)
 		s.Stop()
 		if portTaken(tail) {
 			return Serving{Port: port, Log: o.Log, Error: portSentence(port)}, ErrPortTaken
@@ -769,7 +794,7 @@ func (s *Supervisor) reap(cmd *exec.Cmd) (int, error) {
 // not bind, a preset key it refused — stops answering immediately, and a probe that only asks
 // the socket would keep asking for the full readyTimeout before admitting that nobody is
 // home: ninety seconds of "Starting…" for a failure that happened in two hundred milliseconds.
-func (s *Supervisor) waitReady(ctx context.Context, url string, pid int, log string) error {
+func (s *Supervisor) waitReady(ctx context.Context, url string, pid int, log string, from int64) error {
 	deadline := time.Now().Add(readyTimeout)
 	var last error
 	for time.Now().Before(deadline) {
@@ -783,7 +808,7 @@ func (s *Supervisor) waitReady(ctx context.Context, url string, pid int, log str
 		// "couldn't bind HTTP server socket" and then *stays alive* for the better part of a
 		// minute, measuring models that will never be served. Nothing will ever answer on that
 		// socket, so the one fact worth knowing this early is in the only place it is written.
-		if portTaken(tailOf(log, 4096)) {
+		if portTaken(sinceOf(log, from, 4096)) {
 			return fmt.Errorf("engine: the server said the port is already taken")
 		}
 		if err := s.probe(ctx, url); err == nil {
@@ -860,24 +885,43 @@ func lastLine(log string) string {
 	return ""
 }
 
-func tailOf(path string, n int64) string {
+// logSize is how many bytes a log file already holds. It is the offset a caller remembers so
+// that a later read can be scoped to one attempt — the file outlives the process, and the
+// words in it are not all from this start.
+func logSize(f *os.File) int64 {
+	st, err := f.Stat()
+	if err != nil {
+		return 0
+	}
+	return st.Size()
+}
+
+// sinceOf reads what a log holds from a remembered offset onwards, capped at n bytes from the
+// end of that region. Reading the whole tail instead is how a start gets blamed for a failure
+// some earlier start reported.
+func sinceOf(path string, from, n int64) string {
 	f, err := os.Open(path)
 	if err != nil {
 		return ""
 	}
 	defer f.Close()
 	st, err := f.Stat()
-	if err != nil {
+	if err != nil || st.Size() <= from {
 		return ""
 	}
-	off := st.Size() - n
-	if off > 0 {
-		if _, err := f.Seek(off, io.SeekStart); err != nil {
+	if _, err := f.Seek(from, io.SeekStart); err != nil {
+		return ""
+	}
+	if st.Size()-from > n {
+		if _, err := f.Seek(st.Size()-n, io.SeekStart); err != nil {
 			return ""
 		}
 	}
-	raw, _ := io.ReadAll(f)
-	return string(raw)
+	b, err := io.ReadAll(io.LimitReader(f, n))
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }
 
 // oneSentence keeps a subprocess's complaint inside one line: a warning rendered as a <p> is

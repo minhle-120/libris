@@ -27,12 +27,18 @@
    * server libris starts, and those are not a form either.
    */
   let {
-    saved = 0
+    saved = 0,
+    onModels = () => {}
   }: {
     /** Bumped by the parent on every save. The models card does not read settings — but the
      *  mode does decide whether it is mounted at all, and a save that moved the port moves
      *  the "restart to load it" answer with it. */
     saved?: number;
+    /** Called when the set of models on this disk changes: a download landed, an entry was
+     *  discarded or removed. The engine card gates its Start button on there being a model to
+     *  run, and the engine view carries the engine's download progress rather than the model
+     *  downloads', so that card cannot see this by itself. */
+    onModels?: () => void;
   } = $props();
 
   let view = $state<ModelsView | null>(null);
@@ -68,6 +74,20 @@
       return;
     }
     void refresh();
+  });
+
+  // A model landing is a fact the engine card needs and cannot read for itself: the engine
+  // view reports the llama.cpp download, never these files, and its Start button is disabled
+  // while it can see no model to run. So a download that finished while the page was open
+  // left that button dead until the app was restarted — which read as "the app has to be
+  // reopened to notice what it just did". Reported upward rather than reached across, because
+  // the parent owns the wiring between its two cards.
+  let lastComplete: number | undefined;
+  $effect(() => {
+    if (!view) return;
+    const n = complete;
+    if (lastComplete !== undefined && n !== lastComplete) onModels();
+    lastComplete = n;
   });
 
   // Polled, not streamed — the same arrangement as the engine download and a source that is

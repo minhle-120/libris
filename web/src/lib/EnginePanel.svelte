@@ -29,6 +29,7 @@
    */
   let {
     saved = 0,
+    modelSet = 0,
     device = '',
     onDevice = () => {}
   }: {
@@ -36,6 +37,11 @@
      *  the mode are settings, so the section must not still be showing the port that was
      *  saved before the one being typed. */
     saved?: number;
+    /** Bumped by the parent when the model files on this disk change. The Start button below
+     *  is disabled while this section can see no model to run, and model downloads are not
+     *  reported in this view — so without it, a model that lands while the page is open stays
+     *  invisible to the button that needs it. */
+    modelSet?: number;
     /** The `engineDevice` setting, owned by the form above: this section lists the choices,
      *  because the choices are the facts below them, and the draft stays in one place so one
      *  Save button still means "save everything on this page". */
@@ -121,12 +127,14 @@
     lastTag = tag;
   });
 
-  // A saved build selection changes what this section should offer, so it reloads. Watching
-  // the counter rather than the value is deliberate: the prop is the draft in the form, and
-  // refetching on every keystroke would fight the person typing.
+  // A saved build selection changes what this section should offer, and a model landing
+  // changes what it may offer, so either reloads it. Watching the counters rather than the
+  // values is deliberate: the prop is the draft in the form, and refetching on every keystroke
+  // would fight the person typing.
   let first = true;
   $effect(() => {
     void saved;
+    void modelSet;
     if (first) {
       first = false;
       return;

@@ -21,6 +21,10 @@
   // settings change that alters what the backend offers must not leave the section showing
   // the other build's file size.
   let savedToken = $state(0);
+  // Bumped when the model files on this disk change. The engine card and the models card are
+  // siblings, and neither reads the other's endpoint; this is the one line between them, and
+  // it exists because the Start button is gated on there being a model to run.
+  let modelSet = $state(0);
 
   // Which half of the model-server group applies. It is one switch rather than two toggles
   // that can both be on, and the fields it hides are the ones libris derives for itself
@@ -213,6 +217,7 @@
           {#if group.id === 'servers' && mode === 'managed'}
             <EnginePanel
               saved={savedToken}
+              modelSet={modelSet}
               device={str('engineDevice')}
               onDevice={(v) => set('engineDevice', v)}
             />
@@ -223,7 +228,7 @@
                but they belong under the group that names them, next to the reranker switch
                and the probed dimensions, which are the two model facts that are settings. -->
           {#if group.id === 'models' && mode === 'managed'}
-            <ModelPanel saved={savedToken} />
+            <ModelPanel saved={savedToken} onModels={() => modelSet++} />
           {/if}
         </section>
       {/each}
