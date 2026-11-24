@@ -78,5 +78,18 @@ ui: build
 ui-upload ui-drop ui-ask ui-nav:
 	@$(MAKE) --no-print-directory ui UI_HARNESS=$@
 
+# The first-run gate needs a real binary on an empty data directory: make ui's fixture is
+# deliberately external-mode, where there is nothing to install, no device to pick, and no
+# model to fetch — so the gate must not appear there either, which is the other half of it.
+# The empty directory is the first run, and the network is used for one thing: asking upstream
+# which release to offer. READY=1 pointed at a machine that has everything asserts the reverse.
+ui-setup: build
+	@dir=$$(mktemp -d); \
+	./libris -open=false -addr 127.0.0.1:$(UI_PORT) -data $$dir >/tmp/libris-setup.log 2>&1 & pid=$$!; \
+	sleep 1; \
+	APP=http://127.0.0.1:$(UI_PORT)/ CDP_PORT=9329 node scripts/ui-setup.mjs; rc=$$?; \
+	kill $$pid 2>/dev/null; rm -rf $$dir; \
+	test $$rc -eq 0
+
 clean:
 	rm -f cover.out

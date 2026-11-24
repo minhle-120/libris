@@ -4,9 +4,14 @@
     createNotebook,
     deleteChat,
     deleteNotebook,
+    getDevices,
+    getEngine,
+    getModels,
     listChats,
     listNotebooks
   } from './lib/api';
+  import { readSetup, type Setup } from './lib/setup';
+  import type { DeviceReport, EngineView, ModelsView } from './lib/types';
   import { NOTEBOOKS, narrowRule, readOpen, readW, SIDE, writeOpen } from './lib/panel';
   import { errorMessage } from './lib/format';
   import type { Chat, Crumb, Notebook, Panel, Source } from './lib/types';
@@ -14,6 +19,7 @@
   import Sidebar from './components/Sidebar.svelte';
   import NotebookView from './components/NotebookView.svelte';
   import SettingsView from './components/SettingsView.svelte';
+  import SetupView from './lib/SetupView.svelte';
   import ConfirmDialog from './lib/ConfirmDialog.svelte';
   import EmptyState from './lib/EmptyState.svelte';
   import Icon from './lib/Icon.svelte';
@@ -26,6 +32,16 @@
   let notebooks = $state<Notebook[]>([]);
   let activeId = $state<string | null>(null);
   let loading = $state(true);
+  // The gate in front of the app. Not a tour: a question and an ingest both need the
+  // embedder, so until the engine, the device and the two models are here there is no
+  // screen behind this one worth showing. Re-derived from the server on every poll, because
+  // a download finishing is the whole reason to redraw (ADR 0020).
+  let setup = $state<Setup | null>(null);
+  let facts = $state<{
+    engine: EngineView | null;
+    models: ModelsView | null;
+    devices: DeviceReport | null;
+  }>({ engine: null, models: null, devices: null });
   let error = $state('');
   let dlg = $state<HTMLDialogElement | null>(null);
   let nameInput = $state<HTMLInputElement | null>(null);
@@ -80,7 +96,33 @@
     return out;
   });
 
-  onMount(load);
+  async function checkSetup() {
+    try {
+      const [engine, models, devices] = await Promise.all([
+        getEngine(),
+        getModels(),
+        getDevices(),
+      ]);
+      facts = { engine, models, devices };
+      setup = readSetup(engine, models, devices);
+    } catch (e) {
+      // A server that cannot answer is not a ready server, but it is also not a reason to
+      // paint a wizard full of blanks: stand aside and let the app's own error path speak.
+      setup = null;
+      error = errorMessage(e);
+    }
+  }
+
+  $effect(() => {
+    if (!setup || setup.ready) return;
+    const t = setInterval(checkSetup, 2000);
+    return () => clearInterval(t);
+  });
+
+  onMount(() => {
+    void checkSetup();
+    load();
+  });
 
   // Chats belong to a notebook, so they are fetched when the notebook changes — and
   // cleared when there is none, rather than leaving the previous notebook's threads
@@ -354,6 +396,15 @@
   }
 </script>
 
+{#if setup && !setup.ready}
+  <SetupView
+    {setup}
+    engine={facts.engine}
+    models={facts.models}
+    devices={facts.devices}
+    onchange={checkSetup}
+  />
+{:else}
 <Header
   {theme}
   {view}
@@ -419,6 +470,8 @@
     {/if}
   </main>
 </div>
+
+{/if}
 
 <svelte:window on:dragover={fileDrop} on:drop={fileDrop} />
 
