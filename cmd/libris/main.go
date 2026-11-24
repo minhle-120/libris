@@ -242,7 +242,7 @@ func main() {
 	// borrowing one. Stop runs after srv.Shutdown, because an ask still streaming would write
 	// to a store that is about to close. Stop waits for the group, children included.
 	if host != nil {
-		if err := host.EngineServeStop(shutdown); err != nil {
+		if _, err := host.EngineServeStop(shutdown); err != nil {
 			log.Warn("engine stop", "err", err)
 		}
 	}

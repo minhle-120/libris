@@ -64,6 +64,14 @@ const (
 // carry no binaries, so they must not be picked just because they sort higher.
 var tagPattern = regexp.MustCompile(`^b\d{4,6}$`)
 
+// ValidTag reports whether s is shaped like a nightly. It is exported because the shape is
+// one rule with two callers — a download must not be asked for a directory name, and the
+// request that starts one should say so in its own words rather than by whatever this
+// package's error happens to map to. It used to be copied in the HTTP layer instead, where
+// the copy disagreed: four to six digits here, four to seven there, so a seven-digit nightly
+// was offered by one and refused by the other.
+func ValidTag(s string) bool { return tagPattern.MatchString(s) }
+
 // ErrBusy means a download is already running. Two at once would fight over the same
 // .parts file and produce a file that verifies against neither.
 // releaseTimeout bounds the update check, which the settings page waits on. Long enough for

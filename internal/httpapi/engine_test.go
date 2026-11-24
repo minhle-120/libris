@@ -44,6 +44,10 @@ type fakeHost struct {
 	modelRemoveErr error
 	discarded2     []string
 	modelStops     int
+	// engineErr is what starting a download answers with, when the test wants the refusal
+	// rather than the download. The deciding of which refusal, and why, moved to
+	// internal/app: see TestEngineInstallStartRefusesWhatItCannotFetch.
+	engineErr error
 }
 
 func newFakeHost() *fakeHost {
@@ -71,9 +75,19 @@ func (f *fakeHost) Engine(ctx context.Context, force bool) (*app.EngineView, err
 	return f.view, nil
 }
 
-func (f *fakeHost) EngineInstall(ctx context.Context, tag string) (engine.Installed, error) {
+// EngineInstallStart records the tag it was handed and answers with the tag a machine module
+// would have settled on — which is the point of the seam: an empty ask is not a bug in the
+// route, it is "the newest", and only the thing that can see the release list knows that tag.
+// A refusal records nothing, because a start that was refused started nothing.
+func (f *fakeHost) EngineInstallStart(ctx context.Context, tag string) (string, error) {
+	if f.engineErr != nil {
+		return "", f.engineErr
+	}
 	f.installs <- tag
-	return f.installed, nil
+	if tag == "" {
+		return f.installed.Tag, nil
+	}
+	return tag, nil
 }
 
 func (f *fakeHost) EngineStop()                        { f.stopped++ }
@@ -83,8 +97,10 @@ func (f *fakeHost) EngineServeStart(context.Context) (engine.Serving, error) {
 	f.served++
 	return f.serving, f.serveErr
 }
-func (f *fakeHost) EngineServeStop(context.Context) error { f.stoppedServe++; return f.serveStopErr }
-func (f *fakeHost) ServeStatus() engine.Serving           { return f.serving }
+func (f *fakeHost) EngineServeStop(context.Context) (engine.Serving, error) {
+	f.stoppedServe++
+	return f.serving, f.serveStopErr
+}
 
 func (f *fakeHost) Devices(ctx context.Context, refresh bool) (deviceinfo.Report, error) {
 	f.refreshed = refresh
@@ -193,7 +209,7 @@ func TestEngineInstallAnswersBeforeTheDownloadFinishes(t *testing.T) {
 	}
 }
 
-func TestEngineInstallResolvesAnEmptyTagFromTheRelease(t *testing.T) {
+func TestEngineInstallForwardsAnEmptyAskRatherThanNamingATag(t *testing.T) {
 	h := newFakeHost()
 	srv := hostServer(t, h)
 
@@ -203,39 +219,40 @@ func TestEngineInstallResolvesAnEmptyTagFromTheRelease(t *testing.T) {
 	}
 	select {
 	case tag := <-h.installs:
-		// The browser never sees the release list, so "the newest" is resolved server-side —
-		// and it resolves to the tag this same page is showing, not to a second opinion.
-		if tag != "b12649" {
-			t.Errorf("install was started for %q, want the newest release the view reported", tag)
+		// The route does not guess which build is newest — it forwards the ask. Guessing here
+		// would be a second copy of a rule that needs the release list to answer.
+		if tag != "" {
+			t.Errorf("install was started for %q, want the empty ask forwarded", tag)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("no install was started")
 	}
+	// What the person is told is the tag the machine settled on, not an acknowledgment.
+	if !strings.Contains(body, `"tag":"b12649"`) {
+		t.Errorf("body = %s, want the tag the machine named", body)
+	}
 }
 
-func TestEngineInstallRefusesBeforeStartingSomethingImpossible(t *testing.T) {
-	cases := []struct {
-		name string
-		body string
-	}{
-		{"a path is not a version", `{"tag":"../../etc"}`},
-		{"a version nobody built", `{"tag":"b1"}`},
-	}
+// The three refusals below are the machine module's decisions, told here only as the status
+// and the sentence they arrive at: which of them a request earns, and what the person reads,
+// is decided in internal/app (TestEngineInstallStart*). What would break if this file grew a
+// switch of its own is the mapping, and only the mapping.
+func TestEngineInstallRefusalIsTheMachinesSentenceAt422(t *testing.T) {
 	h := newFakeHost()
+	h.engineErr = fmt.Errorf("%w: %q is not a llama.cpp nightly tag, which is what a build is named by", app.ErrInvalid, "../../etc")
 	srv := hostServer(t, h)
-	for _, c := range cases {
-		code, body := hostCall(t, srv, http.MethodPost, "/api/host/engine", c.body)
-		if code != http.StatusBadRequest {
-			t.Errorf("%s: status = %d, want 400 (%s)", c.name, code, body)
-		}
-		if !strings.Contains(body, "nightly") {
-			t.Errorf("%s: body = %s, want it to say what a tag looks like", c.name, body)
-		}
-		select {
-		case tag := <-h.installs:
-			t.Errorf("%s: an install was started for %q anyway", c.name, tag)
-		default:
-		}
+
+	code, body := hostCall(t, srv, http.MethodPost, "/api/host/engine", `{"tag":"../../etc"}`)
+	if code != http.StatusUnprocessableEntity {
+		t.Errorf("status = %d, want 422 (%s)", code, body)
+	}
+	if !strings.Contains(body, "nightly") {
+		t.Errorf("body = %s, want it to say what a tag looks like", body)
+	}
+	select {
+	case tag := <-h.installs:
+		t.Errorf("an install was started for %q anyway", tag)
+	default:
 	}
 }
 
@@ -244,7 +261,7 @@ func TestEngineInstallWhileTheCheckIsStillRunning(t *testing.T) {
 	// A first visit on a fresh machine: nothing cached, so no release yet, nothing failed,
 	// and the check is in flight. This is not an offline machine and the response must not
 	// read like one.
-	h.view.Latest, h.view.Asset, h.view.CheckError, h.view.Checking = nil, nil, "", true
+	h.engineErr = fmt.Errorf("%w: libris is still finding out which build is newest; try again in a moment", app.ErrUpdateChecking)
 	srv := hostServer(t, h)
 
 	code, body := hostCall(t, srv, http.MethodPost, "/api/host/engine", `{}`)
@@ -263,9 +280,8 @@ func TestEngineInstallWhileTheCheckIsStillRunning(t *testing.T) {
 
 func TestEngineInstallOfflineSaysSoInItsOwnRequest(t *testing.T) {
 	h := newFakeHost()
-	// What an offline machine produces: the installed row, no release, and a sentence why.
-	h.view.Latest, h.view.Asset = nil, nil
-	h.view.CheckError = "engine: the update check failed: dial tcp"
+	// What an offline machine produces: no release, and the upstream sentence to go with it.
+	h.engineErr = fmt.Errorf("%w: the newest build could not be determined: engine: the update check failed: dial tcp", app.ErrUpdateUnknown)
 	srv := hostServer(t, h)
 
 	code, body := hostCall(t, srv, http.MethodPost, "/api/host/engine", `{}`)

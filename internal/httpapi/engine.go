@@ -13,7 +13,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"regexp"
 	"strings"
 
 	"libris/internal/app"
@@ -27,7 +26,10 @@ import (
 // than the app refusing to start.
 type Host interface {
 	Engine(ctx context.Context, force bool) (*app.EngineView, error)
-	EngineInstall(ctx context.Context, tag string) (engine.Installed, error)
+	// EngineInstallStart begins a download and answers as soon as it is underway, with the tag
+	// it settled on. An empty tag means "the newest", and the module behind this seam is what
+	// turns that into a tag — the release list is not something a browser can see.
+	EngineInstallStart(ctx context.Context, tag string) (string, error)
 	EngineStop()
 	EngineRemove(ctx context.Context) error
 	EngineDiscardParts() error
@@ -35,8 +37,9 @@ type Host interface {
 	// first-load of a GGUF. The page polls GET /api/host/engine while it runs, so the wait
 	// is the request and the state stays visible.
 	EngineServeStart(ctx context.Context) (engine.Serving, error)
-	EngineServeStop(ctx context.Context) error
-	ServeStatus() engine.Serving
+	// EngineServeStop answers with the state it left the process in, so the page that asked
+	// does not have to ask again to find out what its own request did.
+	EngineServeStop(ctx context.Context) (engine.Serving, error)
 	Devices(ctx context.Context, refresh bool) (deviceinfo.Report, error)
 
 	// The models the catalogue offers, and the four things a person can do to one. Each of
@@ -112,54 +115,56 @@ func (s *Server) handleEngineInstall(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	req.Tag = strings.TrimSpace(req.Tag)
-	if req.Tag != "" && !tagPattern.MatchString(req.Tag) {
-		writeError(w, http.StatusBadRequest, "tag must look like a llama.cpp nightly, e.g. b12649")
+
+	// Everything about this request that is a decision — is that a tag, which tag does "the
+	// newest" name, may a second download start on top of the first — belongs to the module
+	// that owns the download, and is answered here as an error. What stays is the body and the
+	// status. The goroutine used to live in this handler, pointed at context.Background()
+	// because the download must outlive the request: that reason is the download's, not the
+	// transport's, and it is the reason a half-written engine used to be a thing only the HTTP
+	// layer could explain.
+	tag, err := s.host.EngineInstallStart(r.Context(), req.Tag)
+	if err != nil {
+		s.failMachine(w, "engine install", err)
 		return
 	}
-
-	// The tag is resolved before the response, so a machine that cannot reach GitHub is told
-	// that now, in the request that asked, rather than by a progress bar that never moves.
-	if req.Tag == "" {
-		view, err := s.host.Engine(r.Context(), false)
-		if err != nil {
-			s.fail(w, "engine", err)
-			return
-		}
-		if view.Latest == nil {
-			switch {
-			case view.Checking:
-				// Nothing has failed. The answer has not arrived yet, and a machine that is
-				// told "could not be determined" here will go and press the same button again
-				// while the page is still waiting — which is the opposite of what a person
-				// watching a spinner wants to read.
-				writeError(w, http.StatusConflict, "libris is still finding out which build is newest; try again in a moment")
-			case view.CheckError != "":
-				writeError(w, http.StatusBadGateway, "the newest build could not be determined: "+view.CheckError)
-			default:
-				// No answer, no check in flight, no reason given: the view is inconsistent,
-				// and an error message that ends in a colon and a space is worse than no
-				// sentence at all.
-				writeError(w, http.StatusBadGateway, "the newest build could not be determined")
-			}
-			return
-		}
-		req.Tag = view.Latest.Tag
-	}
-
-	go func() {
-		// Not r.Context(): the download outlives this request by design. Stop is how it ends.
-		if _, err := s.host.EngineInstall(context.Background(), req.Tag); err != nil {
-			s.log.Warn("engine install failed", "tag", req.Tag, "err", err)
-		}
-	}()
-
-	writeJSON(w, http.StatusAccepted, map[string]any{"tag": req.Tag, "state": "downloading"})
+	writeJSON(w, http.StatusAccepted, map[string]any{"tag": tag, "state": "downloading"})
 }
 
-// tagPattern is the shape of a llama.cpp nightly tag, repeated here rather than imported from
-// engine so a request cannot probe the internals of that package. It is deliberately narrow:
-// anything else is a path, not a version.
-var tagPattern = regexp.MustCompile(`^b[0-9]{4,7}$`)
+// failMachine is the whole error-to-status mapping for the machine endpoints, written once.
+// It was seven switches before, one per handler, and they drifted: a malformed tag was 400 in
+// one and what ErrInvalid means elsewhere was 422 in another, and "the newest build could not
+// be determined" was spelled three times. Every sentence a person can read is the app
+// module's, which is where the failure was seen; what is decided here is only which status
+// the failure deserves.
+//
+// This is deliberately not shared with the document endpoints. app.ErrInvalid is 400 there,
+// where it means a body that could not be read, and 422 here, where it means a request that
+// read fine and names something that cannot happen. Two callers, two answers, so two tables.
+func (s *Server) failMachine(w http.ResponseWriter, op string, err error) {
+	switch {
+	case errors.Is(err, app.ErrUpdateChecking):
+		// Not a failure and not an answer. The sentence says try again in a moment, so the
+		// status must not read like the machine broke.
+		writeError(w, http.StatusConflict, err.Error())
+	case errors.Is(err, app.ErrUpdateUnknown):
+		// The lookup was tried and failed; this is the one case where upstream is at fault.
+		writeError(w, http.StatusBadGateway, err.Error())
+	case errors.Is(err, app.ErrInvalid), errors.Is(err, app.ErrEngineMode):
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+	case errors.Is(err, app.ErrBusy), errors.Is(err, engine.ErrBusy),
+		errors.Is(err, app.ErrEngineRunning), errors.Is(err, app.ErrEngineStart),
+		errors.Is(err, engine.ErrRunning):
+		// Every one of these is "the world is not in the state this request assumed", and each
+		// carries the sentence that says what to do about it: the other download, the port,
+		// the model, the process that has the files open.
+		writeError(w, http.StatusConflict, err.Error())
+	case errors.Is(err, engine.ErrNotFound):
+		writeError(w, http.StatusNotFound, err.Error())
+	default:
+		s.fail(w, op, err)
+	}
+}
 
 func (s *Server) handleEngineStop(w http.ResponseWriter, r *http.Request) {
 	s.host.EngineStop()
@@ -173,14 +178,7 @@ func (s *Server) handleEngineStop(w http.ResponseWriter, r *http.Request) {
 // Refusing is the honest answer, and the message names the file it is holding.
 func (s *Server) handleEngineRemove(w http.ResponseWriter, r *http.Request) {
 	if err := s.host.EngineRemove(r.Context()); err != nil {
-		switch {
-		case errors.Is(err, engine.ErrRunning), errors.Is(err, engine.ErrBusy):
-			writeError(w, http.StatusConflict, err.Error())
-		case errors.Is(err, engine.ErrNotFound):
-			writeError(w, http.StatusNotFound, err.Error())
-		default:
-			s.fail(w, "engine", err)
-		}
+		s.failMachine(w, "engine remove", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"removed": true})
@@ -203,16 +201,7 @@ func (s *Server) handleEngineParts(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleEngineServe(w http.ResponseWriter, r *http.Request) {
 	srv, err := s.host.EngineServeStart(r.Context())
 	if err != nil {
-		switch {
-		case errors.Is(err, app.ErrEngineMode), errors.Is(err, app.ErrInvalid):
-			writeError(w, http.StatusUnprocessableEntity, err.Error())
-		case errors.Is(err, app.ErrEngineRunning), errors.Is(err, app.ErrEngineStart):
-			// Both are "the world is not in the state this request assumed", which is what 409
-			// means, and both carry a sentence about the port or the model to fix.
-			writeError(w, http.StatusConflict, err.Error())
-		default:
-			s.fail(w, "engine", err)
-		}
+		s.failMachine(w, "engine serve", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, srv)
@@ -221,15 +210,12 @@ func (s *Server) handleEngineServe(w http.ResponseWriter, r *http.Request) {
 // handleEngineServeStop stops it. Deleting something that was never running is not a 404:
 // the state the caller wanted is the state it gets.
 func (s *Server) handleEngineServeStop(w http.ResponseWriter, r *http.Request) {
-	if err := s.host.EngineServeStop(r.Context()); err != nil {
-		if errors.Is(err, app.ErrEngineMode) {
-			writeError(w, http.StatusUnprocessableEntity, err.Error())
-			return
-		}
-		s.fail(w, "engine", err)
+	srv, err := s.host.EngineServeStop(r.Context())
+	if err != nil {
+		s.failMachine(w, "engine stop", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, s.host.ServeStatus())
+	writeJSON(w, http.StatusOK, srv)
 }
 
 // handleDevices reports the machine. The body is the stored deviceinfo.Report verbatim, so
@@ -292,14 +278,7 @@ func (s *Server) handleModelInstall(w http.ResponseWriter, r *http.Request) {
 	}
 	view, err := s.host.ModelInstall(id)
 	if err != nil {
-		switch {
-		case errors.Is(err, app.ErrBusy):
-			writeError(w, http.StatusConflict, err.Error())
-		case errors.Is(err, app.ErrInvalid):
-			writeError(w, http.StatusUnprocessableEntity, err.Error())
-		default:
-			s.fail(w, "models", err)
-		}
+		s.failMachine(w, "model install", err)
 		return
 	}
 	// The bytes arrive after this response. What the answer carries is the row that says so.
@@ -319,7 +298,7 @@ func (s *Server) handleModelDiscard(w http.ResponseWriter, r *http.Request) {
 	}
 	view, err := s.host.ModelDiscard(id)
 	if err != nil {
-		s.reportModel(w, err)
+		s.failMachine(w, "models", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, view)
@@ -336,21 +315,8 @@ func (s *Server) handleModelRemove(w http.ResponseWriter, r *http.Request) {
 	}
 	view, err := s.host.ModelRemove(id)
 	if err != nil {
-		s.reportModel(w, err)
+		s.failMachine(w, "models", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, view)
-}
-
-// reportModel maps the two statuses a model call can mean on their own, and hands the rest to
-// the shared mapping.
-func (s *Server) reportModel(w http.ResponseWriter, err error) {
-	switch {
-	case errors.Is(err, app.ErrBusy):
-		writeError(w, http.StatusConflict, err.Error())
-	case errors.Is(err, app.ErrInvalid):
-		writeError(w, http.StatusUnprocessableEntity, err.Error())
-	default:
-		s.fail(w, "models", err)
-	}
 }

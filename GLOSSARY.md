@@ -62,6 +62,19 @@ The router is not answering, so there is no address to dial. Not "unreachable" a
 "failed": nothing was asked.
 _Avoid_: Offline, down, unavailable
 
+## Fetching
+
+**Stop**:
+Interrupt a running download and keep the bytes, so the next attempt resumes. Not "cancel":
+cancelling is what **Discard** means, and the two are separate buttons because a person pressing
+one does not usually mean the other.
+_Avoid_: Cancel, pause, abort
+
+**Discard**:
+Throw away the bytes a stopped download is holding. The act is about the disk, not about the
+transfer, which is why it is not written as "delete the file".
+_Avoid_: Delete, clear, cancel
+
 ## Setting up
 
 **Setup**:

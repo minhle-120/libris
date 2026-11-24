@@ -361,26 +361,63 @@ func (h *Host) startCheck(b engine.Backend, force, needed bool) bool {
 	return true
 }
 
-// EngineInstall fetches a tag the page offered. An empty tag means "whatever is newest",
-// which is the label on the one button, so it is resolved here rather than in a browser that
-// cannot see the release list.
-func (h *Host) EngineInstall(ctx context.Context, tag string) (engine.Installed, error) {
+// EngineInstallStart begins fetching a build the page offered and answers as soon as the
+// fetch is underway, with the tag it settled on. An empty tag means "whatever is newest",
+// which is the label on the one button, so that is resolved here rather than in a browser
+// that cannot see the release list.
+//
+// The job is started here, by the module that owns the machine, rather than by whoever
+// forwarded the request. Two reasons that are really one: a finished install has to
+// invalidate the device report, because the cached answer describes the build that was just
+// replaced — a step only this module can take; and the model downloads already work this way
+// (models.Fetcher.Start answers at once), so a machine whose two long jobs are owned by
+// different modules is a machine where shutdown has to know both.
+//
+// The answer is not the finished engine: 35 MB over hotel wifi is minutes, and the only way
+// to end it is EngineStop, so it must not be cancellable by the thing that asked. A closed
+// tab, a proxy idle timeout or a laptop lid would otherwise be the act that stops the bytes.
+// Progress and any failure are read back from the view the page polls.
+func (h *Host) EngineInstallStart(ctx context.Context, tag string) (string, error) {
 	const backend = engine.Vulkan
 
-	if tag == "" {
-		rel, _, ok := h.engine.Known(backend)
-		if !ok {
-			// Nothing on disk to offer. Ask once, here, where an answer is required — the
-			// page keeps its Download button disabled until it has a release to name, so this
-			// is the rare path and not the common one.
-			asked, _, err := h.engine.Check(ctx, backend, false)
-			if err != nil {
-				return engine.Installed{}, err
-			}
-			rel = asked
-		}
-		tag = rel.Tag
+	if tag != "" && !engine.ValidTag(tag) {
+		return "", fmt.Errorf("%w: %q is not a llama.cpp nightly tag, which is what a build is named by", ErrInvalid, tag)
 	}
+	if tag == "" {
+		got, err := h.newest(ctx, backend)
+		if err != nil {
+			return "", err
+		}
+		tag = got
+	}
+	// Checked before the goroutine, because the caller is being told what just happened. The
+	// manager refuses twice-over anyway — the race this leaves is one request that starts
+	// nothing and reads a bar that belongs to the other.
+	if p := h.engine.Progress(); p.State == engine.StateDownloading || p.State == engine.StateVerifying || p.State == engine.StateUnpacking {
+		return "", fmt.Errorf("%w: another download is still running", ErrBusy)
+	}
+
+	go func() {
+		// WithoutCancel: the values of this request travel with the job, its cancellation does
+		// not. Hanging up is not Stop.
+		in, err := h.engineInstall(context.WithoutCancel(ctx), tag, backend)
+		if err != nil {
+			h.log.Warn("engine install failed", "tag", tag, "err", err)
+			return
+		}
+		h.log.Debug("engine installed", "tag", in.Tag, "path", in.Path)
+		// A router that is up is holding the files of the build it loaded, and refuses to be
+		// replaced. The page says so; restarting is a thing a person does on purpose.
+		if srv := h.serveStatus(); srv.Running {
+			h.log.Debug("the running model server still has the old build; a restart is what loads the new one")
+		}
+	}()
+	return tag, nil
+}
+
+// engineInstall is the blocking half: fetch, verify, unpack, and put the machine's report
+// away afterwards.
+func (h *Host) engineInstall(ctx context.Context, tag string, backend engine.Backend) (engine.Installed, error) {
 	in, err := h.engine.Install(ctx, tag, backend)
 	if err != nil {
 		return engine.Installed{}, err
@@ -390,6 +427,31 @@ func (h *Host) EngineInstall(ctx context.Context, tag string) (engine.Installed,
 	// now about a build that is no longer here.
 	h.invalidateDevices("engine installed")
 	return in, nil
+}
+
+// newest is the build the one button would fetch. The cached answer is enough when there is
+// one; otherwise this asks once, in the request that needs an answer, rather than starting a
+// download pointed at nothing. It says so in three parts, because the three read differently
+// to a person watching a button: a check is already running, the check failed and here is why
+// — or there is simply no answer and no reason given.
+func (h *Host) newest(ctx context.Context, b engine.Backend) (string, error) {
+	if rel, _, ok := h.engine.Known(b); ok && rel.Tag != "" {
+		return rel.Tag, nil
+	}
+	h.mu.Lock()
+	checking := h.checking
+	h.mu.Unlock()
+	if checking {
+		return "", fmt.Errorf("%w: libris is still finding out which build is newest; try again in a moment", ErrUpdateChecking)
+	}
+	rel, _, err := h.engine.Check(ctx, b, false)
+	if err != nil {
+		return "", fmt.Errorf("%w: the newest build could not be determined: %s", ErrUpdateUnknown, err)
+	}
+	if rel.Tag == "" {
+		return "", fmt.Errorf("%w: the newest build could not be determined", ErrUpdateUnknown)
+	}
+	return rel.Tag, nil
 }
 
 // EngineStop interrupts a download. The partial file is kept on purpose — Stop is usually
@@ -852,18 +914,36 @@ func (h *Host) EngineAutostart(ctx context.Context) {
 	h.log.Debug("engine: router up", "port", srv.Port, "models", len(srv.Models))
 }
 
-// EngineServeStop stops the process. Stopping is not the same act as cancelling a job or a
-// download (and note the difference EngineStop above makes): the process is ours, and
-// the answer to "then stop it" is a signal. Not running is not an error — the button that
-// asked has already got the state it wanted.
-func (h *Host) EngineServeStop(ctx context.Context) error {
+// ErrUpdateChecking is "which build is newest" being found out right now, which is not a
+// failure and not an answer either. A person watching a spinner who is told the machine
+// could not be reached goes and presses the same button again.
+var ErrUpdateChecking = errors.New("app: the newest build is still being looked up")
+
+// ErrUpdateUnknown is "which build is newest" with no answer: the usual cause is a machine
+// that cannot reach GitHub, and the sentence after the colon is what it said back.
+var ErrUpdateUnknown = errors.New("app: the newest build could not be determined")
+
+// EngineServeStop stops the process and answers with the state it left, because that is the
+// thing the caller wanted to know and asking again for it is a second question with a window
+// in it. Stopping is not the same act as cancelling a job or a download (and note the
+// difference EngineStop above makes): the process is ours, and the answer to "then stop it"
+// is a signal. Not running is not an error — the button that asked has already got the state
+// it wanted.
+func (h *Host) EngineServeStop(ctx context.Context) (engine.Serving, error) {
 	if h.serve == nil {
-		return fmt.Errorf("%w: this build has no data directory", ErrEngineMode)
+		return engine.Serving{}, fmt.Errorf("%w: this build has no data directory", ErrEngineMode)
 	}
 	if err := h.serve.Stop(); err != nil && !errors.Is(err, engine.ErrNotServing) {
-		return fmt.Errorf("app: stop the engine: %w", err)
+		return h.serveStatus(), fmt.Errorf("app: stop the engine: %w", err)
 	}
-	return nil
+	srv := h.serveStatus()
+	if srv.Running {
+		// The one outcome stopping exists to prevent, said by the module that would have to
+		// explain it later: a libris that exits with llama-server holding a GPU leaves an
+		// orphan the settings page cannot stop and the next start cannot claim.
+		h.log.Warn("the model server is still up after the stop ask", "pid", srv.PID, "port", srv.Port)
+	}
+	return srv, nil
 }
 
 // setupInputs gathers what the one readiness rule reads, and returns the key a device
@@ -902,9 +982,11 @@ func (h *Host) setupInputs(cfg config.Config) (setup.Input, string) {
 	return in, in.AckNow
 }
 
-// ServeStatus reports libris's own server, for the page that shows whether anything is
-// running at all.
-func (h *Host) ServeStatus() engine.Serving {
+// serveStatus reports libris's own server, for the module's own questions about it. It is not
+// part of what a caller asks: Engine publishes the state inside the view, and EngineServeStop
+// answers with the state it left, so nothing outside this module has a reason to ask
+// separately — which is why asking separately is no longer offered.
+func (h *Host) serveStatus() engine.Serving {
 	if h.serve == nil {
 		return engine.Serving{}
 	}

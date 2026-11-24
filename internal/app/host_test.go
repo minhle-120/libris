@@ -48,6 +48,12 @@ type fakeEngine struct {
 	checked chan error
 	delay   time.Duration
 
+	// gate, when set, holds a download open so the caller has time to hang up before the job
+	// looks at its own context, and ctxErr records what it found there.
+	gate     chan struct{}
+	finished chan struct{} // closed once ctxErr has been recorded
+	ctxErr   error
+
 	mu        sync.Mutex
 	checks    int
 	forced    int
@@ -102,8 +108,20 @@ func (f *fakeEngine) Check(ctx context.Context, b engine.Backend, force bool) (e
 func (f *fakeEngine) Install(ctx context.Context, tag string, b engine.Backend) (engine.Installed, error) {
 	f.mu.Lock()
 	f.tags = append(f.tags, tag)
-	inst, err := f.installed, f.installErr
+	inst, err, gate := f.installed, f.installErr, f.gate
 	f.mu.Unlock()
+	if gate != nil {
+		<-gate
+	}
+	f.mu.Lock()
+	// What the job's own context looked like when it got here. One that rode the request that
+	// asked would find it cancelled by now.
+	f.ctxErr = ctx.Err()
+	done := f.finished
+	f.mu.Unlock()
+	if done != nil {
+		close(done)
+	}
 	if err != nil {
 		return engine.Installed{}, err
 	}
@@ -153,6 +171,34 @@ func (f *fakeEngine) ClearParts() error {
 	defer f.mu.Unlock()
 	f.discarded++
 	return nil
+}
+
+// settledTags is the other half: a refusal starts nothing, and the way to show that without
+// either sleeping on every pass or racing the goroutine on every fail is to give a wrongly
+// started download a moment to arrive, then read what did.
+func (f *fakeEngine) settledTags(t *testing.T) []string {
+	t.Helper()
+	time.Sleep(100 * time.Millisecond)
+	_, _, _, _, _, tags := f.seen()
+	return tags
+}
+
+// awaitTags waits for a download started in the background to be recorded, and returns what
+// it was asked for. Waiting is the honest shape: the request answers before the fetch does, so
+// a test that read the record straight away would pass on a start that never fetched.
+func (f *fakeEngine) awaitTags(t *testing.T, want int) []string {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		_, _, _, _, _, tags := f.seen()
+		if len(tags) >= want {
+			return tags
+		}
+		if time.Now().After(deadline) {
+			return tags
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 // seen reports the counters the assertions read, under the same lock the manager's goroutine
@@ -306,7 +352,13 @@ func TestEngineViewOffersAnUpdateOnlyNumerically(t *testing.T) {
 	}
 }
 
-func TestEngineInstallResolvesTheTag(t *testing.T) {
+// The three answers a person can get from the one Download button — the tag it fetched, the
+// reason it will not fetch yet, and the reason it cannot — are decided here, not by whoever
+// forwarded the request. They used to be split: the HTTP layer resolved the tag and wrote the
+// three sentences, then handed the download to a goroutine of its own with
+// context.Background(), because a closed tab must not be what stops the bytes. That reason
+// belongs to the download, and so does the job.
+func TestEngineInstallStartResolvesTheTag(t *testing.T) {
 	eng := &fakeEngine{
 		knownOK:    true,
 		knownRel:   engine.Release{Tag: "b12649"},
@@ -315,14 +367,19 @@ func TestEngineInstallResolvesTheTag(t *testing.T) {
 	}
 	h, cache := newTestHost(t, eng, config.Default())
 
-	// The install was asked for with no tag — the label on the button is "Download", not a
-	// version — so the tag has to be resolved here, and the backend that decided it is the
-	// one in settings, not the compiled default.
-	if _, err := h.EngineInstall(context.Background(), ""); err != nil {
+	// Asked with no tag — the label on the button is "Download", not a version — so the tag is
+	// worked out here, from the cached release rather than by asking GitHub again.
+	tag, err := h.EngineInstallStart(context.Background(), "")
+	if err != nil {
 		t.Fatal(err)
 	}
-	_, _, _, _, _, tags := eng.seen()
-	if len(tags) != 1 || tags[0] != "b12649" {
+	if tag != "b12649" {
+		t.Errorf("answered with tag %q, want the newest one this machine already knows", tag)
+	}
+	// The answer came back before the bytes did, so what the fetch was asked for is still on
+	// its way. It is worth waiting for here: this is the assertion that the empty ask became
+	// a tag, and a test that read the record too early would pass on a start that fetched nothing.
+	if tags := eng.awaitTags(t, 1); len(tags) != 1 || tags[0] != "b12649" {
 		t.Errorf("Install was asked for %v, want the newest tag", tags)
 	}
 	// The engine is a device probe once it exists, so the cached report about the machine has
@@ -330,6 +387,124 @@ func TestEngineInstallResolvesTheTag(t *testing.T) {
 	// that knows arrived.
 	if _, err := os.Stat(cache); !errors.Is(err, os.ErrNotExist) {
 		t.Error("installing the engine did not invalidate the device report")
+	}
+}
+
+func TestEngineInstallStartRefusesWhatItCannotFetch(t *testing.T) {
+	eng := &fakeEngine{installed: &engine.Installed{Tag: "b12649"}}
+	h, _ := newTestHost(t, eng, config.Default())
+
+	for _, tc := range []struct{ why, tag string }{
+		{"a path is not a version", "../../etc"},
+		{"a version nobody built", "b1"},
+		{"too many digits", "b12345678"},
+	} {
+		_, err := h.EngineInstallStart(context.Background(), tc.tag)
+		if !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: err = %v, want it refused as an invalid request", tc.why, err)
+		}
+		// The sentence is the one a person reads, so it has to say what a tag looks like
+		// rather than only that this one was wrong.
+		if !strings.Contains(err.Error(), "nightly") {
+			t.Errorf("%s: err = %v, want it to say what a tag looks like", tc.why, err)
+		}
+	}
+	if tags := eng.settledTags(t); len(tags) != 0 {
+		t.Errorf("an install was started for %v anyway", tags)
+	}
+}
+
+func TestEngineInstallStartSaysWhyThereIsNoTagYet(t *testing.T) {
+	// Nothing cached, and a check in flight: this is a machine that is still finding out, not
+	// an offline one, and telling them apart is the difference between "try again in a moment"
+	// and a person pressing the same button while the page spins.
+	busy := &fakeEngine{delay: 300 * time.Millisecond}
+	hb, _ := newTestHost(t, busy, config.Default())
+	if _, err := hb.Engine(context.Background(), true); err != nil {
+		t.Fatal(err)
+	}
+	// Wait for the page to say so, rather than assuming the goroutine is still running: the
+	// state being tested is the one the view reports, and the refusal must agree with it.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		v, err := hb.Engine(context.Background(), false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v.Checking {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the view never reported a check in flight")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	_, err := hb.EngineInstallStart(context.Background(), "")
+	if !errors.Is(err, ErrUpdateChecking) {
+		t.Errorf("err = %v, want the check-still-running answer", err)
+	}
+
+	// Nothing cached, and the check failed: the upstream sentence travels with the refusal, so
+	// the request that asked is the one that says why.
+	offline := &fakeEngine{checkErr: errors.New("engine: the update check failed: dial tcp 140.82.113.3:443")}
+	ho, _ := newTestHost(t, offline, config.Default())
+	_, err = ho.EngineInstallStart(context.Background(), "")
+	if !errors.Is(err, ErrUpdateUnknown) {
+		t.Fatalf("err = %v, want the cannot-be-determined answer", err)
+	}
+	if !strings.Contains(err.Error(), "dial tcp") {
+		t.Errorf("err = %v, want the upstream reason carried through", err)
+	}
+
+	if tags := offline.settledTags(t); len(tags) != 0 {
+		t.Errorf("an install was started with no release to install: %v", tags)
+	}
+}
+
+func TestEngineInstallStartDoesNotStackOnTheRunningDownload(t *testing.T) {
+	eng := &fakeEngine{
+		knownOK:   true,
+		knownRel:  engine.Release{Tag: "b12649"},
+		installed: &engine.Installed{Tag: "b12649"},
+		prog:      engine.Progress{State: engine.StateDownloading, Tag: "b12650"},
+	}
+	h, _ := newTestHost(t, eng, config.Default())
+
+	// Two tabs, two presses. The manager would refuse the second anyway, but the caller is
+	// being told what just happened, so the answer has to arrive in this request.
+	if _, err := h.EngineInstallStart(context.Background(), "b12649"); !errors.Is(err, ErrBusy) {
+		t.Errorf("err = %v, want the other download named", err)
+	}
+	if tags := eng.settledTags(t); len(tags) != 0 {
+		t.Errorf("a second download was started over the first: %v", tags)
+	}
+}
+
+func TestEngineInstallOutlivesTheRequestThatAsked(t *testing.T) {
+	eng := &fakeEngine{
+		knownOK:   true,
+		knownRel:  engine.Release{Tag: "b12649"},
+		installed: &engine.Installed{Tag: "b12649", Backend: engine.Vulkan},
+		gate:      make(chan struct{}),
+		finished:  make(chan struct{}),
+	}
+	h, _ := newTestHost(t, eng, config.Default())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	if _, err := h.EngineInstallStart(ctx, "b12649"); err != nil {
+		t.Fatal(err)
+	}
+	// A closed tab, a proxy idle timeout, a laptop lid. EngineStop is how a download ends;
+	// nothing else is.
+	cancel()
+	close(eng.gate)
+	select {
+	case <-eng.finished:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the download never got as far as looking at its own context")
+	}
+	if eng.ctxErr != nil {
+		t.Errorf("the job's context was cancelled (%v), so hanging up on the page stopped the bytes", eng.ctxErr)
 	}
 }
 
@@ -667,7 +842,7 @@ func TestEngineServeRespectsTheMode(t *testing.T) {
 	if _, err := h.EngineServeStart(context.Background()); !errors.Is(err, ErrEngineMode) {
 		t.Fatalf("got %v, want ErrEngineMode", err)
 	}
-	if err := h.EngineServeStop(context.Background()); !errors.Is(err, ErrEngineMode) {
+	if _, err := h.EngineServeStop(context.Background()); !errors.Is(err, ErrEngineMode) {
 		t.Fatalf("stop: got %v, want ErrEngineMode", err)
 	}
 }
