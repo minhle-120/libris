@@ -220,6 +220,44 @@ func excluded(t *testing.T, db *sqlite.DB, id int64) bool {
 	return n != 0
 }
 
+// A question is two calls to one server, so both must name the same model — and in managed
+// mode that name is a fact about the router process, derived when Models is built (ADR 0020).
+// Read from the settings instead, the research turn was refused by the very server the answer
+// eventually came from: `model 'LFM3-VL-2B' not found`, for a model the router lists as
+// `libris-chat`. The stored name is what someone typed while pointing libris at a different
+// machine, and it is legitimately still there; it is simply not what to ask this one for.
+func TestBothCallsNameTheServedModel(t *testing.T) {
+	svc, db, model := askWiring(t,
+		toolReply("c1", "query_knowledge_base", `{"keywords":"smith measurement","query":"what did smith measure"}`),
+		toolReply("c2", "finalize_research_response", `{"indices":[1]}`),
+	)
+
+	stored := config.Default()
+	stored.ChatModel = "LFM3-VL-2B"
+	svc.settings = constSettings(stored)
+	svc.models = func(config.Config) (Models, error) {
+		return Models{ChatModel: "libris-chat", Chat: model, Probe: &askProbe{}}, nil
+	}
+
+	nb := notebookID(t, svc)
+	seedReady(t, db, nb, "sha-a", "Smith measured 4.2 K.", "An unrelated page.")
+	ask(t, svc, nb, "", "What did Smith measure?")
+
+	if len(model.chatReqs) == 0 || len(model.synthReqs) == 0 {
+		t.Fatalf("want both calls; got %d research, %d synthesis", len(model.chatReqs), len(model.synthReqs))
+	}
+	for i, req := range model.chatReqs {
+		if req.Model != "libris-chat" {
+			t.Errorf("research call %d names %q, want the name this server answers to", i, req.Model)
+		}
+	}
+	for i, req := range model.synthReqs {
+		if req.Model != "libris-chat" {
+			t.Errorf("synthesis call %d names %q", i, req.Model)
+		}
+	}
+}
+
 // A question is researched, cited, streamed and stored. The assertions are mostly
 // about what must *not* be where: the research trace must not reach the synthesiser,
 // and the synthesiser's citations must be the chunks the research turn chose.

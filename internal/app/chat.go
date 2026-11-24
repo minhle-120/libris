@@ -152,7 +152,7 @@ func (s *Service) Ask(ctx context.Context, notebookID, chatID, question string, 
 	}
 
 	retriever := retrieve.New(s.search, models.Probe, models.Rerank, retrieve.FileAssets{})
-	research := chat.NewResearch(models.Chat, retriever, chatConfig(cfg), ev.status)
+	research := chat.NewResearch(models.Chat, retriever, chatConfig(cfg, models), ev.status)
 
 	res, err := research.Ask(ctx, notebookID, question, chat.ResearchHistory(past, cfg.HistoryMessages))
 	if err != nil {
@@ -357,13 +357,24 @@ func historyRole(r domain.Role) (llm.Role, bool) {
 // and historyMessages are settings rather than constants because a number the user
 // cannot see does not exist, and both are the things worth measuring against a real
 // model.
-func chatConfig(cfg config.Config) chat.Config {
+//
+// Two of these fields are not read from the settings, and the difference is not cosmetic.
+// The model's name and whether retrieval reranks are facts about the server libris is
+// talking to, and in managed mode both are derived when Models is built — from the router's
+// aliases and its port (ADR 0020) — so `Models` is the only place they are correct. From the
+// settings, the research call sent whatever a person had typed as a chat model's name while
+// pointing libris at somebody else's machine, and the router answered `model 'LFM3-VL-2B' not
+// found` for a model it lists as `libris-chat` — while the synthesis call, which reads
+// `Models.ChatModel`, kept working. Two calls, one server, one of them reading the wrong
+// side. The same shape sat under `Rerank`: a managed-mode settings file has no rerank URL at
+// all, so the old expression turned reranking off precisely where a reranker might be wired.
+func chatConfig(cfg config.Config, models Models) chat.Config {
 	return chat.Config{
-		ChatModel:     cfg.ChatModel,
+		ChatModel:     models.ChatModel,
 		MaxIterations: cfg.MaxIterations,
 		RecallTopK:    cfg.RecallTopK,
 		FinalTopK:     cfg.FinalTopK,
-		Rerank:        cfg.RerankEnabled && cfg.RerankURL != "",
+		Rerank:        models.Rerank != nil,
 	}
 }
 
