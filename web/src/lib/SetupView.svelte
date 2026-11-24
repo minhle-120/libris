@@ -33,7 +33,41 @@
     onchange: () => void;
   } = $props();
 
-let busy = $state('');
+  // Both models, one after the other, from a single ask. The fetcher takes one download at a
+  // time on purpose — two 1.4 GB writes to one disk are slower together, and one bar cannot
+  // describe two runs without lying about one (see ErrBusy in internal/models) — so the queue
+  // lives here, where what a person asked for is "the models", and the server's rule stays.
+  const todo = $derived([setup.chat, setup.embed].filter((e) => e && !e.complete));
+  const running = $derived(
+    models?.progress
+      ? models.progress.state === 'downloading' || models.progress.state === 'verifying'
+      : false,
+  );
+  let queue = $state<string[]>([]);
+  let started = $state('');
+
+  $effect(() => {
+    const head = queue[0];
+    if (!head || busy !== '' || running || started === head) return;
+    const entry = models?.entries.find((e) => e.id === head);
+    if (!entry) return;
+    // On disk already means move on: a half-finished setup resumes at the model that is
+    // actually missing rather than at the top of the list.
+    if (entry.complete) {
+      queue = queue.slice(1);
+      return;
+    }
+    if (models?.progress?.state === 'failed' && models.progress.id === head) {
+      // The reason is already on the page as a sentence. Starting it again would only fail
+      // the same way, and a queue that retries on its own looks like a download that never ends.
+      queue = [];
+      return;
+    }
+    started = head;
+    void act('model:' + head, () => installModel(head));
+  });
+
+  let busy = $state('');
   let note = $state('');
 
   const step = $derived(setup.step);
@@ -185,6 +219,26 @@ let busy = $state('');
           checked as they arrive — because a different embedder would silently invalidate every
           vector already stored.
         </p>
+        {#if todo.length > 1}
+          <button
+            class="btn btn-primary"
+            disabled={busy !== ''}
+            onclick={() => {
+              started = '';
+              queue = todo.map((e) => e!.id);
+            }}
+          >
+            {running || queue.length
+              ? 'downloading, one at a time…'
+              : `Download both models · ${formatBytes(todo.reduce((n, e) => n + (e?.bytes ?? 0), 0))}`}
+          </button>
+          <p>
+            {running || queue.length
+              ? 'one at a time, so neither bar lies about the other'
+              : 'fetched one at a time, and a stop keeps the bytes it already has'}
+          </p>
+        {/if}
+
         <ul class="models">
           {#each [setup.chat, setup.embed].filter(Boolean) as m (m!.id)}
             <li class:done={m!.complete}>
