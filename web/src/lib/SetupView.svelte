@@ -43,6 +43,14 @@
       ? models.progress.state === 'downloading' || models.progress.state === 'verifying'
       : false,
   );
+  // The engine's download is the same kind of job as the models': started by a request that
+  // returns at once, then polled. `busy` therefore goes true for a moment and the button stays
+  // live for the whole 40 MB after it — same mistake as the models' button, one step earlier.
+  const engineRunning = $derived(
+    engine?.progress
+      ? ['downloading', 'verifying', 'unpacking'].includes(engine.progress.state)
+      : false,
+  );
   // Which models the one button was told to fetch. Page state would be lost on a reload, and a
   // reload does not cancel the download that is running — the fetcher keeps going on purpose —
   // so a queue that lives only in the component comes back as one model installed and the other
@@ -222,10 +230,10 @@
         </p>
         <button
           class="btn btn-primary"
-          disabled={busy !== ''}
+          disabled={busy !== '' || engineRunning}
           onclick={() => act('engine', () => installEngine(engine?.latest?.tag))}
         >
-          {busy === 'engine' ? 'Downloading…' : 'Download llama.cpp'}
+          {engineRunning ? 'downloading…' : 'Download llama.cpp'}
         </button>
       {:else if step === 'device'}
         <h2>Where does it run?</h2>
