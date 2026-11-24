@@ -1,0 +1,852 @@
+/*
+  The app's own stylesheet: tokens first, then the handful of shared controls every screen
+  composes from. Screens do not define a new button, pill, empty state or modal — a screen
+  that does is invisible in one theme or the other, and no check catches it.
+
+  Colour means state and only state: blue is links, focus and citations; green is the primary
+  action and "ready"; amber is in-flight; red is destructive and failed; purple is a
+  completion. Every colour below is a token, in both themes, so dark is not a recolour.
+*/
+
+:root {
+  --bg: #ffffff;
+  --chrome: #f6f8fa;
+  --raised: #ffffff;
+  --deep: #f2f4f7;
+  --hover: #eaeef2;
+  --border: #d1d9e0;
+  --border-soft: #e7ebef;
+
+  --text: #1f2328;
+  --muted: #59636e;
+
+  --accent: #0969da;
+  --accent-text: #0550ae;
+  --accent-bg: #ddf4ff;
+  --success: #1a7f37;
+  --success-bg: #dafbe1;
+  --attention: #9a6700;
+  --attention-bg: #fff8c5;
+  --danger: #cf222a;
+  --danger-bg: #ffebe9;
+  --done: #8250df;
+  --done-bg: #fbefff;
+
+  /* Three planes and that is the whole depth system: a raised surface is a hairline and a
+     whisper of shadow, never a colour of its own. */
+  --shadow: 0 1px 0 rgba(31, 35, 40, 0.04), 0 1px 3px rgba(31, 35, 40, 0.06);
+  --ring: 0 0 0 2px var(--accent);
+
+  --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+
+  --fs: 13px;
+  --fs-sm: 12px;
+  --fs-xs: 11px;
+  --lh: 1.5;
+
+  --r: 6px;
+  --r-lg: 8px;
+
+  /* Work has one tempo. The caret, the panel dot and the loading line all pulse on this. */
+  --pulse: 1.15s ease-in-out infinite;
+
+  --header-h: 46px;
+  --measure: 42rem;
+}
+
+:root[data-theme="dark"] {
+  --bg: #0d1117;
+  --chrome: #151b23;
+  --raised: #1c2128;
+  --deep: #010409;
+  --hover: #262c36;
+  --border: #3d444d;
+  --border-soft: #2a3138;
+
+  --text: #e6edf3;
+  --muted: #9198a1;
+
+  --accent: #409cff;
+  --accent-text: #74c0f8;
+  --accent-bg: #121d2f;
+  --success: #3fb950;
+  --success-bg: #12261c;
+  --attention: #d29922;
+  --attention-bg: #2b2111;
+  --danger: #f85149;
+  --danger-bg: #3a1d1f;
+  --done: #ab6ff5;
+  --done-bg: #271b3d;
+
+  --shadow: 0 1px 0 rgba(1, 4, 9, 0.4), 0 1px 3px rgba(1, 4, 9, 0.5);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+
+/* The app is exactly the viewport tall. Nothing outside the main column ever moves. */
+body {
+  overflow: hidden;
+  font: 400 var(--fs)/var(--lh) var(--sans);
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+h4,
+p,
+ul,
+ol,
+figure {
+  margin: 0;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: default;
+}
+
+a {
+  color: var(--accent-text);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Scrollbars are chrome: thin, drawn in the border colour, invisible until the pointer is
+   inside what they scroll — and never moving the text when they appear. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+*:hover,
+*:focus-within {
+  scrollbar-color: var(--border) transparent;
+}
+
+/* ── Buttons ───────────────────────────────────────────────────────
+   Four variants and they mean different things. A raw class must never reach a screen. */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  background: var(--raised);
+  color: var(--text);
+  font-size: var(--fs);
+  line-height: 1;
+  white-space: nowrap;
+  transition: background-color 80ms linear, border-color 80ms linear, color 80ms linear;
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--hover);
+  border-color: var(--muted);
+}
+
+.btn:active:not(:disabled) {
+  transform: translateY(0.5px);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+}
+
+.btn-primary {
+  background: var(--success);
+  border-color: var(--success);
+  color: #ffffff;
+  font-weight: 500;
+}
+
+:root[data-theme="dark"] .btn-primary {
+  color: #04170a;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: #166f30;
+  border-color: #166f30;
+}
+
+:root[data-theme="dark"] .btn-primary:hover:not(:disabled) {
+  background: #46c257;
+  border-color: #46c257;
+}
+
+.btn-ghost {
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+}
+
+.btn-ghost:hover:not(:disabled) {
+  background: var(--hover);
+  border-color: transparent;
+  color: var(--text);
+}
+
+/* Danger keeps its colour at rest even while hidden: a trash can shaped like a pencil is how
+   a notebook gets deleted while reaching for rename. */
+.btn-danger {
+  background: var(--danger-bg);
+  border-color: transparent;
+  color: var(--danger);
+  font-weight: 500;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: var(--danger-bg);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.btn.btn-icon {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  flex: none;
+}
+
+.btn.btn-sm {
+  height: 22px;
+  padding: 0 7px;
+  font-size: var(--fs-xs);
+}
+
+/* The round control is the composer's, and send and stop share the slot so the thing under
+   the thumb while an answer arrives is the thing that stopped it. */
+.btn.btn-round {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 50%;
+  flex: none;
+}
+
+/* ── Badges and chips ──────────────────────────────────────────────
+   A badge is a state, a chip is a fact. A badge is tinted, never outlined: a hairline of the
+   status colour around a four-letter word reads as a form error. */
+
+.badge,
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 18px;
+  padding: 0 7px;
+  border-radius: 9px;
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  background: var(--hover);
+  color: var(--muted);
+}
+
+.badge.badge-success {
+  background: var(--success-bg);
+  color: var(--success);
+}
+
+.badge.badge-attention {
+  background: var(--attention-bg);
+  color: var(--attention);
+}
+
+.badge.badge-danger {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.badge.badge-accent {
+  background: var(--accent-bg);
+  color: var(--accent-text);
+}
+
+.badge.badge-done {
+  background: var(--done-bg);
+  color: var(--done);
+}
+
+/* A count is a number, not a state and not a fact about a thing's nature. */
+.count {
+  display: inline-flex;
+  align-items: center;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 8px;
+  font: 500 var(--fs-xs)/1 var(--sans);
+  background: var(--hover);
+  color: var(--muted);
+}
+
+/* A model's role — `chat` or `embed` — spelled the same way in the two places it is spelled:
+   the settings models card and the wizard's model rows are the same fact about the same file,
+   and two rules for one pill is how the two start to disagree. */
+.role {
+  font: 500 var(--fs-xs)/1 var(--mono);
+  padding: 1px 5px;
+  border: 1px solid var(--border-soft);
+  border-radius: 3px;
+  background: var(--chrome);
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+.tag {
+  font: 500 var(--fs-xs)/1 var(--mono);
+  padding: 3px 5px;
+  border-radius: 4px;
+  background: var(--hover);
+  color: var(--muted);
+}
+
+/* ── Fields ────────────────────────────────────────────────────────
+   Styled once. The borderless-until-hover box is the one Google-flavoured element. */
+
+.input,
+.select {
+  height: 28px;
+  width: 100%;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  background: var(--bg);
+}
+
+.input:hover,
+.select:hover {
+  border-color: var(--muted);
+}
+
+.input:disabled {
+  color: var(--muted);
+  background: var(--chrome);
+}
+
+textarea.input {
+  height: auto;
+  padding: 7px 8px;
+  line-height: 1.55;
+  resize: none;
+}
+
+.field-quiet {
+  background: var(--hover);
+  border-color: transparent;
+}
+
+.field-quiet:hover {
+  border-color: var(--border);
+}
+
+.mono-num {
+  text-align: right;
+  font-family: var(--mono);
+}
+
+/* ── Other shared pieces ───────────────────────────────────────────*/
+
+.card {
+  background: var(--raised);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow);
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.small {
+  font-size: var(--fs-sm);
+}
+
+.xs {
+  font-size: var(--fs-xs);
+}
+
+.mono {
+  font-family: var(--mono);
+}
+
+.nowrap {
+  white-space: nowrap;
+}
+
+.truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The error banner is one component in three places, not three components. */
+.banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--r);
+  background: var(--danger-bg);
+  color: var(--danger);
+  font-size: var(--fs-sm);
+}
+
+.banner .btn {
+  margin-left: auto;
+}
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 100%;
+  padding: 24px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.empty h2 {
+  font-size: var(--fs);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.empty p {
+  max-width: 34ch;
+  font-size: var(--fs-sm);
+}
+
+/* The icon is not ringed or boxed: two ringed icons in two columns at the same size is what
+   made every empty screen look like the same placeholder. */
+.empty .glyph {
+  color: var(--border);
+}
+
+.center {
+  padding: 18px 12px;
+  text-align: center;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+/* ── The one dialog ────────────────────────────────────────────────
+   Native <dialog>, so the browser owns Esc, the focus trap and the top layer. Cancel is first
+   in the DOM on purpose: the dialog focuses its first control, so Enter on a freshly opened
+   confirmation cannot do the destructive thing. */
+
+dialog.modal {
+  width: min(30rem, calc(100vw - 32px));
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--raised);
+  color: var(--text);
+  box-shadow: 0 12px 28px rgba(1, 4, 9, 0.25);
+}
+
+dialog.modal::backdrop {
+  background: rgba(1, 4, 9, 0.45);
+}
+
+dialog.modal .box {
+  padding: 16px;
+  display: grid;
+  gap: 10px;
+}
+
+dialog.modal h2 {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+dialog.modal .lead {
+  font-size: var(--fs);
+  color: var(--text);
+}
+
+dialog.modal .keeps {
+  padding: 8px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r);
+  background: var(--chrome);
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+
+dialog.modal .actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+dialog.modal .error {
+  font-size: var(--fs-sm);
+  color: var(--danger);
+}
+
+/* ── Motion ────────────────────────────────────────────────────────*/
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.pulse {
+  animation: var(--pulse);
+}
+
+.caret {
+  display: inline-block;
+  width: 1px;
+  height: 1em;
+  margin-left: 1px;
+  vertical-align: -0.15em;
+  background: currentColor;
+  animation: var(--pulse);
+}
+
+/* The panel dots are the only perpetual animation besides the caret. */
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--attention);
+  flex: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pulse,
+  .caret,
+  .dot {
+    animation: none;
+  }
+}
+
+/* ── Panel edges ───────────────────────────────────────────────────
+   Shared by both panels: an invisible strip over the border, shown on hover, that never adds
+   to the column's measured width. */
+
+.resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 7px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  z-index: 3;
+}
+
+.resizer:hover,
+.resizer:focus-visible {
+  background: var(--accent);
+  opacity: 0.35;
+}
+
+html.resizing,
+html.resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+/* ── A rendered answer ─────────────────────────────────────────────
+   markdown.ts and Rich.svelte build this DOM by hand, so scoped component CSS cannot reach
+   it; `.md` is dressed here. The answer's prose is the only place in the app that gets
+   generous with size and leading. */
+
+.md {
+  font-size: 15px;
+  line-height: 1.68;
+  overflow-wrap: break-word;
+}
+
+.md > * + * {
+  margin-top: 0.75em;
+}
+
+/* A heading from a model is a marker inside prose, not a page title. */
+.md h1,
+.md h2,
+.md h3,
+.md h4,
+.md h5,
+.md h6 {
+  margin-top: 1.4em;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.md h1 {
+  font-size: 17px;
+}
+
+.md h2 {
+  font-size: 16px;
+}
+
+.md h3,
+.md h4,
+.md h5,
+.md h6 {
+  font-size: 15px;
+}
+
+.md ul,
+.md ol {
+  padding-left: 1.35em;
+}
+
+.md li + li {
+  margin-top: 0.25em;
+}
+
+.md li > ul,
+.md li > ol {
+  margin-top: 0.25em;
+}
+
+.md ul {
+  list-style: disc;
+}
+
+.md ol {
+  list-style: decimal;
+}
+
+.md li {
+  list-style: inherit;
+}
+
+.md input[type="checkbox"] {
+  margin-right: 5px;
+}
+
+/* A blockquote reads like a citation, because here a quote usually *is* the model quoting a
+   source. */
+.md blockquote {
+  padding-left: 10px;
+  border-left: 2px solid var(--border);
+  color: var(--muted);
+}
+
+.md hr {
+  height: 1px;
+  border: 0;
+  background: var(--border);
+}
+
+.md a {
+  color: var(--accent-text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.md img {
+  max-width: 100%;
+}
+
+/* An image the model could not show is dressed as what it is. */
+.md a.image {
+  color: var(--muted);
+  font-style: italic;
+  text-decoration: none;
+}
+
+.md code {
+  font: 0.88em/1.4 var(--mono);
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--hover);
+}
+
+/* A code block is a well cut into the page — the deepest surface — not a bubble the assistant
+   "said". */
+.md pre {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  background: var(--deep);
+  overflow: auto;
+}
+
+.md pre code {
+  padding: 0;
+  background: none;
+  font-size: 12.5px;
+  line-height: 1.6;
+  white-space: pre;
+}
+
+/* Wide things scroll inside the reading column; they never widen it. */
+.md .table-wrap {
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+}
+
+.md table {
+  border-collapse: collapse;
+  font-size: 0.94em;
+}
+
+.md th,
+.md td {
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border-soft);
+  vertical-align: top;
+}
+
+/* A cell the writer aligned carries `align`, and the browser honours it only as a presentational
+   hint — one so weak that any author rule beats it, and reported as `-webkit-right` rather than
+   `right` besides. The alignment is therefore restated here, where it can be seen: the writer's
+   `|---:|` is part of what the answer said. */
+.md th,
+.md td {
+  text-align: left;
+}
+
+.md th[align='left'],
+.md td[align='left'] {
+  text-align: left;
+}
+
+.md th[align='center'],
+.md td[align='center'] {
+  text-align: center;
+}
+
+.md th[align='right'],
+.md td[align='right'] {
+  text-align: right;
+}
+
+.md th {
+  background: var(--chrome);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.md .math {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.md .katex {
+  font-size: 1.06em;
+}
+
+.md .katex-error {
+  color: var(--danger);
+}
+
+/* The citation button inside a sentence: the same tint, only the number. */
+.md .inline {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 17px;
+  height: 16px;
+  margin: 0 1px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--accent-bg);
+  color: var(--accent-text);
+  font: 600 11px/1 var(--sans);
+  vertical-align: 0.12em;
+}
+
+.md .inline:hover {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* Syntax colours reuse the app's own palette, so a code block cannot disagree with its page
+   in either theme. */
+.hljs-comment,
+.hljs-quote {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-name {
+  color: var(--done);
+}
+
+.hljs-title,
+.hljs-title.function_,
+.hljs-section {
+  color: var(--accent-text);
+}
+
+.hljs-attr,
+.hljs-attribute,
+.hljs-variable,
+.hljs-template-variable {
+  color: var(--attention);
+}
+
+.hljs-string,
+.hljs-regexp,
+.hljs-addition {
+  color: var(--success);
+}
+
+.hljs-number,
+.hljs-built_in,
+.hljs-type,
+.hljs-builtin-name {
+  color: var(--danger);
+}
+
+.hljs-deletion {
+  color: var(--danger);
+}
+
+.hljs-meta,
+.hljs-punctuation {
+  color: var(--muted);
+}

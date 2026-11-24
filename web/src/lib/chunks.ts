@@ -1,5 +1,5 @@
 import { chipLabel } from './format';
-import type { Citation } from './types';
+import type { Citation, Segment } from './types';
 
 /**
  * The answer arrives with `[[Chunk N]]` labels inside it. That is the grammar the
@@ -85,4 +85,53 @@ function chip(citation: Citation, onCite: (citation: Citation) => void): HTMLBut
 export function trimPartialLabel(text: string): string {
   const match = /\[\[(?:Chun(?:k(?: \d*)?)?)?]?$/.exec(text);
   return match ? text.slice(0, match.index) : text;
+}
+
+/**
+ * The stored chunks of one source, in reading order.
+ *
+ * A segment *is* a stored chunk — the unit the search returns and the viewer shows — so the
+ * number a reader sees here is its position in the file. That is *not* the number in an
+ * answer's `[[Chunk N]]` labels, which indexes the handful of candidates that one question
+ * was shown; the two are different spaces and the viewer says so rather than letting a
+ * reader hunt for "Chunk 3" of a file that has four.
+ */
+export function chunksOf(segments: Segment[], sourceId: string): Segment[] {
+  return segments
+    .filter((s) => s.source_id === sourceId)
+    .slice()
+    .sort((a, b) => a.ordinal - b.ordinal);
+}
+
+/**
+ * The text a chunk repeats from the one before it: the longest stretch that is *both* the
+ * tail of the previous chunk and the head of this one — found, not assumed.
+ *
+ * The chunker's overlap setting is a request, not a promise: page headers are stripped,
+ * hyphenated words are joined, and a chunk that runs short leaves nothing to repeat. A
+ * shading computed from the setting would then colour words that do not actually appear
+ * twice, which is worse than shading nothing, because it teaches the reader to trust a mark
+ * that lies. The scan is a prefix function over `next NUL prev`: its final value is exactly
+ * that longest overlap, in linear time, on chunks long enough that trying every split would
+ * not be.
+ */
+export function repeatOf(prev: string, next: string): string {
+  const cap = Math.min(prev.length, next.length, 2000);
+  if (cap === 0) return '';
+  const needle = `${next.slice(0, cap)}\u0000${prev.slice(-cap)}`;
+  const pi = new Uint32Array(needle.length);
+  for (let i = 1; i < needle.length; i++) {
+    let k = pi[i - 1];
+    while (k > 0 && needle[i] !== needle[k]) k = pi[k - 1];
+    if (needle[i] === needle[k]) k++;
+    pi[i] = k;
+  }
+  // The last entry is capped by the length of `next`'s prefix, and never reaches the
+  // separator, so it is a real suffix of `prev` and a real prefix of `next`.
+  let n = pi[needle.length - 1];
+  // Trim to a whole word at both ends, so a shaded run is a phrase and not two word
+  // fragments. Trimming a suffix and a prefix by the same amount keeps both halves true.
+  while (n > 0 && !/\s/.test(next[n - 1] ?? ' ') && !/\s/.test(next[n] ?? ' ')) n--;
+  while (n > 0 && /\s/.test(next[n - 1] ?? ' ')) n--;
+  return next.slice(0, n);
 }

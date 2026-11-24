@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { attachChips } from '../lib/chunks';
+  import { attachChips, trimPartialLabel } from '../lib/chunks';
   import { renderRich } from '../lib/markdown';
   import type { Citation } from '../lib/types';
 
@@ -30,7 +30,9 @@
     // streaming one on every token. Re-rendering the whole body is the simple thing and
     // the cheap thing at the sizes an answer reaches; the registry hands up its citations
     // once, before the answer starts, so the second dependency rarely moves.
-    const source = text;
+    // A half-written citation label at the end of the buffer is held back, so the grammar the
+    // model was told to use never reaches the reader as text — not even for one frame.
+    const source = streaming ? trimPartialLabel(text) : text;
     const found = citations;
     const el = host;
     if (!el) return;
