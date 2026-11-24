@@ -412,26 +412,32 @@
   {view}
   {crumbs}
   ontoggle={toggleTheme}
-  onsettings={() => (view = 'settings')}
+  onsettings={() => (view = view === 'settings' ? 'notebook' : 'settings')}
   onhome={goHome}
 />
 
 <div class="shell">
-  <Sidebar
-    {notebooks}
-    {activeId}
-    {chats}
-    {chatId}
-    onselect={openNotebook}
-    onnew={openNew}
-    onrenamed={renamed}
-    ondelete={askDelete}
-    onchat={openChat}
-    onnewchat={newChat}
-    onchatrenamed={chatRenamed}
-    onchatdelete={askDeleteChat}
-    onerror={(m) => (error = m)}
-  />
+  <!-- Settings is a place, not a column beside one. The notebook list has nothing to
+       select here — the page it opens is not in the tree — and it is better for the
+       width. Both ways out stay in the header: `libris` in the breadcrumb, and the
+       gear, which now leaves as readily as it enters. -->
+  {#if view !== 'settings'}
+    <Sidebar
+      {notebooks}
+      {activeId}
+      {chats}
+      {chatId}
+      onselect={openNotebook}
+      onnew={openNew}
+      onrenamed={renamed}
+      ondelete={askDelete}
+      onchat={openChat}
+      onnewchat={newChat}
+      onchatrenamed={chatRenamed}
+      onchatdelete={askDeleteChat}
+      onerror={(m) => (error = m)}
+    />
+  {/if}
   <main>
     {#if error}
       <div class="banner" role="alert">
