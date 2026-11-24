@@ -7,9 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
-	"time"
 
 	"libris/internal/engine"
 )
@@ -157,10 +155,14 @@ func TestReadPresetRoundTripsTheFileItWrote(t *testing.T) {
 	}
 }
 
-// The whole point of a file in the data directory: a number changed by hand survives, because
-// nothing rewrote the file. Only the three derived things — which models, where their files
-// are, which device — make libris write it again.
-func TestStartKeepsEditsToAnUnchangedPreset(t *testing.T) {
+// What the preset module decides and what the router serves are joined here: the start runs
+// from what the file says after the refresh, so a model that downloaded while the router was
+// stopped is in the running set without anything telling this call about it.
+//
+// The rule on either side of that join — when the file gets rewritten, and when a hand edit
+// survives — is TestRefreshPreset* in preset_internal_test.go, which says it with a file and a
+// string instead of a spawn, a readiness probe and a port.
+func TestStartServesWhatThePresetHoldsAfterAModelAppears(t *testing.T) {
 	sup, opts, _ := serveFixture(t)
 	models := []engine.Model{{Alias: engine.AliasChat, Kind: engine.KindChat, Path: "/m/c.gguf"}}
 	opts.Device = "Vulkan0"
@@ -177,62 +179,8 @@ func TestStartKeepsEditsToAnUnchangedPreset(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	raw, _ := os.ReadFile(opts.Preset)
-	edited := strings.Replace(string(raw), "cache-ram = 2048", "cache-ram = 4096", 1)
-	if edited == string(raw) {
-		t.Fatal("fixture: no cache-ram line to edit")
-	}
-	if err := os.WriteFile(opts.Preset, []byte(edited), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	if _, err := sup.Start(context.Background(), *opts, models); err != nil {
-		t.Fatal(err)
-	}
-	raw, _ = os.ReadFile(opts.Preset)
-	if !strings.Contains(string(raw), "cache-ram = 4096") {
-		t.Errorf("a hand edit was overwritten by a start that changed nothing:\n%s", raw)
-	}
-}
-
-// The other half of the rule: the derived things do win. A model appearing, going away, moving,
-// or a device being chosen is libris's to know, and a preset that disagrees about one of them
-// would start a server that does not match the settings page.
-func TestStartRewritesWhenWhatItDerivesHasMoved(t *testing.T) {
-	sup, opts, _ := serveFixture(t)
-	models := []engine.Model{{Alias: engine.AliasChat, Kind: engine.KindChat, Path: "/m/c.gguf"}}
-	opts.Device = "Vulkan0"
-
-	if _, err := sup.Start(context.Background(), *opts, models); err != nil {
-		t.Fatal(err)
-	}
-	if err := sup.Stop(); err != nil {
-		t.Fatal(err)
-	}
-	raw, _ := os.ReadFile(opts.Preset)
-	edited := strings.Replace(string(raw), "cache-ram = 2048", "cache-ram = 4096", 1)
-	if err := os.WriteFile(opts.Preset, []byte(edited), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	opts.Device = "none"
-	srv, err := sup.Start(context.Background(), *opts, models)
-	if err != nil {
-		t.Fatal(err)
-	}
-	raw, _ = os.ReadFile(opts.Preset)
-	if strings.Contains(string(raw), "cache-ram = 4096") {
-		t.Errorf("a device change must rewrite the file:\n%s", raw)
-	}
-	if srv.Device != "none" {
-		t.Errorf("status says %+v", srv)
-	}
-
-	// A model that appeared is the same case, and the more common one: the download landed
-	// while the router was stopped.
-	if err := sup.Stop(); err != nil {
-		t.Fatal(err)
-	}
+	// The download landing while stopped is the common case, and all the next start is given is
+	// the model list: the file has to catch up by itself.
 	withEmbed := append(models,
 		engine.Model{Alias: engine.AliasEmbed, Kind: engine.KindEmbed, Path: "/m/e.gguf"})
 	srv, err = sup.Start(context.Background(), *opts, withEmbed)
@@ -242,92 +190,6 @@ func TestStartRewritesWhenWhatItDerivesHasMoved(t *testing.T) {
 	if len(srv.Models) != 2 {
 		t.Errorf("the embedder that downloaded is not in the running set: %+v", srv.Models)
 	}
-}
-
-// A supervisor test starts nothing: the spawn, the readiness probe and the signal are all
-// seams, so what is under test is the record, the wait and the state the page reads.
-func serveFixture(t *testing.T) (*engine.Supervisor, *engine.ServeOptions, *spawned) {
-	t.Helper()
-	dir := t.TempDir()
-	sp := &spawned{}
-	sup := engine.NewSupervisor(dir, engine.Seams{
-		Spawn: func(cmd *exec.Cmd) (int, error) {
-			sp.called = true
-			sp.alive = true
-			sp.cmd = cmd
-			// A real llama.cpp writes its own complaint into the log after it is spawned — a
-			// port it could not bind, a key it refused — and that is the only way the fact can
-			// ever reach a caller. A test that wants a collision has to have the fake say it the
-			// same way, after the start began, rather than pre-loading the file.
-			if sp.logOnSpawn != "" {
-				f, err := os.OpenFile(filepath.Join(dir, "logs", "server.log"),
-					os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-				if err == nil {
-					_, _ = f.WriteString(sp.logOnSpawn)
-					_ = f.Close()
-				}
-			}
-			// Every --port the supervisor asked for, in order, so a test can see how many
-			// ports a start tried and in what order.
-			for i, a := range cmd.Args {
-				if a == "--port" && i+1 < len(cmd.Args) {
-					sp.ports = append(sp.ports, cmd.Args[i+1])
-				}
-			}
-			// This test's own pid is the only pid it may claim is alive.
-			return os.Getpid(), nil
-		},
-		Probe: func(ctx context.Context, url string) error {
-			sp.probed = url
-			// Killing the fake process the first time anything asks it a question is how a test
-			// says "it died": aliveness here is what Signal reports, never what the operating
-			// system thinks of the pid a fake handed back.
-			if sp.dies {
-				sp.alive = false
-			}
-			return sp.probeErr
-		},
-		Signal: func(pid int, sig syscall.Signal) error {
-			sp.signals = append(sp.signals, sig)
-			if sig == 0 {
-				if sp.alive {
-					return nil
-				}
-				return syscall.ESRCH
-			}
-			// Whatever the polite signal was, the fake agrees it worked: the point is the
-			// record and the wait, not which number llama.cpp answers to.
-			sp.alive = false
-			return nil
-		},
-		Now: func() time.Time { return time.Date(2026, 11, 23, 0, 0, 0, 0, time.UTC) },
-	})
-	opts := engine.ServeOptions{
-		Bin:       "/tmp/llama-server",
-		Port:      8080,
-		Preset:    filepath.Join(dir, "presets", "libris.ini"),
-		Log:       filepath.Join(dir, "logs", "server.log"),
-		ModelsMax: 3,
-	}
-	return sup, &opts, sp
-}
-
-type spawned struct {
-	called  bool
-	alive   bool
-	cmd     *exec.Cmd
-	probed  string
-	ports   []string
-	signals []syscall.Signal
-	// probeErr is what readiness answers instead of "up", so a test can say the port was
-	// taken without starting anything that could take it.
-	probeErr error
-	// dies kills the fake process the first time it is probed, which is how a test asks
-	// whether a death is noticed rather than waited out.
-	dies bool
-	// logOnSpawn is appended to the log by the fake process once it exists, which is how a
-	// test makes a fact this attempt's own rather than a predecessor's.
-	logOnSpawn string
 }
 
 func TestServeRecordsAndReports(t *testing.T) {
