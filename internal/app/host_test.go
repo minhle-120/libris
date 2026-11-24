@@ -1171,6 +1171,69 @@ func TestEngineEndpointFollowsTheRunningProcess(t *testing.T) {
 	}
 }
 
+// completeCatalog puts every catalogue entry on disk, sparsely, so "both roles filled" is
+// true without downloading 2.4 GB.
+func completeCatalog(t *testing.T, modelsDir string) {
+	t.Helper()
+	for _, e := range models.Catalog() {
+		for _, p := range e.Parts() {
+			path := e.Path(modelsDir, p)
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			f, err := os.Create(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := f.Truncate(p.Bytes); err != nil {
+				f.Close()
+				t.Fatal(err)
+			}
+			f.Close()
+		}
+	}
+}
+
+// Start-up obeys the same rule the settings screen renders. It used to obey a shorter one —
+// engine on disk, any one model — so a router came up on a machine whose device choice nobody
+// had confirmed, and the wizard called the setup unfinished beside a server it had started.
+func TestAutostartWaitsForWhatTheWizardAsks(t *testing.T) {
+	modelsDir := t.TempDir()
+	completeCatalog(t, modelsDir)
+	eng := &fakeEngine{dir: t.TempDir(), installed: &engine.Installed{Tag: "b12674", Path: "/bin/llama-server"}}
+	ctx := context.Background()
+
+	cfg := config.Default() // managed, and nobody has been asked about the device yet
+	srv := &fakeServer{}
+	h, _ := newTestHostWith(t, eng, cfg, HostOptions{Serve: srv, ModelsDir: modelsDir})
+
+	v, err := h.Engine(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Setup == nil || v.Setup.Ready || v.Setup.Step != "device" {
+		t.Fatalf("the page was told %+v, want a machine waiting on the device step", v.Setup)
+	}
+	h.EngineAutostart(ctx)
+	if srv.starts != 0 {
+		t.Fatalf("starts = %d, want none while the wizard is still asking", srv.starts)
+	}
+
+	// Confirm the device with the key the server itself published, and the same machine —
+	// same engine, same models, same disk — is now one process short of ready.
+	cfg.EngineDeviceAck = v.DeviceAckNow
+	if cfg.EngineDeviceAck == "" {
+		t.Fatal("managed mode published no key to confirm the device against")
+	}
+	srv2 := &fakeServer{}
+	h2, _ := newTestHostWith(t, eng, cfg, HostOptions{Serve: srv2, ModelsDir: modelsDir})
+	h2.EngineAutostart(ctx)
+	if srv2.starts != 1 {
+		v2, _ := h2.Engine(ctx, false)
+		t.Fatalf("starts = %d, want one; the page says %+v", srv2.starts, v2.Setup)
+	}
+}
+
 // A start on Auto must not be told to move to another port: the setting already says to ask,
 // so the only thing a person can do is stop what is running. And the port in the sentence is
 // the one the running process holds, which is the fact they need in order to stop the right

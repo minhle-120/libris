@@ -14,7 +14,7 @@
     startEngineServe,
   } from './api';
   import type { EngineView, ModelsView, DeviceReport, Device } from './types';
-  import { ackKey, DEVICE_ACK, type Setup } from './setup';
+  import type { Setup } from './setup';
   import { remaining } from './setup';
   import { formatBytes } from './format';
 
@@ -193,18 +193,20 @@
   }
 
   async function pick(device: Device | null) {
-    // One field, saved into the settings as they are now rather than as the wizard guesses
+    // Two fields, saved into the settings as they are now rather than as the wizard guesses
     // they were: a draft the page keeps is a second copy of a value with an owner.
+    //
+    // The device is the choice; the ack is the proof somebody was asked. The ack is the value
+    // the server said it would accept, sent back unchanged — the page does not compute what
+    // "confirmed for this engine on this machine" means, because a page that computes it is a
+    // second copy of the rule. A blank device means libris picks, and leaves nothing behind to
+    // infer from, which is exactly why the ack is stored next to it rather than read out of it.
     const current = await getSettings();
-    await putSettings({ ...current, engineDevice: device ? device.name : '' });
-    // A blank setting means libris picks, so choosing that leaves nothing behind to show the
-    // step was answered — without this the wizard would ask again after every reload.
-    try {
-      localStorage.setItem(DEVICE_ACK, ackKey(engine, devices));
-    } catch {
-      // Private mode, a locked profile: the step asks again next time, which is the older and
-      // gentler bug rather than a reason to fail the save that just worked.
-    }
+    await putSettings({
+      ...current,
+      engineDevice: device ? device.name : '',
+      engineDeviceAck: engine?.device_ack_now ?? '',
+    });
   }
 </script>
 

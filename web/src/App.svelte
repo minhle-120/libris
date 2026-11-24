@@ -7,7 +7,6 @@
     getDevices,
     getEngine,
     getModels,
-    getSettings,
     listChats,
     listNotebooks
   } from './lib/api';
@@ -99,14 +98,14 @@
 
   async function checkSetup() {
     try {
-      const [engine, models, devices, settings] = await Promise.all([
+      const [engine, models, devices] = await Promise.all([
         getEngine(),
         getModels(),
         getDevices(),
-        getSettings(),
       ]);
       facts = { engine, models, devices };
-      setup = readSetup(engine, models, devices, settings.engineDevice);
+      // Readiness is the server's answer, not a rule the page keeps a copy of.
+      setup = readSetup(engine, models);
     } catch (e) {
       // A server that cannot answer is not a ready server, but it is also not a reason to
       // paint a wizard full of blanks: stand aside and let the app's own error path speak.

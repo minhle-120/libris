@@ -110,6 +110,14 @@ type Config struct {
 	// noview: the control is the picker beside the device report in EnginePanel, because a text
 	// field would ask someone to type a name they can only learn by running a command.
 	EngineDevice string `key:"engineDevice" group:"servers" label:"Run models on" help:"Which device llama.cpp offloads to. The choices are what the installed engine reports; Auto uses the first device that build can use, which is CPU only when the engine found no GPU." mode:"managed" noview:"true"`
+	// EngineDeviceAck records that a person has looked at the device choice for this engine
+	// build on this machine. It is not a preference and no form should offer it: it is the
+	// difference between “libris picked a device” and “nobody was ever asked”, which only the
+	// setup rule needs to know. The value is the engine-and-machine key the confirmation was
+	// given against, so a new engine build — with a different device list — or a data directory
+	// copied onto other hardware asks again instead of inheriting an answer for a machine that
+	// was never shown the row.
+	EngineDeviceAck string `key:"engineDeviceAck" group:"servers" label:"Device choice confirmed" help:"Written by the setup screen when the device row is confirmed. Blank means nobody has been asked yet." mode:"managed" noview:"true"`
 
 	ChatURL        string `key:"chatURL" group:"servers" label:"Chat server" help:"Text and image input." kind:"url" required:"true" mode:"external"`
 	EmbedURL       string `key:"embedURL" group:"servers" label:"Embedding server" help:"Multimodal embeddings for text and page images." kind:"url" required:"true" mode:"external"`

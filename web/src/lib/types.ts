@@ -259,11 +259,18 @@ export type EngineView = {
   /** Which half of the machine section this is. The server says it rather than the page
    *  inferring it, so a device list cannot be shown for a mode that has no device to pick. */
   mode: string;
-  /** What managed mode derives instead of asking for: one loopback address, one port, three
-   *  model names from the preset libris wrote. */
+  /** What managed mode derives instead of asking for: one loopback address, one port, the
+   *  two names from the preset libris wrote. */
   endpoint?: string;
   port?: number;
   aliases?: string[];
+  /** Whether this machine can answer yet, and what is in the way — the same answer libris's
+   *  own start-up obeys, so the wizard cannot call a step unfinished that the program has
+   *  already acted on. */
+  setup?: SetupView;
+  /** What confirming the device row records today: a key naming this engine build on this
+   *  machine. The page sends it back unchanged rather than computing it. */
+  device_ack_now?: string;
   serve?: Serving;
   models?: EngineModel[];
   backend: string;
@@ -277,6 +284,20 @@ export type EngineView = {
   progress: EngineProgress;
   dir: string;
   parts_bytes: number;
+};
+
+/** One thing standing between this machine and an answer. */
+export type Fact = 'engine' | 'device' | 'models' | 'serving';
+
+export type SetupView = {
+  ready: boolean;
+  /** The first thing to do about it; absent when there is nothing left to do. */
+  step?: Fact;
+  engine: boolean;
+  device: boolean;
+  models: boolean;
+  serving: boolean;
+  blocking?: Fact[];
 };
 
 export type Device = {

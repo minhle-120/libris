@@ -61,3 +61,19 @@ _Avoid_: Computed setting, runtime config
 The router is not answering, so there is no address to dial. Not "unreachable" and not
 "failed": nothing was asked.
 _Avoid_: Offline, down, unavailable
+
+## Setting up
+
+**Setup**:
+Whether this machine can answer a question yet, and what is in the way: an engine on disk, a
+confirmed device, both model roles filled, the router up. One program's rule, which the
+settings screen renders and start-up obeys — so the screen cannot call a step unfinished that
+the program has already acted on.
+_Avoid_: Readiness, onboarding, first run
+
+**Confirmed**:
+Somebody saw what this engine build reports about this machine, and chose a device or told
+libris to pick. Not inferable from the device setting, which is blank both when libris picks
+and when nobody was asked; and not permanent, since a new build reports different devices and a
+copied data directory sits on different hardware.
+_Avoid_: Acknowledged, accepted, dismissed

@@ -28,6 +28,7 @@ import (
 	"libris/internal/engine"
 	"libris/internal/models"
 	"libris/internal/serving"
+	"libris/internal/setup"
 )
 
 // deviceCacheAge bounds how long a device report stays reusable without asking again. The
@@ -190,6 +191,16 @@ type EngineView struct {
 	Port     int      `json:"port,omitempty"`
 	Aliases  []string `json:"aliases,omitempty"`
 
+	// Setup is whether this machine can answer a question yet, and what is standing in the
+	// way — the same answer libris's own start-up obeys, so the screen cannot call a step
+	// unfinished that the program has already acted on, or finish one it has not.
+	Setup *setup.View `json:"setup,omitempty"`
+
+	// DeviceAckNow is what confirming the device row records today: a key naming this
+	// engine build on this machine. The screen sends it back unchanged, which keeps the
+	// meaning of "confirmed against what" in one program rather than two.
+	DeviceAckNow string `json:"device_ack_now,omitempty"`
+
 	// Serve is libris's own llama-server. Absent in external mode, where there is nothing
 	// here to run — and saying "stopped" about a server this mode never starts is exactly
 	// the kind of field that made the old page confusing.
@@ -268,6 +279,10 @@ func (h *Host) Engine(ctx context.Context, force bool) (*EngineView, error) {
 		v.Installed = &have
 		v.Backend = string(in.Backend)
 	}
+	setupIn, ackNow := h.setupInputs(cfg)
+	view := setup.For(setupIn)
+	v.Setup = &view
+	v.DeviceAckNow = ackNow
 
 	rel, asset, known := h.engine.Known(backend)
 	if known {
@@ -817,11 +832,17 @@ func (h *Host) EngineAutostart(ctx context.Context) {
 	if cur := h.serve.Status(); cur.Running {
 		return
 	}
-	if _, ok := h.engine.Status(); !ok {
-		return // nothing downloaded; the page's download button is the answer
-	}
-	if len(models.Models(models.Statuses(h.modelsDir))) == 0 {
-		return // no complete model to run; the page names what is missing
+	// The same rule the settings screen renders, read from the same facts. It used to be a
+	// shorter rule kept here — engine on disk and any one model complete — which is how a
+	// router came up on a machine whose device choice nobody had confirmed, holding an
+	// embedder and no chat model, while the screen still called the setup unfinished.
+	// Startable is yes only when the model server is the single thing missing.
+	in, _ := h.setupInputs(cfg)
+	if !setup.Startable(in) {
+		// The reason is the rule's own answer, not a second copy of it: what is missing is
+		// written once, and the log repeats it.
+		h.log.Debug("engine: not started", "missing", setup.For(in).Blocking)
+		return
 	}
 	srv, err := h.EngineServeStart(ctx)
 	if err != nil {
@@ -843,6 +864,42 @@ func (h *Host) EngineServeStop(ctx context.Context) error {
 		return fmt.Errorf("app: stop the engine: %w", err)
 	}
 	return nil
+}
+
+// setupInputs gathers what the one readiness rule reads, and returns the key a device
+// confirmation would record today alongside it.
+//
+// The key is the engine build's tag with the machine's fingerprint, which is what the
+// confirmation is a claim about: a new build reports a different device list, and a data
+// directory copied onto other hardware has never been shown this one. Keeping the formula
+// here rather than in the screen is the point — a courier that computes what it carries is
+// a second copy of the rule.
+func (h *Host) setupInputs(cfg config.Config) (setup.Input, string) {
+	in := setup.Input{
+		Managed: cfg.EngineMode == config.EngineManaged,
+		Ack:     cfg.EngineDeviceAck,
+	}
+	if installed, ok := h.engine.Status(); ok {
+		in.EngineInstalled = true
+		in.AckNow = installed.Tag + ":" + deviceinfo.Fingerprint(h.engineProbe())
+	}
+	if h.serve != nil {
+		in.Serving = h.serve.Status().Running
+	}
+	if h.modelsDir != "" {
+		for _, st := range models.Statuses(h.modelsDir) {
+			if !st.Complete {
+				continue
+			}
+			switch st.Role {
+			case models.RoleChat:
+				in.ChatComplete = true
+			case models.RoleEmbed:
+				in.EmbedComplete = true
+			}
+		}
+	}
+	return in, in.AckNow
 }
 
 // ServeStatus reports libris's own server, for the page that shows whether anything is

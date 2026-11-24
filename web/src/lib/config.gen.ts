@@ -24,6 +24,7 @@ export type Settings = {
 	engineMode: 'managed' | 'external';
 	enginePort: number;
 	engineDevice: string;
+	engineDeviceAck: string;
 	chatURL: string;
 	embedURL: string;
 	timeoutSeconds: number;
@@ -77,6 +78,14 @@ export const settingGroups: SettingGroup[] = [
 				"key": "engineDevice",
 				"label": "Run models on",
 				"help": "Which device llama.cpp offloads to. The choices are what the installed engine reports; Auto uses the first device that build can use, which is CPU only when the engine found no GPU.",
+				"kind": "text",
+				"hidden": true,
+				"mode": "managed"
+			},
+			{
+				"key": "engineDeviceAck",
+				"label": "Device choice confirmed",
+				"help": "Written by the setup screen when the device row is confirmed. Blank means nobody has been asked yet.",
 				"kind": "text",
 				"hidden": true,
 				"mode": "managed"
@@ -249,6 +258,7 @@ export function defaultSettings(): Settings {
 		engineMode: "managed",
 		enginePort: 0,
 		engineDevice: "",
+		engineDeviceAck: "",
 		chatURL: "http://127.0.0.1:8081",
 		embedURL: "http://127.0.0.1:8082",
 		timeoutSeconds: 300,
