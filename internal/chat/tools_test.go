@@ -57,12 +57,6 @@ func (s *stubEmbed) EmbedQuery(_ context.Context, prefix, _ string) ([]float32, 
 }
 func (s *stubEmbed) Identity() string { return "model+tp1" }
 
-type stubRerank struct{ scores []float64 }
-
-func (s *stubRerank) Score(_ context.Context, _ string, _ []llm.RerankDoc) ([]float64, error) {
-	return s.scores, nil
-}
-
 func textChunk(id, docID string, ordinal int, text string) domain.Hit {
 	return domain.Hit{Segment: domain.Segment{
 		ID: id, DocID: docID, Kind: domain.KindText, Ordinal: ordinal, Text: text,
@@ -79,7 +73,7 @@ func imageChunk(id, docID string, ordinal, page int) domain.Hit {
 
 func toolsFor(t *testing.T, corpus retrieve.Corpus, reg *retrieve.Registry, opts retrieve.Options) *Tools {
 	t.Helper()
-	r := retrieve.New(corpus, &stubEmbed{}, nil, nil)
+	r := retrieve.New(corpus, &stubEmbed{}, nil)
 	return NewTools(r, reg, "nb1", "How fast is the coastline retreating?", opts)
 }
 
@@ -203,7 +197,7 @@ func TestEverythingIsRefusedBeforeTheFirstSearch(t *testing.T) {
 	}
 
 	// A real search opens it, and the tool the model reached for now works.
-	if _, err := tr.Execute(context.Background(), Call{Name: ToolSearch, Arguments: `{"keywords":"coastal erosion","query":"How fast?"}`}); err != nil {
+	if _, err := tr.Execute(context.Background(), Call{Name: ToolSearch, Arguments: `{"keywords":"coastal erosion"}`}); err != nil {
 		t.Fatal(err)
 	}
 	if !tr.Searched() {
@@ -223,7 +217,7 @@ func TestEverythingIsRefusedBeforeTheFirstSearch(t *testing.T) {
 // force before it may say so.
 func TestAnEmptySearchStillOpensTheGate(t *testing.T) {
 	tr := toolsFor(t, &stubCorpus{}, retrieve.NewRegistry(), retrieve.Options{})
-	if _, err := tr.Execute(context.Background(), Call{Name: ToolSearch, Arguments: `{"keywords":"x","query":"y"}`}); err != nil {
+	if _, err := tr.Execute(context.Background(), Call{Name: ToolSearch, Arguments: `{"keywords":"x"}`}); err != nil {
 		t.Fatal(err)
 	}
 	if !tr.Searched() {
@@ -245,8 +239,8 @@ func TestSearchResultIsLabelledChunksPlusTheEvaluationNote(t *testing.T) {
 	reply, err := tr.Execute(context.Background(), Call{
 		ID:   "call_7",
 		Name: ToolSearch,
-		// keywords is the probe, query is the objective — the schema's whole point.
-		Arguments: `{"keywords":"coastal erosion rate","query":"How fast is the coastline retreating?"}`,
+		// keywords is the probe, and the only argument the tool takes.
+		Arguments: `{"keywords":"coastal erosion rate"}`,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -291,7 +285,7 @@ func TestAMediaChunkIsNamedNotInlined(t *testing.T) {
 	corpus := &stubCorpus{hits: []domain.Hit{imageChunk("p#pages:0000", "p#pages", 0, 7)}}
 	tr := toolsFor(t, corpus, reg, retrieve.Options{})
 
-	reply, err := tr.Execute(context.Background(), Call{Name: ToolSearch, Arguments: `{"keywords":"chart","query":"what does the chart show?"}`})
+	reply, err := tr.Execute(context.Background(), Call{Name: ToolSearch, Arguments: `{"keywords":"chart"}`})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -308,7 +302,7 @@ func TestSearchWithoutKeywordsIsAnsweredInText(t *testing.T) {
 	reg := retrieve.NewRegistry()
 	tr := toolsFor(t, corpus, reg, retrieve.Options{})
 
-	for _, args := range []string{`{"keywords":"  ","query":"q"}`, `{}`, `not json at all`, `{"keywords":null,"query":null}`} {
+	for _, args := range []string{`{"keywords":"  "}`, `{}`, `not json at all`, `{"keywords":null}`} {
 		reply, err := tr.Execute(context.Background(), Call{Name: ToolSearch, Arguments: args})
 		if err != nil {
 			t.Fatalf("%s raised: %v", args, err)
@@ -333,7 +327,7 @@ func TestSearchWithoutKeywordsIsAnsweredInText(t *testing.T) {
 func TestAnEmptySearchNudges(t *testing.T) {
 	tr := toolsFor(t, &stubCorpus{}, retrieve.NewRegistry(), retrieve.Options{})
 
-	reply, err := tr.Execute(context.Background(), Call{Name: ToolSearch, Arguments: `{"keywords":"quantum tunnelling","query":"does this exist?"}`})
+	reply, err := tr.Execute(context.Background(), Call{Name: ToolSearch, Arguments: `{"keywords":"quantum tunnelling"}`})
 	if err != nil {
 		t.Fatalf("nothing to find raised: %v", err)
 	}
@@ -349,10 +343,10 @@ func TestAnEmptySearchNudges(t *testing.T) {
 // is not running" is the one thing a model cannot recover from by rephrasing.
 func TestInfrastructureFailurePropagates(t *testing.T) {
 	reg := retrieve.NewRegistry()
-	r := retrieve.New(&stubCorpus{}, failingEmbed{}, nil, nil)
+	r := retrieve.New(&stubCorpus{}, failingEmbed{}, nil)
 	tr := NewTools(r, reg, "nb1", "q", retrieve.Options{})
 
-	if _, err := tr.Execute(context.Background(), Call{Name: ToolSearch, Arguments: `{"keywords":"x","query":"y"}`}); err == nil {
+	if _, err := tr.Execute(context.Background(), Call{Name: ToolSearch, Arguments: `{"keywords":"x"}`}); err == nil {
 		t.Fatal("a dead embedding server was turned into a tool message")
 	}
 }
@@ -373,7 +367,7 @@ func TestFinalizeEndsTheTurnWithIndicesOnly(t *testing.T) {
 	reg := retrieve.NewRegistry()
 	tr := toolsFor(t, corpus, reg, retrieve.Options{})
 
-	if _, err := tr.Execute(context.Background(), Call{Name: ToolSearch, Arguments: `{"keywords":"k","query":"q"}`}); err != nil {
+	if _, err := tr.Execute(context.Background(), Call{Name: ToolSearch, Arguments: `{"keywords":"k"}`}); err != nil {
 		t.Fatal(err)
 	}
 	before := corpus.calls
@@ -420,7 +414,7 @@ func TestFinalizeAcceptsWhatModelsSend(t *testing.T) {
 	reg := retrieve.NewRegistry()
 	corpus := &stubCorpus{hits: []domain.Hit{textChunk("d:0000", "d", 0, "x")}}
 	tr := toolsFor(t, corpus, reg, retrieve.Options{})
-	if _, err := tr.Execute(context.Background(), Call{Name: ToolSearch, Arguments: `{"keywords":"k","query":"q"}`}); err != nil {
+	if _, err := tr.Execute(context.Background(), Call{Name: ToolSearch, Arguments: `{"keywords":"k"}`}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -451,7 +445,7 @@ func TestFinalizeAcceptsWhatModelsSend(t *testing.T) {
 func TestNoInfoCarriesTheModelReasonVerbatim(t *testing.T) {
 	reg := retrieve.NewRegistry()
 	tr := toolsFor(t, &stubCorpus{}, reg, retrieve.Options{})
-	if _, err := tr.Execute(context.Background(), Call{Name: ToolSearch, Arguments: `{"keywords":"k","query":"q"}`}); err != nil {
+	if _, err := tr.Execute(context.Background(), Call{Name: ToolSearch, Arguments: `{"keywords":"k"}`}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -476,7 +470,7 @@ func TestNoInfoCarriesTheModelReasonVerbatim(t *testing.T) {
 func TestNoInfoWithoutAReasonStillAnswers(t *testing.T) {
 	reg := retrieve.NewRegistry()
 	tr := toolsFor(t, &stubCorpus{}, reg, retrieve.Options{})
-	if _, err := tr.Execute(context.Background(), Call{Name: ToolSearch, Arguments: `{"keywords":"k","query":"q"}`}); err != nil {
+	if _, err := tr.Execute(context.Background(), Call{Name: ToolSearch, Arguments: `{"keywords":"k"}`}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -493,7 +487,7 @@ func TestNoInfoWithoutAReasonStillAnswers(t *testing.T) {
 
 func TestAnUnknownToolKeepsTheTurnGoing(t *testing.T) {
 	tr := toolsFor(t, &stubCorpus{}, retrieve.NewRegistry(), retrieve.Options{})
-	if _, err := tr.Execute(context.Background(), Call{Name: ToolSearch, Arguments: `{"keywords":"k","query":"q"}`}); err != nil {
+	if _, err := tr.Execute(context.Background(), Call{Name: ToolSearch, Arguments: `{"keywords":"k"}`}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -517,7 +511,7 @@ func TestAnUnknownToolKeepsTheTurnGoing(t *testing.T) {
 func TestEveryCallIsCountedIncludingRefusals(t *testing.T) {
 	tr := toolsFor(t, &stubCorpus{}, retrieve.NewRegistry(), retrieve.Options{})
 	for _, name := range []string{ToolFinalize, ToolSearch, "nonsense"} {
-		if _, err := tr.Execute(context.Background(), Call{Name: name, Arguments: `{"keywords":"k","query":"q"}`}); err != nil {
+		if _, err := tr.Execute(context.Background(), Call{Name: name, Arguments: `{"keywords":"k"}`}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -530,7 +524,7 @@ func TestEveryCallIsCountedIncludingRefusals(t *testing.T) {
 func TestOptionsTravelPerTurn(t *testing.T) {
 	corpus := &stubCorpus{}
 	tr := toolsFor(t, corpus, retrieve.NewRegistry(), retrieve.Options{RecallTopK: 42, FinalTopK: 1})
-	if _, err := tr.Execute(context.Background(), Call{Name: ToolSearch, Arguments: `{"keywords":"k","query":"q"}`}); err != nil {
+	if _, err := tr.Execute(context.Background(), Call{Name: ToolSearch, Arguments: `{"keywords":"k"}`}); err != nil {
 		t.Fatal(err)
 	}
 	if corpus.gotLimit != 42 {

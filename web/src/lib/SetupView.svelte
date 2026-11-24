@@ -54,7 +54,7 @@
   // Which models the one button was told to fetch. Page state would be lost on a reload, and a
   // reload does not cancel the download that is running — the fetcher keeps going on purpose —
   // so a queue that lives only in the component comes back as one model installed and the other
-  // reading "waiting" forever. It goes beside the other per-user view state (§7), and it is not
+  // reading "waiting" forever. It goes beside the other per-user view state, and it is not
   // re-derived from "what is missing": that would fetch gigabytes nobody asked for on a page
   // load.
   const QUEUE_KEY = 'libris.model-queue';
@@ -194,7 +194,7 @@
 
   async function pick(device: Device | null) {
     // One field, saved into the settings as they are now rather than as the wizard guesses
-    // they were: a draft the page keeps is a second copy of a value with an owner (§6).
+    // they were: a draft the page keeps is a second copy of a value with an owner.
     const current = await getSettings();
     await putSettings({ ...current, engineDevice: device ? device.name : '' });
     // A blank setting means libris picks, so choosing that leaves nothing behind to show the

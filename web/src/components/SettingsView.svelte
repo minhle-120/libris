@@ -223,10 +223,10 @@
             />
           {/if}
 
-          <!-- The model files a managed engine loads are not settings — nothing in this card
-               is a choice libris can apply, so `internal/config` defines none of it (§2.2) —
-               but they belong under the group that names them, next to the reranker switch
-               and the probed dimensions, which are the two model facts that are settings. -->
+          <!-- The model files a managed engine loads are not settings — a setting is something
+               libris can apply, and downloading a file is not one, so `internal/config` defines
+               none of it — but they belong under the group that names them, beside the probed
+               dimensions, which is the one model fact that is a setting. -->
           {#if group.id === 'models' && mode === 'managed'}
             <ModelPanel saved={savedToken} onModels={() => modelSet++} />
           {/if}

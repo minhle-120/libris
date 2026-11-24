@@ -22,7 +22,6 @@ const DefaultTimeout = 5 * time.Minute
 type Config struct {
 	ChatURL   string
 	EmbedURL  string
-	RerankURL string
 	Timeout   time.Duration
 	HTTP      *http.Client
 	UserAgent string
@@ -126,58 +125,6 @@ func (c *Client) Embed(ctx context.Context, req EmbedRequest) (*EmbedResponse, e
 		return nil, err
 	}
 	return &out, nil
-}
-
-// Rerank scores each document against the query. Servers disagree on the
-// response key, so both shapes are accepted.
-func (c *Client) Rerank(ctx context.Context, req RerankRequest) (*RerankResponse, error) {
-	if strings.TrimSpace(c.cfg.RerankURL) == "" {
-		return nil, ErrNoReranker
-	}
-	if len(req.Documents) == 0 {
-		return nil, errors.New("llm: rerank: no documents")
-	}
-
-	ctx, cancel := context.WithTimeout(ctx, c.cfg.Timeout)
-	defer cancel()
-
-	var out RerankResponse
-	if err := c.doJSON(ctx, c.cfg.RerankURL, "rerank", req, &out); err != nil {
-		return nil, err
-	}
-	return &out, nil
-}
-
-// RerankScores is Rerank for a caller that wants the scores, not the wire shape:
-// one score per document, in the order the documents were sent.
-//
-// model is the caller's, not the client's. A reranker name is a setting, and a
-// setting that is saved but never sent is worse than one that does not exist: the
-// UI says the reranker is bge-reranker-v2-m3 while the server answers as whatever
-// it happens to have loaded, and nothing in the response would ever say so.
-//
-// The mapping is done here because the response reports positions in *its* order,
-// not ours — a Jina-style server sorts descending and may return fewer rows than it
-// was given. A caller that assumed positional responses would silently score the
-// wrong chunks, which is the failure this pipeline is built not to have. Missing
-// rows score zero, so an unranked document sorts last rather than anywhere plausible.
-func (c *Client) RerankScores(ctx context.Context, model, question string, docs []RerankDoc) ([]float64, error) {
-	resp, err := c.Rerank(ctx, RerankRequest{Model: model, Query: question, Documents: docs})
-	if err != nil {
-		return nil, err
-	}
-	if len(resp.Results) > len(docs) || len(resp.Data) > len(docs) {
-		return nil, fmt.Errorf("llm: rerank: %d results for %d documents", len(resp.Results), len(docs))
-	}
-
-	scores := make([]float64, len(docs))
-	for _, r := range resp.Ranked() {
-		if r.Index < 0 || r.Index >= len(docs) {
-			return nil, fmt.Errorf("llm: rerank: result index %d is outside the %d documents sent", r.Index, len(docs))
-		}
-		scores[r.Index] = r.RelevanceScore
-	}
-	return scores, nil
 }
 
 // ── transport ─────────────────────────────────────────────────────

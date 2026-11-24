@@ -99,9 +99,9 @@ type Tools struct {
 	calls    int
 }
 
-// NewTools binds the tools to a turn. question is the user's own words: it is the
-// reranking objective, and the evaluation note quotes it back at the model, so it
-// is passed through untouched rather than paraphrased on the way in.
+// NewTools binds the tools to a turn. question is the user's own words: the
+// evaluation note quotes it back at the model after every search, so it is passed
+// through untouched rather than paraphrased on the way in.
 func NewTools(r *retrieve.Retriever, reg *retrieve.Registry, notebookID, question string, opts retrieve.Options) *Tools {
 	return &Tools{
 		retrieve:   r,
@@ -124,7 +124,6 @@ func (t *Tools) Searched() bool { return t.searched }
 
 type searchArgs struct {
 	Keywords string `json:"keywords" desc:"Words naming what to look for, for the initial vector retrieval. Two to six terms, not a sentence: a full question embedded as a probe retrieves the average of everything it mentions. Example: coastal erosion rate"`
-	Query    string `json:"query" desc:"The question or task these passages should answer, in a full sentence, used to rerank the retrieved results for best relevance"`
 }
 
 type finalizeArgs struct {
@@ -144,7 +143,7 @@ func Schemas() ([]llm.Tool, error) {
 		args       any
 	}{
 		{ToolSearch,
-			"Search the library for relevant information using keywords for retrieval and a query for reranking. Always start by calling this tool first.",
+			"Search the library for relevant information using a few keywords. Always start by calling this tool first.",
 			searchArgs{}},
 		{ToolFinalize,
 			"Call this when you have finished your research and want to provide the final textual answer. Use this ONLY for summaries and analysis.",
@@ -230,7 +229,7 @@ func (t *Tools) Execute(ctx context.Context, call Call) (Reply, error) {
 		ToolSearch + "`, `" + ToolFinalize + "` and `" + ToolNoInfo + "`."}, nil
 }
 
-// search is recall → rerank → registration, then the tool message the model reads.
+// search is recall → registration, then the tool message the model reads.
 func (t *Tools) search(ctx context.Context, rawArgs string) (body string, running string, err error) {
 	var a searchArgs
 	toolArguments(rawArgs, &a)
@@ -244,7 +243,7 @@ func (t *Tools) search(ctx context.Context, rawArgs string) (body string, runnin
 	// than that something is happening.
 	running = fmt.Sprintf("Searching library for %q…", a.Keywords)
 
-	evidence, err := t.retrieve.Search(ctx, t.registry, t.notebookID, a.Keywords, a.Query, t.opts)
+	evidence, err := t.retrieve.Search(ctx, t.registry, t.notebookID, a.Keywords, t.opts)
 	if err != nil {
 		if errors.Is(err, retrieve.ErrNoKeywords) {
 			return noKeywords, running, nil
@@ -285,8 +284,8 @@ const (
 		"Try `" + ToolSearch + "` again with different, more specific keywords, " +
 		"or call `" + ToolNoInfo + "` if the library is unlikely to contain the answer."
 
-	noKeywords = "No keywords provided. Call `" + ToolSearch + "` with a few words " +
-		"in keywords and the question in query."
+	noKeywords = "No keywords provided. Call `" + ToolSearch + "` with two to six " +
+		"words in keywords."
 
 	noInfoFallback = "I searched the library and did not find information to answer that."
 )

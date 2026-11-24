@@ -30,7 +30,7 @@ func TestLoadEnvNamesFollowKeys(t *testing.T) {
 	t.Setenv("LIBRIS_CHAT_URL", "http://127.0.0.1:9999")
 	t.Setenv("LIBRIS_PDF_DPI", "200")
 	t.Setenv("LIBRIS_MAX_FILE_MB", "32")
-	t.Setenv("LIBRIS_RERANK_ENABLED", "false")
+	t.Setenv("LIBRIS_KEEP_ORIGINALS", "false")
 
 	c, err := Load()
 	if err != nil {
@@ -45,8 +45,10 @@ func TestLoadEnvNamesFollowKeys(t *testing.T) {
 	if c.MaxFileBytes() != 32<<20 {
 		t.Errorf("MaxFileBytes = %d", c.MaxFileBytes())
 	}
-	if c.RerankEnabled {
-		t.Error("RerankEnabled should be false")
+	// A bool whose default is true, so this proves the environment actually moved it
+	// rather than agreeing with the default by accident.
+	if c.KeepOriginals {
+		t.Error("KeepOriginals should be false")
 	}
 }
 
@@ -62,7 +64,7 @@ func TestLoadDefaultsWhenEnvEmpty(t *testing.T) {
 }
 
 func TestLoadParseErrors(t *testing.T) {
-	for _, key := range []string{"LIBRIS_PDF_DPI", "LIBRIS_TIMEOUT_SECONDS", "LIBRIS_RERANK_ENABLED"} {
+	for _, key := range []string{"LIBRIS_PDF_DPI", "LIBRIS_TIMEOUT_SECONDS", "LIBRIS_KEEP_ORIGINALS"} {
 		t.Run(key, func(t *testing.T) {
 			t.Setenv(key, "not-valid")
 			if _, err := Load(); err == nil {
@@ -144,13 +146,13 @@ func TestServedDerivesManagedMode(t *testing.T) {
 	c.ChatModel = "something-somebody-typed"
 
 	got := c.Served(9099)
-	for _, u := range []string{got.ChatURL, got.EmbedURL, got.RerankURL} {
+	for _, u := range []string{got.ChatURL, got.EmbedURL} {
 		if u != "http://127.0.0.1:9099" {
 			t.Errorf("managed URL = %q, want the loopback port libris binds", u)
 		}
 	}
-	if got.ChatModel != "libris-chat" || got.EmbedModel != "libris-embed" || got.RerankModel != "libris-rerank" {
-		t.Errorf("managed models = %q/%q/%q", got.ChatModel, got.EmbedModel, got.RerankModel)
+	if got.ChatModel != "libris-chat" || got.EmbedModel != "libris-embed" {
+		t.Errorf("managed models = %q/%q", got.ChatModel, got.EmbedModel)
 	}
 	// The stored config is untouched: a derived value that lands in settings.json is a
 	// second source of truth that goes stale the moment the port changes.
@@ -183,7 +185,7 @@ func TestServedWithoutAPortNamesNoAddress(t *testing.T) {
 	c := Default()
 	c.EnginePort = 8080 // stored, but not what the running process was given
 	got := c.Served(0)
-	for _, u := range []string{got.ChatURL, got.EmbedURL, got.RerankURL} {
+	for _, u := range []string{got.ChatURL, got.EmbedURL} {
 		if u != "" {
 			t.Errorf("managed mode with no running server produced %q", u)
 		}

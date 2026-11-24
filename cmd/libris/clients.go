@@ -82,7 +82,7 @@ func (c *clientCache) For(cfg config.Config) (*llm.Client, error) {
 	}
 
 	key := strings.Join([]string{
-		cfg.ChatURL, cfg.EmbedURL, cfg.RerankURL,
+		cfg.ChatURL, cfg.EmbedURL,
 		strconv.Itoa(cfg.TimeoutSeconds),
 	}, "\x00")
 
@@ -94,10 +94,9 @@ func (c *clientCache) For(cfg config.Config) (*llm.Client, error) {
 	}
 
 	client, err := llm.New(llm.Config{
-		ChatURL:   cfg.ChatURL,
-		EmbedURL:  cfg.EmbedURL,
-		RerankURL: cfg.RerankURL,
-		Timeout:   time.Duration(cfg.TimeoutSeconds) * time.Second,
+		ChatURL:  cfg.ChatURL,
+		EmbedURL: cfg.EmbedURL,
+		Timeout:  time.Duration(cfg.TimeoutSeconds) * time.Second,
 	})
 	if err != nil {
 		// Uncached: a half-saved URL must not be remembered for the rest of the

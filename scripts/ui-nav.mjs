@@ -1309,7 +1309,7 @@ const code = await withBrowser(
     checks.check(
       "each row says which role it fills",
       models.roles.length === models.entries &&
-        models.roles.every((r) => ['chat', 'embed', 'rerank'].includes(r)),
+        models.roles.every((r) => ['chat', 'embed'].includes(r)),
       JSON.stringify(models.roles),
     );
     checks.check(
@@ -1329,7 +1329,7 @@ const code = await withBrowser(
     );
 
     // The switch is the whole UX claim, so it is clicked rather than read: choosing the
-    // other mode must take the machine section away and put the three addresses back. A
+    // other mode must take the machine section away and put the two addresses back. A
     // field that is merely hidden by CSS would pass a screenshot and fail this, which is the
     // point — the old page showed a port for a server it never started.
     const flipped = await ui.eval(`
@@ -1342,7 +1342,7 @@ const code = await withBrowser(
         [...document.querySelectorAll('#servers input')].filter((i) =>
           /^http/.test(i.value)
         ).length;
-      while (Date.now() < deadline && httpFields() < 3) {
+      while (Date.now() < deadline && httpFields() < 2) {
         await new Promise((r) => setTimeout(r, 100));
       }
       const after = {
@@ -1371,8 +1371,8 @@ const code = await withBrowser(
       `models card present=${flipped.models}`,
     );
     checks.check(
-      "and puts the three addresses back",
-      flipped.addresses.length === 3,
+      "and puts the two addresses back",
+      flipped.addresses.length === 2,
       flipped.addresses.join(' '),
     );
     checks.check(

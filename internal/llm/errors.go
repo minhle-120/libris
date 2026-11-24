@@ -10,12 +10,10 @@ import (
 	"time"
 )
 
-// ErrNoEmbedder and ErrNoReranker mean the endpoint was not configured. The
-// retrieval loop treats them as "degrade to the next best behaviour".
-var (
-	ErrNoEmbedder = errors.New("llm: embedder not configured")
-	ErrNoReranker = errors.New("llm: reranker not configured")
-)
+// ErrNoEmbedder means the endpoint was not configured. A search treats it as a
+// notebook that cannot be searched at all, which is a fact the user can fix in
+// Settings — not as a question that failed.
+var ErrNoEmbedder = errors.New("llm: embedder not configured")
 
 // Error is a non-2xx response.
 type Error struct {

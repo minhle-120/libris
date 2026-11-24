@@ -8,9 +8,9 @@ package domain
 // source was called, and retrieval must not go and read either of those again to
 // render a result.
 //
-// Score carries no unit. Cosine and reranker relevance are different numbers on
-// different scales, so it is recorded for logging and debugging only — ranking is
-// decided by whichever stage wrote last, and only one stage's order is ever used.
+// Score carries no unit: it is whatever the recall scan measured, kept for logging
+// and debugging. Ordering is that scan's and nothing rewrites it afterwards, so two
+// Scores side by side are not a comparison any rule defines.
 type Hit struct {
 	Segment    Segment `json:"segment"`
 	Score      float64 `json:"score"`

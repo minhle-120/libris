@@ -1,6 +1,6 @@
-// A stand-in for llama.cpp, shared by `make e2e` and `make ui`: embeddings,
-// reranking and the two model calls a question makes. It is one process on one port
-// because that is how a single llama.cpp binary serves all three.
+// A stand-in for llama.cpp, shared by `make e2e` and `make ui`: embeddings and the
+// two model calls a question makes. It is one process on one port because that is how
+// a single llama.cpp binary serves both.
 //
 // Deliberately the ugliest code in the repo: it mirrors the wire shape that
 // server uses and nothing else, so the pipeline is exercised through HTTP rather
@@ -141,11 +141,6 @@ export class EmbedServer {
           return;
         }
 
-        if (req.url === '/v1/rerank' || req.url === '/reranking') {
-          this.rerank(res, body);
-          return;
-        }
-
         if (this.down) {
           res.writeHead(503, { 'content-type': 'application/json' });
           res.end(JSON.stringify({ error: { message: 'all inference slots are busy' } }));
@@ -242,27 +237,6 @@ export class EmbedServer {
     send();
   }
 
-  /** Jina's shape: `results` sorted descending, each pointing back into `documents`. */
-  rerank(res, raw) {
-    let body;
-    try {
-      body = JSON.parse(raw);
-    } catch {
-      res.writeHead(400);
-      res.end('{"error":"not json"}');
-      return;
-    }
-
-    const results = (body.documents ?? [])
-      .map((doc, index) => ({ index, relevance_score: score(doc, body.query) }))
-      // Sorted, because the client maps a score back by the index in the row rather
-      // than by position — the ordering is what makes a wrong mapping observable.
-      .sort((a, b) => b.relevance_score - a.relevance_score);
-
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ model: body.model, results }));
-  }
-
   vector(entry, row) {
     const out = new Array(this.dim).fill(0);
     out[0] = row + 1;
@@ -281,29 +255,6 @@ export class EmbedServer {
   close() {
     this.server.close();
   }
-}
-
-
-/**
- * A deterministic stand-in for a reranker's judgement: shared word count with the
- * query, so the chunk that actually contains the asked-about words outranks the rest.
- * A constant score would make every ordering a tie and prove nothing about reranking.
- */
-function score(doc, query) {
-  const words = new Set(
-    String(typeof doc === 'string' ? doc : (doc.text ?? ''))
-      .toLowerCase()
-      .split(/[^a-z0-9]+/)
-      .filter(Boolean)
-  );
-  const q = String(query ?? '')
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter(Boolean);
-  if (!words.size || !q.length) return 0;
-  let shared = 0;
-  for (const w of q) if (words.has(w)) shared++;
-  return shared / q.length;
 }
 
 // `node scripts/fake-embed.mjs <port>` serves forever, for the harnesses that

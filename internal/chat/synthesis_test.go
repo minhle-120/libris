@@ -63,7 +63,7 @@ func partsText(parts []llm.ContentPart) string {
 func synthesizer(stream Streamer, assets retrieve.Assets) *Synthesizer {
 	// Only Render is exercised here, so the retrieval collaborators are nil: a
 	// synthesiser writes from evidence and never searches.
-	return NewSynthesizer(stream, retrieve.New(nil, nil, nil, assets), "test-chat", nil)
+	return NewSynthesizer(stream, retrieve.New(nil, nil, assets), "test-chat", nil)
 }
 
 const (

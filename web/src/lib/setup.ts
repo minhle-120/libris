@@ -28,7 +28,7 @@ const complete = (e?: ModelEntry): boolean => !!e && e.complete;
 
 /** Where a device choice is remembered. Blank means libris picks, so the absence of a name is
  * not evidence that anybody was asked — the confirmation of libris's own pick is recorded here
- * instead, beside the other per-user view state (§7). */
+ * instead, beside the other per-user view state. */
 export const DEVICE_ACK = 'libris.device-ack';
 
 /** What the browser records for "this machine's device was looked at", keyed to the machine and

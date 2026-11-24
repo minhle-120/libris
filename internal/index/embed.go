@@ -35,8 +35,8 @@ const batchLimit = 8
 
 // MaxAssetBytes refuses to inline a media file this large. It is not a tuning
 // knob: past this the request is the problem, not the model. It is exported
-// because retrieval inlines rasters too — a page image sent to a reranker or to
-// the answer model is the same hazard and deserves the same one limit.
+// because retrieval inlines rasters too — a page image sent to the answer model is
+// the same hazard, arriving by a different path, and deserves the same one limit.
 const MaxAssetBytes = 32 << 20
 
 // Embedder produces a vector for every segment it is given, or returns an error.

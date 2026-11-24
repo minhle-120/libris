@@ -98,7 +98,7 @@ type Config struct {
 	//
 	// The floor is 1024 and 0 is legal anyway, because ports below 1024 need root on Linux and
 	// setting one would produce a failure about permissions rather than about the choice.
-	EnginePort int `key:"enginePort" group:"servers" label:"Server port" help:"0 lets libris take a free port each time the server starts. A number asks for that exact port, and the start fails if something else already holds it. Chat, embeddings and reranking share whatever port is chosen." min:"1024" max:"65535" autoZero:"true" mode:"managed"`
+	EnginePort int `key:"enginePort" group:"servers" label:"Server port" help:"0 lets libris take a free port each time the server starts. A number asks for that exact port, and the start fails if something else already holds it. Chat and embeddings share whatever port is chosen." min:"1024" max:"65535" autoZero:"true" mode:"managed"`
 
 	// Which device llama.cpp offloads to, written into the preset as --device. A setting
 	// because libris is the thing that writes it, and a string rather than an enum
@@ -114,7 +114,6 @@ type Config struct {
 
 	ChatURL        string `key:"chatURL" group:"servers" label:"Chat server" help:"Text, image and audio input." kind:"url" required:"true" mode:"external"`
 	EmbedURL       string `key:"embedURL" group:"servers" label:"Embedding server" help:"Multimodal embeddings for text, page images and audio." kind:"url" required:"true" mode:"external"`
-	RerankURL      string `key:"rerankURL" group:"servers" label:"Rerank server" help:"Optional. Degrades to vector order when unset." kind:"url" mode:"external"`
 	TimeoutSeconds int    `key:"timeoutSeconds" group:"servers" label:"Request timeout" help:"Local CPU inference is slow. Lower it for GPU." min:"5" max:"3600" unit:"s"`
 
 	// ── models ───────────────────────────────────────────────────
@@ -124,14 +123,12 @@ type Config struct {
 	// way: a default that names a model nobody downloaded is a field that looks correct and
 	// fails anyway. Capacity is not here either — n_ctx and the GPU layer count belong to
 	// the server's command line, and in managed mode to its preset file.
-	ChatModel     string `key:"chatModel" group:"models" label:"Chat model" help:"The name your chat server answers to. Must support tool calls for the research loop." mode:"external"`
-	EmbedModel    string `key:"embedModel" group:"models" label:"Embedding model" help:"The name your embedding server answers to." mode:"external"`
-	EmbedDim      string `key:"embedDimensions" group:"models" label:"Embedding dimensions" help:"Probed once at startup and recorded with every segment." readonly:"true"`
-	RerankModel   string `key:"rerankModel" group:"models" label:"Reranker" help:"The name your rerank server answers to; blank when reranking is off." mode:"external"`
-	RerankEnabled bool   `key:"rerankEnabled" group:"models" label:"Enable reranking" help:"Off means pure vector order."`
+	ChatModel  string `key:"chatModel" group:"models" label:"Chat model" help:"The name your chat server answers to. Must support tool calls for the research loop." mode:"external"`
+	EmbedModel string `key:"embedModel" group:"models" label:"Embedding model" help:"The name your embedding server answers to." mode:"external"`
+	EmbedDim   string `key:"embedDimensions" group:"models" label:"Embedding dimensions" help:"Probed once at startup and recorded with every segment." readonly:"true"`
 
 	// ── retrieval ────────────────────────────────────────────────
-	RecallTopK      int `key:"recallTopK" group:"retrieval" label:"Recall depth" help:"Candidates pulled from the vector scan, before reranking." min:"1" max:"100" unit:"candidates"`
+	RecallTopK      int `key:"recallTopK" group:"retrieval" label:"Recall depth" help:"Candidates pulled from the vector scan, best first." min:"1" max:"100" unit:"candidates"`
 	FinalTopK       int `key:"finalTopK" group:"retrieval" label:"Evidence per search" help:"What the research agent sees in a tool result." min:"1" max:"50" unit:"chunks"`
 	MaxIterations   int `key:"maxIterations" group:"retrieval" label:"Max iterations" help:"Deeper multi-hop research; diminishing returns past 3." min:"1" max:"10"`
 	HistoryMessages int `key:"historyMessages" group:"retrieval" label:"History window" help:"Recent turns given to the synthesizer." min:"0" max:"64" unit:"messages"`
@@ -160,7 +157,7 @@ func Default() Config {
 	return Config{
 		// Managed is the default because it is the answer that needs nothing typed: libris
 		// fetches the build, runs it on the port below, and the addresses are derived. The
-		// three URLs and three names still have defaults, because external mode is a real
+		// two URLs and two names still have defaults, because external mode is a real
 		// mode and a saved config that validates in one mode must validate in the other.
 		EngineMode: EngineManaged,
 		// Auto. A fixed default was the collision: 8080 is the port every local dev server
@@ -169,20 +166,11 @@ func Default() Config {
 
 		ChatURL:        "http://127.0.0.1:8081",
 		EmbedURL:       "http://127.0.0.1:8082",
-		RerankURL:      "http://127.0.0.1:8083",
 		TimeoutSeconds: 300,
 
-		ChatModel:   "",
-		EmbedModel:  "",
-		EmbedDim:    "",
-		RerankModel: "",
-		// Off, because nothing on a fresh install can rerank: there is no reranker in the
-		// catalogue, so in managed mode the derived address is well-formed and
-		// nothing answers it, and in external mode it is a server a person has not started yet.
-		// A default that is on would make the one retrieval stage that is a *choice* look
-		// configured when the machine cannot honour it — the same mistake as a prefilled model
-		// name above. Vector order is the answer that works everywhere.
-		RerankEnabled: false,
+		ChatModel:  "",
+		EmbedModel: "",
+		EmbedDim:   "",
 
 		RecallTopK:      10,
 		FinalTopK:       5,
@@ -208,7 +196,7 @@ func Default() Config {
 //
 // The port is an argument rather than c.EnginePort because it is a fact about a process, and
 // with the port on Auto that process was given one by the kernel at start. Pass the port the
-// router answers on; zero means none is, and the three addresses come back empty rather than
+// router answers on; zero means none is, and the two addresses come back empty rather than
 // aimed at a port nobody holds. Saying so in words is the caller's job — this function's job
 // is to make "just try it anyway" impossible.
 func (c Config) Served(port int) Config {
@@ -218,13 +206,12 @@ func (c Config) Served(port int) Config {
 	out := c
 	out.ChatModel = string(engine.AliasChat)
 	out.EmbedModel = string(engine.AliasEmbed)
-	out.RerankModel = string(engine.AliasRerank)
 	if port <= 0 {
-		out.ChatURL, out.EmbedURL, out.RerankURL = "", "", ""
+		out.ChatURL, out.EmbedURL = "", ""
 		return out
 	}
 	base := fmt.Sprintf("http://127.0.0.1:%d", port)
-	out.ChatURL, out.EmbedURL, out.RerankURL = base, base, base
+	out.ChatURL, out.EmbedURL = base, base
 	return out
 }
 

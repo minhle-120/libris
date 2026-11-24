@@ -103,15 +103,6 @@ func TestEmbedServerError(t *testing.T) {
 	}
 }
 
-func TestRerankServerError(t *testing.T) {
-	srv, _ := server(t, 500, `{"error":{"message":"reranker down"}}`, nil)
-	c := newClient(t, llm.Config{ChatURL: "http://unused", RerankURL: srv.URL})
-
-	if _, err := c.Rerank(context.Background(), llm.RerankRequest{Documents: []llm.RerankDoc{llm.TextDoc("a")}}); err == nil {
-		t.Fatal("expected error")
-	}
-}
-
 func TestErrorStringCode(t *testing.T) {
 	srv, _ := server(t, 400, `{"error":{"message":"m","code":"invalid_request"}}`, nil)
 	c := newClient(t, llm.Config{ChatURL: srv.URL})

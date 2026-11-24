@@ -42,7 +42,7 @@ e2e: build
 
 # Drives the real UI in headless Chrome against a throwaway data directory and
 # asserts on DOM state. Skips (successfully) when Chrome is not installed. The fake
-# server is one port because one llama.cpp binary serves embeddings, reranking and
+# server is one port because one llama.cpp binary serves embeddings and
 # chat, which is also what the settings a user saves look like. The model names are in
 # that file because Libris ships no guesses: a blank chat model is a question that
 # correctly refuses to run, and the harness would be asserting that instead of the
@@ -59,7 +59,7 @@ ui: build
 # -open=false: a harness is headless by definition, and on a machine that happens to
 # have a desktop the default would raise a browser window mid-run.
 	@dir=$$(mktemp -d); \
-	printf '{"engineMode":"external","chatURL":"http://127.0.0.1:$(UI_EMBED_PORT)","embedURL":"http://127.0.0.1:$(UI_EMBED_PORT)","rerankURL":"http://127.0.0.1:$(UI_EMBED_PORT)","chatModel":"fake-chat","embedModel":"fake-embed-2","rerankModel":"fake-rerank"}' > $$dir/settings.json; \
+	printf '{"engineMode":"external","chatURL":"http://127.0.0.1:$(UI_EMBED_PORT)","embedURL":"http://127.0.0.1:$(UI_EMBED_PORT)","chatModel":"fake-chat","embedModel":"fake-embed-2"}' > $$dir/settings.json; \
 	node scripts/fake-embed.mjs $(UI_EMBED_PORT) >/tmp/libris-embed.log 2>&1 & embed=$$!; \
 	sleep 0.4; \
 	./libris -open=false -addr 127.0.0.1:$(UI_PORT) -data $$dir >/tmp/libris-ui.log 2>&1 & pid=$$!; \

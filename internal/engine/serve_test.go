@@ -19,7 +19,6 @@ func TestPresetWritesOneSectionPerModel(t *testing.T) {
 	err := engine.Preset(path, "", []engine.Model{
 		{Alias: engine.AliasChat, Kind: engine.KindChat, Path: "/m/chat.gguf", MMProj: "/m/mmproj.gguf"},
 		{Alias: engine.AliasEmbed, Kind: engine.KindEmbed, Path: "/m/emb.gguf"},
-		{Alias: engine.AliasRerank, Kind: engine.KindRerank, Path: "/m/rerank.gguf"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -31,12 +30,12 @@ func TestPresetWritesOneSectionPerModel(t *testing.T) {
 	got := string(raw)
 
 	// The keys are llama.cpp's own preset vocabulary, checked against common/arg.cpp:
-	// LLAMA_ARG_EMBEDDINGS, LLAMA_ARG_RERANKING. A typo here is a router that refuses to
+	// LLAMA_ARG_EMBEDDINGS. A typo here is a router that refuses to
 	// start, and the only place it would be noticed is a log file.
 	for _, want := range []string{
-		"version = 1", "[*]", "[libris-chat]", "[libris-embed]", "[libris-rerank]",
+		"version = 1", "[*]", "[libris-chat]", "[libris-embed]",
 		"model = /m/chat.gguf", "mmproj = /m/mmproj.gguf",
-		"embeddings = on", "reranking = on", "fit = on", "backend-sampling = true",
+		"embeddings = on", "fit = on", "backend-sampling = true",
 		"reasoning-preserve = true", "cache-type-k = q8_0", "no-warmup = true", "jinja = true",
 		// Written out rather than left absent, so whoever opens this file sees the choice. And
 		// it is a choice: with it absent the section would still not load, and a reader could not
@@ -58,7 +57,6 @@ func TestPresetWritesOneSectionPerModel(t *testing.T) {
 	for _, want := range []string{
 		"[libris-chat]\nmodel = /m/chat.gguf", "ctx-size = 32768",
 		"ctx-size = 4096", // the embedder
-		"ctx-size = 2048", // the reranker
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("preset is missing %q:\n%s", want, got)
@@ -73,8 +71,8 @@ func TestPresetWritesOneSectionPerModel(t *testing.T) {
 			t.Errorf("preset is missing %q:\n%s", want, got)
 		}
 	}
-	// The two small models hold no KV cache in host memory; the chat model is allowed 2 GiB.
-	if strings.Count(got, "cache-ram = 0") != 2 || !strings.Contains(got, "cache-ram = 2048") {
+	// The embedder holds no KV cache in host memory; the chat model is allowed 2 GiB.
+	if strings.Count(got, "cache-ram = 0") != 1 || !strings.Contains(got, "cache-ram = 2048") {
 		t.Errorf("cache-ram is not per kind:\n%s", got)
 	}
 

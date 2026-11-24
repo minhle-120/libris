@@ -158,8 +158,8 @@ func TestRolesAndModelsFollowCompleteness(t *testing.T) {
 	e := entry()
 
 	empty := []models.Status{models.StatusOf(dir, e)}
-	if models.HasRole(empty, models.RoleChat) {
-		t.Error("an empty disk fills no role")
+	if empty[0].Complete {
+		t.Error("an empty disk holds nothing complete")
 	}
 	if got := models.Models(empty); got != nil {
 		t.Errorf("Models on an empty disk = %+v, want nothing to put in a preset", got)
@@ -169,11 +169,8 @@ func TestRolesAndModelsFollowCompleteness(t *testing.T) {
 	touch(t, e.Path(dir, e.MMProj), int(e.MMProj.Bytes))
 
 	have := []models.Status{models.StatusOf(dir, e)}
-	if !models.HasRole(have, models.RoleChat) {
-		t.Error("a complete entry should fill its role")
-	}
-	if models.HasRole(have, models.RoleRerank) {
-		t.Error("nothing here reranks")
+	if !have[0].Complete {
+		t.Error("a downloaded and verified entry should report itself complete")
 	}
 
 	got := models.Models(have)

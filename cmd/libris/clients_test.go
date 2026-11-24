@@ -39,7 +39,7 @@ func TestClientCacheReusesUntilTheConnectionChanges(t *testing.T) {
 		"chat URL":  settings("http://a:2", "http://e:1", 30),
 		"embed URL": settings("http://a:1", "http://e:2", 30),
 		"timeout":   settings("http://a:1", "http://e:1", 31),
-		// llm.New insists on a chat URL and tolerates a blank embed or rerank one,
+		// llm.New insists on a chat URL and tolerates a blank embed one,
 		// which stays a per-call ErrNoEmbedder rather than a startup failure.
 		"blank chat": settings("", "http://e:1", 30),
 	} {

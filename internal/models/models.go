@@ -24,14 +24,13 @@ import (
 // and a removal one rmdir.
 func Dir(dataDir string) string { return filepath.Join(dataDir, "models") }
 
-// Role is what a model is for. The three are exactly the three roles the answer path has:
-// the research loop's tool caller, the embedding probe, and the reranker.
+// Role is what a model is for. The two are exactly the two roles the answer path has:
+// the research loop's tool caller and the embedding probe.
 type Role string
 
 const (
-	RoleChat   Role = "chat"
-	RoleEmbed  Role = "embed"
-	RoleRerank Role = "rerank"
+	RoleChat  Role = "chat"
+	RoleEmbed Role = "embed"
 )
 
 // Alias is the name this model is given in the router's preset, and therefore the name libris
@@ -42,8 +41,6 @@ func (r Role) Alias() engine.Alias {
 	switch r {
 	case RoleEmbed:
 		return engine.AliasEmbed
-	case RoleRerank:
-		return engine.AliasRerank
 	default:
 		return engine.AliasChat
 	}
@@ -81,8 +78,8 @@ type Entry struct {
 
 // catalog is everything libris offers. Two models, one chat and one embedding, because that
 // is what the answer path needs before it needs anything else, and a menu of twelve quants is
-// a way of asking somebody to guess. The reranker is deliberately absent: without
-// one, retrieval stays in vector order, which is a documented degradation rather than a lie.
+// a way of asking somebody to guess. Retrieval is ordered by the embedding model's own
+// similarity and by nothing else, so a third model would have to earn its download.
 var catalog = []Entry{
 	{
 		ID:    "lfm3-vl-2b",
@@ -240,29 +237,6 @@ func Statuses(modelsDir string) []Status {
 	return out
 }
 
-// RolesOf lists the roles these statuses can fill right now. It is what makes "reranking is
-// available" a fact about the machine rather than a setting that promises a model nobody
-// downloaded.
-func RolesOf(statuses []Status) []Role {
-	var out []Role
-	for _, s := range statuses {
-		if s.Complete {
-			out = append(out, s.Role)
-		}
-	}
-	return out
-}
-
-// HasRole reports whether any complete status fills the role.
-func HasRole(statuses []Status, role Role) bool {
-	for _, r := range RolesOf(statuses) {
-		if r == role {
-			return true
-		}
-	}
-	return false
-}
-
 // verifiedSuffix marks a file libris wrote and hashed. It is a sibling rather than a field in
 // a database because the data directory has to stay right when copied, moved, or emptied by
 // hand — the same reason the engine keeps its own record beside the binaries.
@@ -297,8 +271,6 @@ func kindOf(r Role) engine.ModelKind {
 	switch r {
 	case RoleEmbed:
 		return engine.KindEmbed
-	case RoleRerank:
-		return engine.KindRerank
 	default:
 		return engine.KindChat
 	}

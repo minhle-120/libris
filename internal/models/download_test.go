@@ -100,8 +100,8 @@ func TestDownloadVerifiesAndPlacesBothParts(t *testing.T) {
 	if p := f.Progress(); p.State != models.StateIdle || p.Error != "" {
 		t.Fatalf("progress after a good download: %+v", p)
 	}
-	if !models.HasRole([]models.Status{models.StatusOf(dir, e)}, models.RoleChat) {
-		t.Fatal("a finished download does not fill its role")
+	if !models.StatusOf(dir, e).Complete {
+		t.Fatal("a finished download is not complete")
 	}
 	for _, body := range []body{a, b} {
 		got, err := os.ReadFile(e.Path(dir, models.Part{Name: body.name}))
@@ -182,8 +182,8 @@ func TestDownloadThrowsAwayADigestMismatch(t *testing.T) {
 	if _, err := os.Stat(models.PartPath(e.Path(dir, e.Model))); !os.IsNotExist(err) {
 		t.Error("the part file survived a digest mismatch, so the next attempt fails the same way")
 	}
-	if models.HasRole([]models.Status{models.StatusOf(dir, e)}, models.RoleChat) {
-		t.Error("a model nobody verified fills a role")
+	if models.StatusOf(dir, e).Complete {
+		t.Error("a model nobody verified reports itself complete")
 	}
 }
 
@@ -315,7 +315,7 @@ func TestDownloadRestartsWhenRangeIsIgnored(t *testing.T) {
 	if err == nil && !bytes.Equal(got, a.data) {
 		t.Errorf("file is %q, want the body exactly once", got)
 	}
-	if !models.HasRole([]models.Status{models.StatusOf(dir, e)}, models.RoleChat) {
+	if !models.StatusOf(dir, e).Complete {
 		t.Error("the entry did not end up complete")
 	}
 }

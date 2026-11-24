@@ -73,7 +73,7 @@ func TestFileStoreSavePersists(t *testing.T) {
 
 	next := Default()
 	next.PDFDPI = 144
-	next.RerankModel = "bge-reranker-v2"
+	next.ChatModel = "a-model-on-somebody-else's-server"
 	if err := store.Save(next); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestFileStoreSavePersists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reopened.Get().RerankModel != "bge-reranker-v2" {
+	if reopened.Get().ChatModel != "a-model-on-somebody-else's-server" {
 		t.Errorf("reopened = %+v", reopened.Get())
 	}
 }

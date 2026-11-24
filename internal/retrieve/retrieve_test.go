@@ -53,20 +53,6 @@ func (f *fakeEmbed) Identity() string {
 	return f.identity
 }
 
-type fakeRerank struct {
-	scores   []float64
-	gotQuery string
-	gotDocs  []llm.RerankDoc
-	calls    int
-	err      error
-}
-
-func (f *fakeRerank) Score(_ context.Context, q string, docs []llm.RerankDoc) ([]float64, error) {
-	f.calls++
-	f.gotQuery, f.gotDocs = q, docs
-	return f.scores, f.err
-}
-
 type fakeAssets struct {
 	files map[string][]byte
 	err   error
@@ -147,25 +133,24 @@ func partsText(parts []llm.ContentPart) string {
 	return b.String()
 }
 
-func newRetriever(c *fakeCorpus, e *fakeEmbed, r Reranker, a Assets) *Retriever {
-	return New(c, e, r, a)
+func newRetriever(c *fakeCorpus, e *fakeEmbed, a Assets) *Retriever {
+	return New(c, e, a)
 }
 
-// ── the two-argument split ───────────────────────────────────────
+// ── the probe ────────────────────────────────────────────────────
 
-// The split is load-bearing: keywords is the embedding probe, question is the
-// reranking objective. Swapping them works, scores plausibly, and quietly loses the
-// recall the split exists to keep, so it is asserted here rather than trusted.
-func TestSearchEmbedsKeywordsAndReranksOnTheQuestion(t *testing.T) {
+// keywords is the embedding probe, and it is the only thing a search can be probed
+// with. A full question embedded against term-like chunks retrieves the average of
+// everything the sentence mentions — a recall loss nothing else in the path can see,
+// so the probe's exact text is asserted here rather than trusted.
+func TestSearchEmbedsTheKeywordsItWasGiven(t *testing.T) {
 	corpus := &fakeCorpus{hits: []domain.Hit{textHit("doc", 0, "coastal erosion rates")}}
 	embed := &fakeEmbed{}
-	rerank := &fakeRerank{scores: []float64{0.8}}
 	reg := NewRegistry()
 
-	_, err := newRetriever(corpus, embed, rerank, nil).Search(
-		context.Background(), reg, "nb",
-		"coastal erosion", "How fast is the coastline retreating?",
-		Options{RecallTopK: 7, FinalTopK: 5, Rerank: true})
+	_, err := newRetriever(corpus, embed, nil).Search(
+		context.Background(), reg, "nb", "coastal erosion",
+		Options{RecallTopK: 7, FinalTopK: 5})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,12 +160,6 @@ func TestSearchEmbedsKeywordsAndReranksOnTheQuestion(t *testing.T) {
 	}
 	if embed.gotPrefix != index.QuerySearch {
 		t.Errorf("query prefix = %q, want the search prefix", embed.gotPrefix)
-	}
-	if rerank.gotQuery != "How fast is the coastline retreating?" {
-		t.Errorf("reranked against %q, want the question", rerank.gotQuery)
-	}
-	if len(rerank.gotDocs) != 1 || rerank.gotDocs[0].Text != "coastal erosion rates" {
-		t.Errorf("rerank documents = %+v", rerank.gotDocs)
 	}
 	if corpus.gotLimit != 7 {
 		t.Errorf("asked the corpus for %d candidates, want recallTopK 7", corpus.gotLimit)
@@ -205,8 +184,8 @@ func TestSearchIdsFollowRelevanceAndResultsFollowDocuments(t *testing.T) {
 	}}
 	reg := NewRegistry()
 
-	got, err := newRetriever(corpus, &fakeEmbed{}, nil, nil).Search(
-		context.Background(), reg, "nb", "kw", "q", Options{})
+	got, err := newRetriever(corpus, &fakeEmbed{}, nil).Search(
+		context.Background(), reg, "nb", "kw", Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,16 +217,16 @@ func TestSearchIdsFollowRelevanceAndResultsFollowDocuments(t *testing.T) {
 func TestSearchDoesNotRepeatKnownChunks(t *testing.T) {
 	shared := textHit("doc1", 0, "the same page")
 	reg := NewRegistry()
-	r := newRetriever(&fakeCorpus{hits: []domain.Hit{shared, textHit("doc1", 1, "first search only")}}, &fakeEmbed{}, nil, nil)
+	r := newRetriever(&fakeCorpus{hits: []domain.Hit{shared, textHit("doc1", 1, "first search only")}}, &fakeEmbed{}, nil)
 
-	first, err := r.Search(context.Background(), reg, "nb", "a", "q", Options{})
+	first, err := r.Search(context.Background(), reg, "nb", "a", Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	corpus2 := &fakeCorpus{hits: []domain.Hit{textHit("doc1", 2, "second search only"), shared}}
-	r2 := newRetriever(corpus2, &fakeEmbed{}, nil, nil)
-	second, err := r2.Search(context.Background(), reg, "nb", "b", "q", Options{})
+	r2 := newRetriever(corpus2, &fakeEmbed{}, nil)
+	second, err := r2.Search(context.Background(), reg, "nb", "b", Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -281,8 +260,8 @@ func TestSearchTakesOnlyFinalTopK(t *testing.T) {
 	corpus := &fakeCorpus{hits: hits}
 	reg := NewRegistry()
 
-	got, err := newRetriever(corpus, &fakeEmbed{}, nil, nil).Search(
-		context.Background(), reg, "nb", "kw", "q", Options{RecallTopK: 10, FinalTopK: 3})
+	got, err := newRetriever(corpus, &fakeEmbed{}, nil).Search(
+		context.Background(), reg, "nb", "kw", Options{RecallTopK: 10, FinalTopK: 3})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -299,126 +278,14 @@ func TestSearchTakesOnlyFinalTopK(t *testing.T) {
 	}
 }
 
-// ── reranking ────────────────────────────────────────────────────
-
-// A reranker that cannot answer must not cost the user the turn: vector order
-// stands, and nothing is half-ranked.
-func TestSearchFallsBackToVectorOrderWhenRerankingFails(t *testing.T) {
-	corpus := &fakeCorpus{hits: []domain.Hit{
-		textHit("doc2", 0, "best by vector"),
-		textHit("doc1", 0, "second by vector"),
-	}}
-	rerank := &fakeRerank{err: errors.New("rerank server is down")}
-	reg := NewRegistry()
-
-	got, err := newRetriever(corpus, &fakeEmbed{}, rerank, nil).Search(
-		context.Background(), reg, "nb", "kw", "q", Options{Rerank: true})
-	if err != nil {
-		t.Fatalf("a failed rerank must not fail the search: %v", err)
-	}
-	if len(got) != 2 {
-		t.Fatalf("%d chunks registered", len(got))
-	}
-	// Presented in document order, labelled in vector order — which is the only
-	// order a failed rerank can leave.
-	if got[0].Segment.ID != "doc1:0000" || got[1].Segment.ID != "doc2:0000" {
-		t.Errorf("presented %v, want document order", segIDs(got))
-	}
-	if got[0].Index != 2 || got[1].Index != 1 {
-		t.Errorf("ids %v, want vector order to have minted them", ids(got))
-	}
-}
-
-func TestSearchUsesRerankOrderAndScores(t *testing.T) {
-	corpus := &fakeCorpus{hits: []domain.Hit{
-		textHit("doc1", 0, "first by vector"),
-		textHit("doc1", 1, "better by rerank"),
-	}}
-	// The reranker's array is in the order the documents were sent.
-	rerank := &fakeRerank{scores: []float64{0.2, 0.9}}
-	reg := NewRegistry()
-
-	got, err := newRetriever(corpus, &fakeEmbed{}, rerank, nil).Search(
-		context.Background(), reg, "nb", "kw", "q", Options{Rerank: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The returned list is in document order on purpose, so relevance is visible in
-	// the ids: the chunk the reranker preferred was labelled first.
-	byID := map[string]Evidence{}
-	for _, e := range got {
-		byID[e.Segment.ID] = e
-	}
-	if byID["doc1:0001"].Index != 1 {
-		t.Errorf("ids %v: the reranked-first chunk was not registered first", ids(got))
-	}
-	if byID["doc1:0000"].Index != 2 {
-		t.Errorf("ids %v, want the weaker chunk second", ids(got))
-	}
-	if byID["doc1:0001"].Score != 0.9 {
-		t.Errorf("score = %v, want the rerank score the ranking used", byID["doc1:0001"].Score)
-	}
-}
-
-// A page raster has no text, so it is scored as the raster itself. Scoring it
-// against its sibling page's text would be a relevance claim about a document the
-// citation does not point at.
-func TestSearchReranksARasterAsItsImage(t *testing.T) {
-	raster := imageHit("doc1#pages", 3, 4)
-	assets := &fakeAssets{files: map[string][]byte{raster.Segment.Asset.Path: []byte("PNGBYTES")}}
-	corpus := &fakeCorpus{hits: []domain.Hit{raster}}
-	rerank := &fakeRerank{scores: []float64{0.5}}
-
-	if _, err := newRetriever(corpus, &fakeEmbed{}, rerank, assets).Search(
-		context.Background(), NewRegistry(), "nb", "kw", "the chart", Options{Rerank: true}); err != nil {
-		t.Fatal(err)
-	}
-	if len(rerank.gotDocs) != 1 {
-		t.Fatalf("%d documents sent, want 1", len(rerank.gotDocs))
-	}
-	doc := rerank.gotDocs[0]
-	want := "data:image/png;base64," + base64.StdEncoding.EncodeToString([]byte("PNGBYTES"))
-	if doc.Image != want {
-		t.Errorf("rerank document = %+v, want the raster inlined", doc)
-	}
-	if doc.Text != "" {
-		t.Errorf("a textless chunk was sent with text %q", doc.Text)
-	}
-}
-
-// If a raster cannot be read, the search is not reranked at all. Falling back to
-// text-only ranking would order two kinds of evidence by two measures and call the
-// result relevance.
-func TestSearchDoesNotRerankPartially(t *testing.T) {
-	raster := imageHit("doc1#pages", 0, 1)
-	corpus := &fakeCorpus{hits: []domain.Hit{
-		textHit("doc1", 0, "a passage"),
-		raster,
-	}}
-	rerank := &fakeRerank{scores: []float64{1, 1}}
-	assets := &fakeAssets{err: errors.New("file was collected")}
-
-	got, err := newRetriever(corpus, &fakeEmbed{}, rerank, assets).Search(
-		context.Background(), NewRegistry(), "nb", "kw", "q", Options{Rerank: true})
-	if err != nil {
-		t.Fatalf("search failed: %v", err)
-	}
-	if rerank.calls != 0 {
-		t.Errorf("reranked %d times with an unreadable asset, want 0", rerank.calls)
-	}
-	if got[0].Segment.ID != "doc1:0000" {
-		t.Errorf("vector order changed: %v", segIDs(got))
-	}
-}
-
 // ── refusing, not guessing ───────────────────────────────────────
 
 func TestSearchRefusesWithoutKeywords(t *testing.T) {
 	corpus := &fakeCorpus{hits: []domain.Hit{textHit("doc", 0, "x")}}
 	reg := NewRegistry()
 
-	_, err := newRetriever(corpus, &fakeEmbed{}, nil, nil).Search(
-		context.Background(), reg, "nb", "   ", "q", Options{})
+	_, err := newRetriever(corpus, &fakeEmbed{}, nil).Search(
+		context.Background(), reg, "nb", "   ", Options{})
 	if !errors.Is(err, ErrNoKeywords) {
 		t.Errorf("err = %v, want ErrNoKeywords", err)
 	}
@@ -431,8 +298,8 @@ func TestSearchRefusesWithoutKeywords(t *testing.T) {
 // loop's answer to an empty result is to search again or give up honestly.
 func TestSearchWithNothingToFind(t *testing.T) {
 	corpus := &fakeCorpus{}
-	got, err := newRetriever(corpus, &fakeEmbed{}, nil, nil).Search(
-		context.Background(), NewRegistry(), "nb", "kw", "q", Options{})
+	got, err := newRetriever(corpus, &fakeEmbed{}, nil).Search(
+		context.Background(), NewRegistry(), "nb", "kw", Options{})
 	if err != nil {
 		t.Fatalf("an empty library answered with an error: %v", err)
 	}
@@ -442,8 +309,8 @@ func TestSearchWithNothingToFind(t *testing.T) {
 }
 
 func TestSearchRequiresARegistry(t *testing.T) {
-	if _, err := newRetriever(&fakeCorpus{}, &fakeEmbed{}, nil, nil).Search(
-		context.Background(), nil, "nb", "kw", "q", Options{}); err == nil {
+	if _, err := newRetriever(&fakeCorpus{}, &fakeEmbed{}, nil).Search(
+		context.Background(), nil, "nb", "kw", Options{}); err == nil {
 		t.Error("a search with nowhere to mint ids was accepted")
 	}
 }
@@ -453,8 +320,8 @@ func TestSearchRequiresARegistry(t *testing.T) {
 // recover from by rephrasing.
 func TestSearchPropagatesEmbeddingFailure(t *testing.T) {
 	embed := &fakeEmbed{err: errors.New("connection refused")}
-	_, err := newRetriever(&fakeCorpus{}, embed, nil, nil).Search(
-		context.Background(), NewRegistry(), "nb", "kw", "q", Options{})
+	_, err := newRetriever(&fakeCorpus{}, embed, nil).Search(
+		context.Background(), NewRegistry(), "nb", "kw", Options{})
 	if err == nil {
 		t.Fatal("an embedder failure was swallowed")
 	}
@@ -466,7 +333,7 @@ func TestRenderTextChunks(t *testing.T) {
 	reg := NewRegistry()
 	reg.Register(textHit("doc1", 0, "the sea rose 3mm a year"))
 
-	parts, err := newRetriever(&fakeCorpus{}, &fakeEmbed{}, nil, nil).Render(reg.All())
+	parts, err := newRetriever(&fakeCorpus{}, &fakeEmbed{}, nil).Render(reg.All())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -486,7 +353,7 @@ func TestRenderNamesThePageForAnImage(t *testing.T) {
 	reg := NewRegistry()
 	reg.Register(raster)
 
-	parts, err := newRetriever(&fakeCorpus{}, &fakeEmbed{}, nil, assets).Render(reg.All())
+	parts, err := newRetriever(&fakeCorpus{}, &fakeEmbed{}, assets).Render(reg.All())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -507,7 +374,7 @@ func TestRenderWithoutAnAssetReader(t *testing.T) {
 	reg := NewRegistry()
 	reg.Register(imageHit("doc1#pages", 0, 1))
 
-	parts, err := newRetriever(&fakeCorpus{}, &fakeEmbed{}, nil, nil).Render(reg.All())
+	parts, err := newRetriever(&fakeCorpus{}, &fakeEmbed{}, nil).Render(reg.All())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -518,7 +385,7 @@ func TestRenderWithoutAnAssetReader(t *testing.T) {
 }
 
 func TestRenderNothing(t *testing.T) {
-	parts, err := newRetriever(&fakeCorpus{}, &fakeEmbed{}, nil, nil).Render(nil)
+	parts, err := newRetriever(&fakeCorpus{}, &fakeEmbed{}, nil).Render(nil)
 	if err != nil || parts != nil {
 		t.Errorf("rendering nothing gave %v, %v", parts, err)
 	}
@@ -544,7 +411,7 @@ func TestPlainTextNamesMediaAndKeepsTheSameLabels(t *testing.T) {
 	}
 
 	// One label per chunk, in both renderings.
-	parts, err := newRetriever(&fakeCorpus{}, &fakeEmbed{}, nil, &fakeAssets{
+	parts, err := newRetriever(&fakeCorpus{}, &fakeEmbed{}, &fakeAssets{
 		files: map[string][]byte{imageHit("doc1#pages", 3, 4).Segment.Asset.Path: []byte("PNG")},
 	}).Render(reg.All())
 	if err != nil {

@@ -29,12 +29,11 @@ type Config struct {
 	MaxIterations int
 	RecallTopK    int
 	FinalTopK     int
-	Rerank        bool
 }
 
 // Options is the retrieval depth this turn searches at.
 func (c Config) retrieval() retrieve.Options {
-	return retrieve.Options{RecallTopK: c.RecallTopK, FinalTopK: c.FinalTopK, Rerank: c.Rerank}
+	return retrieve.Options{RecallTopK: c.RecallTopK, FinalTopK: c.FinalTopK}
 }
 
 // Status is how a turn ended. The four are not variations of one outcome: they say
@@ -151,8 +150,8 @@ func (r *Research) Ask(ctx context.Context, notebookID, question, history string
 		return nil, errors.New("chat: asked a question with no words in it")
 	}
 
-	// The tools are bound to this question: they rerank against it and quote it back
-	// in the evaluation note.
+	// The tools are bound to this question: the evaluation note quotes it back at the
+	// model after every search.
 	r.tools.notebookID, r.tools.question = notebookID, question
 	r.registry.Reset() // a fresh Research never has evidence to reset; this is for reuse
 	r.report("Starting research…")

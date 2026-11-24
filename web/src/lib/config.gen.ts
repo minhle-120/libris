@@ -26,13 +26,10 @@ export type Settings = {
 	engineDevice: string;
 	chatURL: string;
 	embedURL: string;
-	rerankURL: string;
 	timeoutSeconds: number;
 	chatModel: string;
 	embedModel: string;
 	embedDimensions: string;
-	rerankModel: string;
-	rerankEnabled: boolean;
 	recallTopK: number;
 	finalTopK: number;
 	maxIterations: number;
@@ -71,7 +68,7 @@ export const settingGroups: SettingGroup[] = [
 			{
 				"key": "enginePort",
 				"label": "Server port",
-				"help": "0 lets libris take a free port each time the server starts. A number asks for that exact port, and the start fails if something else already holds it. Chat, embeddings and reranking share whatever port is chosen.",
+				"help": "0 lets libris take a free port each time the server starts. A number asks for that exact port, and the start fails if something else already holds it. Chat and embeddings share whatever port is chosen.",
 				"kind": "number",
 				"min": 1024,
 				"max": 65535,
@@ -96,13 +93,6 @@ export const settingGroups: SettingGroup[] = [
 				"key": "embedURL",
 				"label": "Embedding server",
 				"help": "Multimodal embeddings for text, page images and audio.",
-				"kind": "url",
-				"mode": "external"
-			},
-			{
-				"key": "rerankURL",
-				"label": "Rerank server",
-				"help": "Optional. Degrades to vector order when unset.",
 				"kind": "url",
 				"mode": "external"
 			},
@@ -142,19 +132,6 @@ export const settingGroups: SettingGroup[] = [
 				"help": "Probed once at startup and recorded with every segment.",
 				"kind": "text",
 				"readonly": true
-			},
-			{
-				"key": "rerankModel",
-				"label": "Reranker",
-				"help": "The name your rerank server answers to; blank when reranking is off.",
-				"kind": "text",
-				"mode": "external"
-			},
-			{
-				"key": "rerankEnabled",
-				"label": "Enable reranking",
-				"help": "Off means pure vector order.",
-				"kind": "bool"
 			}
 		]
 	},
@@ -166,7 +143,7 @@ export const settingGroups: SettingGroup[] = [
 			{
 				"key": "recallTopK",
 				"label": "Recall depth",
-				"help": "Candidates pulled from the vector scan, before reranking.",
+				"help": "Candidates pulled from the vector scan, best first.",
 				"kind": "number",
 				"unit": "candidates",
 				"min": 1,
@@ -284,13 +261,10 @@ export function defaultSettings(): Settings {
 		engineDevice: "",
 		chatURL: "http://127.0.0.1:8081",
 		embedURL: "http://127.0.0.1:8082",
-		rerankURL: "http://127.0.0.1:8083",
 		timeoutSeconds: 300,
 		chatModel: "",
 		embedModel: "",
 		embedDimensions: "",
-		rerankModel: "",
-		rerankEnabled: false,
 		recallTopK: 10,
 		finalTopK: 5,
 		maxIterations: 5,

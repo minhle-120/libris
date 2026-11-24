@@ -467,12 +467,11 @@ type ModelView struct {
 	MMProj string `json:"mmproj,omitempty"`
 }
 
-// aliasNames is what managed mode fills the model configuration in as. Three names libris
-// chose, rather than three fields asking a person to copy what the preset already says.
+// aliasNames is what managed mode fills the model configuration in as. Two names libris
+// chose, rather than two fields asking a person to copy what the preset already says.
 var aliasNames = []string{
 	string(engine.AliasChat),
 	string(engine.AliasEmbed),
-	string(engine.AliasRerank),
 }
 
 // ServePort is the port libris's own model server is answering on, or zero when it is not

@@ -45,10 +45,6 @@ type Models struct {
 	// searched at all, which is a configuration the user can fix in Settings — so
 	// Ask says so rather than answering from the question alone.
 	Probe retrieve.Embedder
-
-	// Rerank orders candidates against the whole question. Nil, or RerankEnabled
-	// off, means vector order, which is a documented degradation rather than a bug.
-	Rerank retrieve.Reranker
 }
 
 // ModelsFor builds the model side for one configuration. A factory for the same
@@ -151,7 +147,7 @@ func (s *Service) Ask(ctx context.Context, notebookID, chatID, question string, 
 		return domain.Message{}, err
 	}
 
-	retriever := retrieve.New(s.search, models.Probe, models.Rerank, retrieve.FileAssets{})
+	retriever := retrieve.New(s.search, models.Probe, retrieve.FileAssets{})
 	research := chat.NewResearch(models.Chat, retriever, chatConfig(cfg, models), ev.status)
 
 	res, err := research.Ask(ctx, notebookID, question, chat.ResearchHistory(past, cfg.HistoryMessages))
@@ -358,23 +354,20 @@ func historyRole(r domain.Role) (llm.Role, bool) {
 // cannot see does not exist, and both are the things worth measuring against a real
 // model.
 //
-// Two of these fields are not read from the settings, and the difference is not cosmetic.
-// The model's name and whether retrieval reranks are facts about the server libris is
-// talking to, and in managed mode both are derived when Models is built — from the router's
-// aliases and its port — so `Models` is the only place they are correct. From the
-// settings, the research call sent whatever a person had typed as a chat model's name while
-// pointing libris at somebody else's machine, and the router answered `model 'LFM3-VL-2B' not
-// found` for a model it lists as `libris-chat` — while the synthesis call, which reads
-// `Models.ChatModel`, kept working. Two calls, one server, one of them reading the wrong
-// side. The same shape sat under `Rerank`: a managed-mode settings file has no rerank URL at
-// all, so the old expression turned reranking off precisely where a reranker might be wired.
+// One of these fields is not read from the settings, and the difference is not cosmetic.
+// The model's name is a fact about the server libris is talking to, and in managed mode it is
+// derived when Models is built — from the router's aliases — so `Models` is the only place it
+// is correct. From the settings, the research call sent whatever a person had typed as a chat
+// model's name while pointing libris at somebody else's machine, and the router answered
+// `model 'LFM3-VL-2B' not found` for a model it lists as `libris-chat` — while the synthesis
+// call, which reads `Models.ChatModel`, kept working. Two calls, one server, one of them
+// reading the wrong side.
 func chatConfig(cfg config.Config, models Models) chat.Config {
 	return chat.Config{
 		ChatModel:     models.ChatModel,
 		MaxIterations: cfg.MaxIterations,
 		RecallTopK:    cfg.RecallTopK,
 		FinalTopK:     cfg.FinalTopK,
-		Rerank:        models.Rerank != nil,
 	}
 }
 

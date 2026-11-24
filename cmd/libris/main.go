@@ -96,13 +96,13 @@ func main() {
 	}
 	defer db.Close()
 
-	// One client for chat, embeddings and reranking: libris talks to llama.cpp
+	// One client for chat and embeddings: libris talks to llama.cpp
 	// servers that speak the OpenAI wire format. Read from the settings store
 	// rather than the environment-only base, so a change saved through the UI
 	// takes effect on the next call rather than the next restart.
-	// One client for chat, embeddings and reranking, rebuilt whenever the settings
+	// One client for chat and embeddings, rebuilt whenever the settings
 	// that decide how libris connects stop matching the one it built. Resolved per
-	// job rather than once at boot: a URL or API key saved through the UI has to
+	// job rather than once at boot: a URL saved through the UI has to
 	// reach the pipeline on the next upload, and a client frozen at startup makes
 	// the failure text name a server libris is no longer configured to use.
 	// The process that would answer is built before the client that dials it, because under
@@ -174,11 +174,9 @@ func main() {
 		// The answer path. Chats and Search are the same database the sources live
 		// in — one process owns the directory — and the models are resolved per
 		// question for the same reason the embedder is.
-		Chats:  db,
-		Search: db,
-		Models: modelSource(&clients, embedders, func() bool {
-			return models.HasRole(models.Statuses(modelsDir), models.RoleRerank)
-		}),
+		Chats:     db,
+		Search:    db,
+		Models:    modelSource(&clients, embedders),
 		Originals: filepath.Join(*dataDir, "originals"),
 		Assets:    filepath.Join(*dataDir, "assets"),
 		Logger:    log,

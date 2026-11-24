@@ -9,9 +9,8 @@ import (
 func TestJSONRoundTrip(t *testing.T) {
 	want := Default()
 	want.PDFDPI = 300
-	want.RerankEnabled = false
 	want.PDFMode = PDFModeFallback
-	want.RerankModel = "bge-reranker-v2"
+	want.ChatModel = "a-model-on-somebody-else's-server"
 
 	raw, err := want.MarshalJSON()
 	if err != nil {

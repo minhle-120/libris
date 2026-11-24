@@ -39,9 +39,8 @@ import (
 type Alias string
 
 const (
-	AliasChat   Alias = "libris-chat"
-	AliasEmbed  Alias = "libris-embed"
-	AliasRerank Alias = "libris-rerank"
+	AliasChat  Alias = "libris-chat"
+	AliasEmbed Alias = "libris-embed"
 )
 
 // ErrAlreadyServing means a start was asked for while libris's own server was up. It is a
@@ -57,13 +56,12 @@ var ErrPortTaken = errors.New("engine: the port is already in use")
 
 // ModelKind is what a model is for, which decides the preset section it needs. The keys are
 // the ones llama.cpp's own preset format expects (common/arg.cpp: LLAMA_ARG_EMBEDDINGS,
-// LLAMA_ARG_POOLING, LLAMA_ARG_RERANKING), checked rather than remembered.
+// LLAMA_ARG_POOLING), checked rather than remembered.
 type ModelKind string
 
 const (
-	KindChat   ModelKind = "chat"
-	KindEmbed  ModelKind = "embed"
-	KindRerank ModelKind = "rerank"
+	KindChat  ModelKind = "chat"
+	KindEmbed ModelKind = "embed"
 )
 
 // Model is one entry in the preset. MMProj is the vision projector for a multimodal model,
@@ -91,9 +89,8 @@ type Model struct {
 // to break a small model out of quoting the same chunk twice and not enough to make it
 // paraphrase a citation it should copy.
 const (
-	chatCtx   = 32768
-	embedCtx  = 4096
-	rerankCtx = 2048
+	chatCtx  = 32768
+	embedCtx = 4096
 )
 
 // cacheRAMMiB is how much of the KV cache a model may hold in host memory. The chat model gets
@@ -148,8 +145,8 @@ func PresetPath(dataDir, id string) string {
 // reader may one day ask about. Explicit beats inherited when the inheritance is a default
 // somebody else can change.
 //
-// Per-kind choices are not style: an embedding model needs --embeddings, a reranker needs
-// --reranking, and neither is useful as a chat model.
+// Per-kind choices are not style: an embedding model needs --embeddings, and an embedder is
+// not a chat model whatever it is asked.
 //
 // Pooling is deliberately absent. --pooling's own help says "use model default if unspecified"
 // (common/arg.cpp, LLAMA_ARG_POOLING), and the default is read out of the GGUF — so naming one
@@ -201,8 +198,6 @@ func Preset(path string, device string, models []Model) error {
 		switch m.Kind {
 		case KindEmbed:
 			fmt.Fprintf(&b, "embeddings = on\nctx-size = %d\ncache-ram = %d\n", embedCtx, smallCacheRAMMiB)
-		case KindRerank:
-			fmt.Fprintf(&b, "reranking = on\nctx-size = %d\ncache-ram = %d\n", rerankCtx, smallCacheRAMMiB)
 		default:
 			fmt.Fprintf(&b, "ctx-size = %d\n", chatCtx)
 			b.WriteString("temp = 0.1\ntop-k = 50\ntop-p = 1.0\nmin-p = 0.0\nrepeat-penalty = 1.1\n")
@@ -293,10 +288,9 @@ func ReadPreset(path string) (*PresetFile, error) {
 		}
 	}
 
-	// A section that names a model and asks for neither embeddings nor reranking is a chat
-	// model: that is what the absence of both flags means to llama.cpp, and a section a person
-	// added by hand is otherwise kindless here even though the server is busy treating it as
-	// one.
+	// A section that names a model and asks for no embeddings is a chat model: that is what the
+	// absence of the flag means to llama.cpp, and a section a person added by hand is otherwise
+	// kindless here even though the server is busy treating it as one.
 	for i := range out.Models {
 		if out.Models[i].Path != "" && out.Models[i].Kind == "" {
 			out.Models[i].Kind = KindChat
@@ -318,10 +312,6 @@ func observeKey(cur *Model, key, value string) {
 	case "embeddings":
 		if truthy(value) {
 			cur.Kind = KindEmbed
-		}
-	case "reranking":
-		if truthy(value) {
-			cur.Kind = KindRerank
 		}
 	}
 }
@@ -498,7 +488,7 @@ func NewSupervisor(dir string, seams Seams) *Supervisor {
 }
 
 // Endpoint is the base URL libris talks to when it runs the server itself. Loopback, always:
-// the process is ours, so "which host" is not a question (§2.9).
+// the process is ours, so "which host" is not a question.
 func Endpoint(host string, port int) string {
 	if host == "" {
 		host = "127.0.0.1"
