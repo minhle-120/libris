@@ -43,20 +43,49 @@
       ? models.progress.state === 'downloading' || models.progress.state === 'verifying'
       : false,
   );
-  let queue = $state<string[]>([]);
+  // Which models the one button was told to fetch. Page state would be lost on a reload, and a
+  // reload does not cancel the download that is running — the fetcher keeps going on purpose —
+  // so a queue that lives only in the component comes back as one model installed and the other
+  // reading "waiting" forever. It goes beside the other per-user view state (§7), and it is not
+  // re-derived from "what is missing": that would fetch gigabytes nobody asked for on a page
+  // load.
+  const QUEUE_KEY = 'libris.model-queue';
+  let queue = $state<string[]>(readQueue());
   let started = $state('');
+
+  function readQueue(): string[] {
+    try {
+      const raw = JSON.parse(localStorage.getItem(QUEUE_KEY) ?? '[]');
+      return Array.isArray(raw) ? raw.filter((x) => typeof x === 'string') : [];
+    } catch {
+      return [];
+    }
+  }
+
+  $effect(() => {
+    try {
+      if (queue.length) localStorage.setItem(QUEUE_KEY, JSON.stringify(queue));
+      else localStorage.removeItem(QUEUE_KEY);
+    } catch {
+      // A locked profile loses the queue on reload, which is the older and smaller bug.
+    }
+  });
 
   $effect(() => {
     const head = queue[0];
-    if (!head || busy !== '' || running || started === head) return;
+    if (!head) return;
     const entry = models?.entries.find((e) => e.id === head);
-    if (!entry) return;
-    // On disk already means move on: a half-finished setup resumes at the model that is
-    // actually missing rather than at the top of the list.
-    if (entry.complete) {
+    // Advancing comes before every "nothing to do right now" guard, and that ordering was the
+    // bug: `started === head` is a reason not to *start* the head, but it also returned before
+    // the check that says the head is finished — so the moment a download completed, the queue
+    // was stuck on it. The button then needed a second click to do the second half of what the
+    // first click asked for, which is the entire reason there is one button.
+    if (entry?.complete) {
       queue = queue.slice(1);
+      started = '';
       return;
     }
+    if (!entry || busy !== '' || running || started === head) return;
     if (models?.progress?.state === 'failed' && models.progress.id === head) {
       // The reason is already on the page as a sentence. Starting it again would only fail
       // the same way, and a queue that retries on its own looks like a download that never ends.
@@ -233,25 +262,21 @@
         {#if todo.length}
           <button
             class="btn btn-primary"
-            disabled={busy !== ''}
+            disabled={busy !== '' || running || queue.length > 0}
             onclick={() => {
               started = '';
               queue = todo.map((e) => e!.id);
             }}
           >
             {running || queue.length
-              ? 'downloading, one at a time…'
+              ? 'downloading…'
               : todo.length > 1
                 ? `Download both models · ${formatBytes(todo.reduce((n, e) => n + (e?.bytes ?? 0), 0))}`
                 : `Download ${todo[0]!.label} · ${formatBytes(todo[0]!.bytes)}`}
           </button>
-          <p>
-            {running || queue.length
-              ? 'one at a time, so neither bar lies about the other'
-              : todo.length > 1
-                ? 'fetched one at a time, and a stop keeps the bytes it already has'
-                : 'a stop keeps the bytes it already has, so this resumes where it left off'}
-          </p>
+          {#if !running && !queue.length}
+            <p>a stopped download keeps its bytes, so this resumes where it left off</p>
+          {/if}
         {/if}
 
         <ul class="models">
