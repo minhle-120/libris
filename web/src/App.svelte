@@ -96,14 +96,12 @@
     return out;
   });
 
+  // The wizard's two reads: is an engine here, and are the models. These are the pair readiness
+  // is computed from, so nothing else rides along with them.
   async function checkSetup() {
     try {
-      const [engine, models, devices] = await Promise.all([
-        getEngine(),
-        getModels(),
-        getDevices(),
-      ]);
-      facts = { engine, models, devices };
+      const [engine, models] = await Promise.all([getEngine(), getModels()]);
+      facts = { ...facts, engine, models };
       // Readiness is the server's answer, not a rule the page keeps a copy of.
       setup = readSetup(engine, models);
     } catch (e) {
@@ -114,10 +112,46 @@
     }
   }
 
+  /**
+   * The device row is the wizard's least urgent fact and its slowest read, so it is not in the
+   * readiness poll. It used to be, and the two conspire: an engine landing is exactly when the
+   * server drops its cached device report, so every two-second tick after an install spent
+   * seconds inside a probe of llama.cpp — with the answer that decides the next step queued
+   * behind it. This is the shape the settings panel already uses: read once, then again when a
+   * different engine build is in front of you, because that is the only thing here that makes
+   * the answer stale.
+   */
+  async function checkDevices(refresh: boolean) {
+    try {
+      facts = { ...facts, devices: await getDevices(refresh) };
+    } catch {
+      // A machine that will not say what it can run on is still a machine that can be set up:
+      // the row says nothing was reported, and the step that gates on it stays open.
+      facts = { ...facts, devices: null };
+    }
+  }
+
   $effect(() => {
     if (!setup || setup.ready) return;
     const t = setInterval(checkSetup, 2000);
     return () => clearInterval(t);
+  });
+
+  // Devices follow the engine, never the clock. `undefined` means "not read yet", so the first
+  // paint — with no tag to compare — is not counted as an engine changing underneath it.
+  let devicesFor: string | undefined;
+  $effect(() => {
+    // Nothing outside the wizard reads this, so a machine that can already answer does not pay
+    // for a probe on startup to fill a row nobody sees.
+    if (setup?.ready) return;
+    const tag = facts.engine?.installed?.tag;
+    if (tag === undefined || tag === devicesFor) return;
+    // A first sight is the app loading with an engine already on disk, where the cached report
+    // is good. A later one is an install or a removal, and the server has already dropped its
+    // cache by then, so this asks it to go and look rather than trusting what it kept.
+    const first = devicesFor === undefined;
+    devicesFor = tag;
+    void checkDevices(!first);
   });
 
   onMount(() => {
