@@ -64,7 +64,15 @@
       return;
     }
     started = head;
-    void act('model:' + head, () => installModel(head));
+    void act('model:' + head, () => installModel(head)).then((ok) => {
+      if (ok) return;
+      // A refused request — a busy fetcher, a failed write — is not a download in progress.
+      // Without this the queue keeps a head it could not start, the button keeps saying
+      // "downloading", and the row keeps saying "waiting": two sentences about a thing nobody
+      // is doing. The reason is already in the note under the button.
+      queue = [];
+      started = '';
+    });
   });
 
   let busy = $state('');
@@ -122,14 +130,17 @@
       : 0,
   );
 
-  async function act(what: string, fn: () => Promise<unknown>) {
+  /** Whether the action worked, so the queue can tell a download from a refusal. */
+  async function act(what: string, fn: () => Promise<unknown>): Promise<boolean> {
     busy = what;
     note = '';
     try {
       await fn();
       onchange();
+      return true;
     } catch (e) {
       note = e instanceof Error ? e.message : String(e);
+      return false;
     } finally {
       busy = '';
     }
@@ -253,7 +264,11 @@
               {#if m!.complete}
                 <span class="ok">installed</span>
               {:else}
-                <span class="wait">{started === m!.id ? 'downloading…' : 'waiting'}</span>
+                <span class="wait">
+                  {running && models?.progress?.id === m!.id
+                    ? models.progress.state === 'verifying' && 'checking…' || 'downloading…'
+                    : 'waiting'}
+                </span>
               {/if}
             </li>
           {/each}
