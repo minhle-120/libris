@@ -90,8 +90,7 @@ type MessageUpdate struct {
 // renders, still cites and still opens, whatever has since happened to the corpus.
 //
 // The provenance is what the citation route is built from:
-// #/source/<id>?page=7&c=1200-1640 for text, ?page=7 for a raster,
-// ?t=84.2-104.6 for audio.
+// #/source/<id>?page=7&c=1200-1640 for text, ?page=7 for a raster.
 type Citation struct {
 	Chunk   int    `json:"chunk"` // the number in [[Chunk N]], per turn, 1-based
 	Segment string `json:"segment_id"`
@@ -107,9 +106,9 @@ type Citation struct {
 	// of its own it is empty, and the asset is what opens.
 	Quote string `json:"quote,omitempty"`
 
-	// Asset is the file a citation opens: the page raster, the audio slice. Nil for
-	// a text chunk in a paginated document, where the original plus the span is
-	// enough. Asset.Path is never sent; the client fetches /api/assets/<id>.
+	// Asset is the file a citation opens: the page raster. Nil for a text chunk in a
+	// paginated document, where the original plus the span is enough. Asset.Path is
+	// never sent; the client fetches /api/assets/<id>.
 	Asset *Asset `json:"asset,omitempty"`
 
 	Span Provenance `json:"span"`

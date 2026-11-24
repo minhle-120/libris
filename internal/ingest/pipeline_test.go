@@ -267,14 +267,11 @@ func TestDirSinkCanceled(t *testing.T) {
 
 func TestMimeByExt(t *testing.T) {
 	cases := map[string]string{
-		"a.png":  "image/png",
-		"a.JPG":  "image/jpeg",
-		"a.gif":  "image/gif",
-		"a.wav":  "audio/wav",
-		"a.mp3":  "audio/mpeg",
-		"a.flac": "audio/flac",
-		"a.pdf":  "application/pdf",
-		"a.bin":  "application/octet-stream",
+		"a.png": "image/png",
+		"a.JPG": "image/jpeg",
+		"a.gif": "image/gif",
+		"a.pdf": "application/pdf",
+		"a.bin": "application/octet-stream",
 	}
 	for in, want := range cases {
 		if got := mimeByExt(in); got != want {

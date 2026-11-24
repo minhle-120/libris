@@ -81,7 +81,6 @@
   const kindIcon: Record<string, string> = {
     pdf: 'file',
     image: 'image',
-    audio: 'audio',
     text: 'file',
     unsupported: 'inbox'
   };
@@ -213,7 +212,7 @@
           <EmptyState
             icon="upload"
             title="Nothing in this notebook yet"
-            description="Drop PDFs, images, or audio here. Text and page images are indexed separately, and the original file is kept until no notebook uses it."
+            description="Drop PDFs, images, or text here. Page text and page rasters are indexed separately, and the original file is kept until no notebook uses it."
           >
             <Button variant="primary" size="sm" onclick={pick}>Choose files</Button>
           </EmptyState>

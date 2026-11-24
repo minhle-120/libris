@@ -824,7 +824,7 @@ func TestAddUploadRecordsUnsupported(t *testing.T) {
 
 func TestIngestWritesAssetsBeforeSegments(t *testing.T) {
 	// The schema enforces the asset foreign key, so the order is load-bearing:
-	// reversed, every image and audio source would fail to store.
+	// reversed, every source with a page raster would fail to store.
 	proc := &fakeProcessor{res: &ingest.Result{Segments: []domain.Segment{
 		imageSegment("doc#pages", 0, "/tmp"),
 		textSegment("doc", 1, "a page"),

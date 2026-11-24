@@ -150,7 +150,7 @@ export function originalURL(sourceId: string): string {
   return `/api/sources/${sourceId}/original`;
 }
 
-/** A derived page raster or audio slice. The asset id contains slashes, which
+/** A derived page raster. The asset id contains slashes, which
  * are the path here, so only each segment is escaped. */
 export function assetURL(asset: Pick<Asset, "id">): string {
   return `/api/assets/${asset.id.split("/").map(encodeURIComponent).join("/")}`;

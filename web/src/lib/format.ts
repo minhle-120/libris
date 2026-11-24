@@ -27,16 +27,6 @@ export function formatAge(unixSeconds: number): string {
   return new Date(unixSeconds * 1000).toLocaleDateString();
 }
 
-/** Audio provenance is a range in seconds, shown as m:ss. */
-export function formatSpan(t0: number, t1?: number): string {
-  const at = (s: number) => {
-    const m = Math.floor(s / 60);
-    const rest = Math.round(s % 60);
-    return `${m}:${String(rest).padStart(2, "0")}`;
-  };
-  return t1 ? `${at(t0)}–${at(t1)}` : at(t0);
-}
-
 /** Page provenance, including the case where a chunk straddles a page break. */
 export function formatPages(page?: number, pageEnd?: number): string {
   if (!page) return "";
@@ -46,15 +36,15 @@ export function formatPages(page?: number, pageEnd?: number): string {
 }
 
 /**
- * Where inside a source a citation points, in the shortest form that is still
- * honest: audio cites a time range, a page raster and a text chunk both cite a page.
+ * Where inside a source a citation points. Both a page raster and a text chunk
+ * cite a page, so there is one form — which is why the function exists at all:
+ * audio used to cite a `m:ss–m:ss` range here, and that branch is what made the
+ * kind a parameter. It is gone with the modality (ADR 0003).
  *
  * The character range a text chunk cites is left out on purpose — it is what the
  * viewer highlights when the citation is opened, not what a label says about it.
  */
-export function citationLocator(c: Pick<Citation, "kind" | "span">): string {
-  if (c.kind === "audio" && (c.span.t0 || c.span.t1))
-    return formatSpan(c.span.t0, c.span.t1);
+export function citationLocator(c: Pick<Citation, "span">): string {
   return formatPages(c.span.page, c.span.page_end);
 }
 
@@ -63,9 +53,7 @@ export function citationLocator(c: Pick<Citation, "kind" | "span">): string {
  * row above an answer and the button inside its sentences come through here, so the two
  * cannot describe the same citation differently.
  */
-export function chipLabel(
-  c: Pick<Citation, "chunk" | "kind" | "span">,
-): string {
+export function chipLabel(c: Pick<Citation, "chunk" | "span">): string {
   const where = citationLocator(c);
   return where ? `Chunk ${c.chunk} · ${where}` : `Chunk ${c.chunk}`;
 }

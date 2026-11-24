@@ -243,8 +243,8 @@ func (s *Server) handleAsset(w http.ResponseWriter, r *http.Request) {
 	s.serveFile(w, r, asset.Path, filepath.Base(asset.ID), asset.MIME)
 }
 
-// serveFile streams a stored file. http.ServeContent handles Range, which is
-// what lets the browser seek inside an audio slice.
+// serveFile streams a stored file. http.ServeContent handles Range, which is what
+// lets a PDF viewer render page 40 without fetching the whole document.
 func (s *Server) serveFile(w http.ResponseWriter, r *http.Request, filePath, name, contentType string) {
 	f, err := os.Open(filePath)
 	if err != nil {

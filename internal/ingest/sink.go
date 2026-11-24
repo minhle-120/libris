@@ -106,12 +106,6 @@ func mimeByExt(path string) string {
 		return "image/jpeg"
 	case ".gif":
 		return "image/gif"
-	case ".wav":
-		return "audio/wav"
-	case ".mp3":
-		return "audio/mpeg"
-	case ".flac":
-		return "audio/flac"
 	case ".pdf":
 		return "application/pdf"
 	}

@@ -18,7 +18,7 @@ func TestCitationFromCopiesTheAsset(t *testing.T) {
 			ID: "sha1/pages/page-0004.png", Path: "/data/libris/assets/sha1/pages/page-0004.png",
 			MIME: "image/png", Bytes: 118_432,
 		},
-		Span: Provenance{Page: 4, T0: 0},
+		Span: Provenance{Page: 4},
 	}
 
 	got := CitationFrom(2, "paper.pdf", seg)
@@ -75,17 +75,17 @@ func TestMessageStatusesAreTheAPI(t *testing.T) {
 }
 
 // The citation route the frontend builds — #/source/<id>?page=7&c=1200-1640,
-// ?page=7, ?t=84.2-104.6 — depends on this shape: snake_case throughout, a zero
-// timestamp that survives, and no absolute paths anywhere.
+// ?page=7 — depends on this shape: snake_case throughout, an ordinal of zero that
+// survives, and no absolute paths anywhere.
 func TestCitationJSONIsWhatTheFrontendReads(t *testing.T) {
 	msg := Message{
 		ID: 12, ChatID: "c1", Role: RoleAssistant, Content: "4.2 K [[Chunk 1]].",
 		Status: MessageAnswered, CreatedAt: 1794000000,
 		Citations: []Citation{{
 			Chunk: 1, Segment: "sha1:0002", DocID: "sha1#pages", SourceID: "sha1",
-			SourceName: "paper.pdf", Kind: KindAudio, Ordinal: 2,
-			Asset: &Asset{ID: "sha1/slices/slice-0003.wav", Path: "/data/hidden", MIME: "audio/wav", Bytes: 960},
-			Span:  Provenance{T0: 0, T1: 30},
+			SourceName: "paper.pdf", Kind: KindImage, Ordinal: 0,
+			Asset: &Asset{ID: "sha1/pages/page-0003.png", Path: "/data/hidden", MIME: "image/png", Bytes: 960},
+			Span:  Provenance{Page: 3},
 		}},
 	}
 
@@ -96,16 +96,17 @@ func TestCitationJSONIsWhatTheFrontendReads(t *testing.T) {
 	body := string(raw)
 	for _, want := range []string{`"chat_id":"c1"`, `"created_at":1794000000`, `"segment_id":"sha1:0002"`,
 		`"doc_id":"sha1#pages"`, `"source_id":"sha1"`, `"source_name":"paper.pdf"`,
-		`"kind":"audio"`, `"ordinal":2`, `"t1":30`, `"mime":"audio/wav"`, `"bytes":960`} {
+		`"kind":"image"`, `"mime":"image/png"`, `"bytes":960`, `"page":3`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("missing %s in %s", want, body)
 		}
 	}
 
-	// t0 has no omitempty precisely because the first slice starts at zero seconds,
-	// and a client that read it as "absent" could not open the audio at all.
-	if !strings.Contains(body, `"t0":0`) {
-		t.Errorf("the zero timestamp was dropped, so the first slice is unopenable: %s", body)
+	// Ordinal carries no omitempty, and the first segment of a document is ordinal
+	// zero — a client that read a missing ordinal as "absent" would drop the one
+	// citation that exists. This is the json-omitempty-shrinks-nothing guard.
+	if !strings.Contains(body, `"ordinal":0`) {
+		t.Errorf("the zero ordinal was dropped: %s", body)
 	}
 	for _, forbidden := range []string{"/data/hidden", `"path"`} {
 		if strings.Contains(body, forbidden) {

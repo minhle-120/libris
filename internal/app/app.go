@@ -102,13 +102,13 @@ type EmbedderFor func(cfg config.Config) (Embedder, error)
 type ProcessorFor func(config.Config, ingest.Sink) (Ingestor, error)
 
 // queueDepth is the number of uploads that may wait. Ingest is deliberately
-// serial — poppler, ffmpeg and the model server all want RAM — so a burst of
+// serial — poppler and the model server both want RAM — so a burst of
 // uploads queues rather than thrashing the machine. The cap exists so a runaway
 // client cannot grow memory without bound; it is not tuned.
 const queueDepth = 64
 
-// jobTimeout bounds one ingest end to end. Nothing else bounds it: poppler and
-// ffmpeg are outside our process, and Close waits for the job in flight, so
+// jobTimeout bounds one ingest end to end. Nothing else bounds it: poppler runs
+// outside our process, and Close waits for the job in flight, so
 // without a deadline a wedged helper could hold shutdown open forever. Generous
 // rather than tuned — a large scanned PDF is the case it must not interrupt.
 const jobTimeout = 30 * time.Minute

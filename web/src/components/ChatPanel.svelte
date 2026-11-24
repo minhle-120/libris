@@ -277,7 +277,7 @@
                     title="{c.source_name} — {chipLabel(c)}"
                     onclick={() => oncite?.(c)}
                   >
-                    <Icon name={c.kind === 'audio' ? 'audio' : c.kind === 'image' ? 'image' : 'file'} size={13} />
+                    <Icon name={c.kind === 'image' ? 'image' : 'file'} size={13} />
                     <span>{chipLabel(c)}</span>
                   </button>
                 {/each}

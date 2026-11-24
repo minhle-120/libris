@@ -37,10 +37,9 @@ type Result struct {
 // Processor turns files into segments. It never returns an error for a file it
 // cannot understand: that is recorded in Result so a batch keeps going.
 type Processor struct {
-	cfg   config.Config
-	sink  Sink
-	pdf   *PDF
-	audio *Audio
+	cfg  config.Config
+	sink Sink
+	pdf  *PDF
 }
 
 // New validates the config and probes for the external tools poppler supplies.
@@ -58,10 +57,6 @@ func New(cfg config.Config, sink Sink) (*Processor, error) {
 			TextBin:   lookPath("pdftotext"),
 			RasterBin: lookPath("pdftoppm"),
 			DPI:       cfg.PDFDPI,
-		},
-		audio: &Audio{
-			ProbeBin: lookPath("ffprobe"),
-			SliceBin: lookPath("ffmpeg"),
 		},
 	}, nil
 }
@@ -108,8 +103,6 @@ func (p *Processor) Process(ctx context.Context, path string) (*Result, error) {
 		p.pdfDoc(ctx, res, path)
 	case domain.SourceImage:
 		p.image(ctx, res, path)
-	case domain.SourceAudio:
-		p.audioDoc(ctx, res, path)
 	default:
 		res.Unsupported = "unsupported file type"
 	}
@@ -251,43 +244,10 @@ func textSegments(doc Doc, sourceID, text string, cfg config.Config) []domain.Se
 	return out
 }
 
-// audioDoc slices audio into fixed-length PCM clips, one segment each. No
-// transcription exists yet, so a slice carries no text: it is retrievable by
-// embedding, but the synthesiser cannot quote it.
-func (p *Processor) audioDoc(ctx context.Context, res *Result, path string) {
-	slices, err := p.audio.Slices(ctx, path, p.sink, res.Source.ID+"/audio")
-	switch {
-	case errors.Is(err, ErrNoAudioTools):
-		res.Unsupported = "audio slicing needs ffmpeg and ffprobe on PATH"
-		return
-	case err != nil:
-		res.Warnings = append(res.Warnings, "audio: "+err.Error())
-		res.Unsupported = "audio could not be decoded"
-		return
-	}
-	if len(slices) == 0 {
-		res.Unsupported = "audio has no playable duration"
-		return
-	}
-
-	res.Warnings = append(res.Warnings,
-		"no transcript: audio chunks are searchable by embedding only")
-
-	doc := Doc{ID: res.Source.ID, Title: res.Source.Name, Kind: domain.KindAudio}
-	res.Docs = append(res.Docs, doc)
-	for i, slice := range slices {
-		asset := slice.Asset
-		res.Segments = append(res.Segments, domain.Segment{
-			ID:       segmentID(doc.ID, i),
-			SourceID: res.Source.ID,
-			DocID:    doc.ID,
-			Kind:     domain.KindAudio,
-			Ordinal:  i,
-			Asset:    &asset,
-			Span:     domain.Provenance{T0: slice.T0, T1: slice.T1},
-		})
-	}
-}
+// There is no audio path here. Recordings used to be sliced into timed clips and
+// embedded whole; a clip had no text, so a hit was findable but the synthesiser
+// could never quote it, and every answer leaning on one cited nothing. The
+// modality went rather than stayed half-built. See ADR 0003.
 
 func segmentID(docID string, ordinal int) string {
 	return fmt.Sprintf("%s:%04d", docID, ordinal)

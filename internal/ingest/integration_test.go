@@ -3,7 +3,6 @@ package ingest
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -137,64 +136,5 @@ func TestPDFDPIControlsRasterSize(t *testing.T) {
 	}
 	if high <= low {
 		t.Errorf("higher dpi did not enlarge the raster: %d → %d", low, high)
-	}
-}
-
-// Real ffmpeg, for the same reason: the fake runner proves the argument list,
-// only the real binary proves the slices are playable and the right length.
-func TestAudioEndToEnd(t *testing.T) {
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		t.Skip("ffmpeg not installed")
-	}
-	if _, err := exec.LookPath("ffprobe"); err != nil {
-		t.Skip("ffprobe not installed")
-	}
-
-	dir := t.TempDir()
-	path := filepath.Join(dir, "tone.wav")
-	cmd := exec.Command("ffmpeg", "-hide_banner", "-loglevel", "error",
-		"-f", "lavfi", "-i", "sine=frequency=440:duration=65",
-		"-ar", "8000", "-ac", "1", path)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("generating test audio: %v: %s", err, out)
-	}
-
-	p, err := New(config.Default(), DirSink{Root: filepath.Join(dir, "assets")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	res, err := p.Process(context.Background(), path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.Unsupported != "" {
-		t.Fatalf("unsupported = %q (warnings %v)", res.Unsupported, res.Warnings)
-	}
-	if len(res.Segments) != 3 {
-		t.Fatalf("65 s of audio should yield 3 slices, got %d", len(res.Segments))
-	}
-
-	want := [][2]float64{{0, 30}, {30, 60}, {60, 65}}
-	for i, seg := range res.Segments {
-		if seg.Kind != domain.KindAudio || seg.Asset == nil {
-			t.Fatalf("segment %d = %+v", i, seg)
-		}
-		if seg.Span.T0 != want[i][0] || seg.Span.T1 != want[i][1] {
-			t.Errorf("segment %d span = %v-%v, want %v-%v",
-				i, seg.Span.T0, seg.Span.T1, want[i][0], want[i][1])
-		}
-
-		data, err := os.ReadFile(seg.Asset.Path)
-		if err != nil {
-			t.Fatalf("segment %d: %v", i, err)
-		}
-		if string(data[:4]) != "RIFF" || string(data[8:12]) != "WAVE" {
-			t.Fatalf("segment %d is not a WAV file (%q)", i, data[:12])
-		}
-		// 16 kHz mono s16le: 32 KB per second. Only the last slice is short.
-		wantBytes := int((seg.Span.T1 - seg.Span.T0) * 32000)
-		if len(data) < wantBytes-4000 || len(data) > wantBytes+4000 {
-			t.Errorf("segment %d is %d bytes, want ~%d", i, len(data), wantBytes)
-		}
 	}
 }

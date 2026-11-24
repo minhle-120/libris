@@ -38,7 +38,6 @@ export type Settings = {
 	chunkOverlap: number;
 	pdfPageImages: 'always' | 'fallback';
 	pdfDPI: number;
-	audioWindowSeconds: number;
 	maxFileMB: number;
 	keepOriginals: boolean;
 };
@@ -85,14 +84,14 @@ export const settingGroups: SettingGroup[] = [
 			{
 				"key": "chatURL",
 				"label": "Chat server",
-				"help": "Text, image and audio input.",
+				"help": "Text and image input.",
 				"kind": "url",
 				"mode": "external"
 			},
 			{
 				"key": "embedURL",
 				"label": "Embedding server",
-				"help": "Multimodal embeddings for text, page images and audio.",
+				"help": "Multimodal embeddings for text and page images.",
 				"kind": "url",
 				"mode": "external"
 			},
@@ -226,15 +225,6 @@ export const settingGroups: SettingGroup[] = [
 				"max": 600
 			},
 			{
-				"key": "audioWindowSeconds",
-				"label": "Audio window",
-				"help": "Clip length for audio segments; align with transcript boundaries.",
-				"kind": "number",
-				"unit": "s",
-				"min": 5,
-				"max": 600
-			},
-			{
 				"key": "maxFileMB",
 				"label": "Max file size",
 				"help": "Larger files are refused at the door, not mid-job.",
@@ -246,7 +236,7 @@ export const settingGroups: SettingGroup[] = [
 			{
 				"key": "keepOriginals",
 				"label": "Keep originals",
-				"help": "Required for page and timestamp citations.",
+				"help": "Required for citations that open the original file.",
 				"kind": "bool",
 				"readonly": true
 			}
@@ -273,7 +263,6 @@ export function defaultSettings(): Settings {
 		chunkOverlap: 50,
 		pdfPageImages: "always",
 		pdfDPI: 110,
-		audioWindowSeconds: 30,
 		maxFileMB: 512,
 		keepOriginals: true,
 	};

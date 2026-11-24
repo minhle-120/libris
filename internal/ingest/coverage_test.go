@@ -21,10 +21,16 @@ func TestSplitTextUnicodeOnlySpace(t *testing.T) {
 	}
 }
 
-func TestDetectSniffedAudio(t *testing.T) {
+// A recording is refused by its bytes rather than by its extension: the
+// extension-wins rule that makes a .md text whatever its first bytes look like
+// would otherwise index a WAV as mojibake text. ADR 0003 took recordings out as
+// an input modality; this is the door.
+func TestDetectRefusesAudio(t *testing.T) {
 	wav := append([]byte("RIFF\x24\x00\x00\x00WAVEfmt "), make([]byte, 64)...)
-	if got := Detect("blob", wav); got != domain.SourceAudio {
-		t.Fatalf("Detect = %q", got)
+	for _, name := range []string{"blob", "notes.md", "speech.txt"} {
+		if got := Detect(name, wav); got != domain.SourceUnsupported {
+			t.Errorf("Detect(%q, wav) = %q, want unsupported", name, got)
+		}
 	}
 }
 

@@ -470,7 +470,7 @@
         <EmptyState
           icon="book"
           title="No notebook selected"
-          description="A notebook holds a set of sources. Create one to start adding PDFs, images, or audio. Nothing leaves this machine."
+          description="A notebook holds a set of sources. Create one to start adding PDFs, images, or text. Nothing leaves this machine."
         >
           <Button variant="primary" onclick={openNew}>New notebook</Button>
         </EmptyState>

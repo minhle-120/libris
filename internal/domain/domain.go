@@ -18,7 +18,6 @@ type Kind string
 const (
 	KindText  Kind = "text"
 	KindImage Kind = "image"
-	KindAudio Kind = "audio"
 )
 
 // SourceKind is the original file's type, independent of how it is segmented.
@@ -27,7 +26,6 @@ type SourceKind string
 const (
 	SourcePDF         SourceKind = "pdf"         // text layer + page images
 	SourceImage       SourceKind = "image"       // one image
-	SourceAudio       SourceKind = "audio"       // needs transcription
 	SourceText        SourceKind = "text"        // plain text, markdown, html, csv, code
 	SourceUnsupported SourceKind = "unsupported" // stored, not searchable
 )
@@ -94,7 +92,7 @@ const (
 )
 
 // Provenance points back into the original file. Every segment carries one so
-// the UI can open the PDF at a page, or the audio at a timestamp.
+// the UI can open a PDF at the page a chunk came from.
 //
 // Char offsets are byte offsets into the extracted text of a page: CharStart
 // counts from the start of Page, CharEnd from the start of PageEnd. PageEnd is
@@ -106,11 +104,14 @@ type Provenance struct {
 	PageEnd   int `json:"page_end,omitempty"`
 	CharStart int `json:"char_start,omitempty"`
 	CharEnd   int `json:"char_end,omitempty"`
-	// T0 keeps no omitempty: the first audio slice starts at zero seconds, and
-	// that is a real value the client must not read as "absent".
-	T0 float64 `json:"t0"` // seconds, for audio
-	T1 float64 `json:"t1,omitempty"`
 }
+
+// Audio deliberately has no fields here. Slicing a recording into timed clips was
+// built, and the clips had no words to quote, so an answer could lean on a
+// recording and cite nothing from it; the whole path went rather than a modality
+// that is searchable but unusable in prose. The `t0`/`t1` columns are still in the
+// schema — see the note in the store's segment row — because a migration that
+// deletes a column is a change with no user on the other side of it.
 
 // Asset is a file written by the sink: an extracted page image, a copied
 // original, or a media slice.
@@ -133,7 +134,6 @@ type Asset struct {
 //	            the server started with --media-path. Libris owns the assets
 //	            directory, so it reads the raster off disk instead of asking the
 //	            user for a flag.
-//	KindAudio -> embed the slice at Asset.Path (T0..T1 within it)
 //
 // Text always stays for citation and lexical search, even when the payload is
 // media.

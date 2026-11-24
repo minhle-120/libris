@@ -94,15 +94,13 @@
   function docLabel(docID: string): string {
     if (docID === source.id) return 'page text';
     if (docID.endsWith('#pages')) return 'page rasters';
-    if (docID.endsWith('#audio')) return 'audio slices';
     return docID;
   }
 
   /** Provenance, in the unit that document actually has. */
   function spanLabel(seg: Segment): string {
-    const { page, page_end: pageEnd, t0, t1 } = seg.span;
+    const { page, page_end: pageEnd } = seg.span;
     if (page) return pageEnd && pageEnd !== page ? `p${page}–${pageEnd}` : `p${page}`;
-    if (seg.kind === 'audio') return t1 ? `${t0.toFixed(0)}–${t1.toFixed(0)}s` : `${t0.toFixed(0)}s`;
     return '—';
   }
 
@@ -137,11 +135,9 @@
   const summary = $derived.by(() => {
     const text = segments.filter((s) => s.kind === 'text').length;
     const images = segments.filter((s) => s.kind === 'image').length;
-    const audio = segments.filter((s) => s.kind === 'audio').length;
     const parts = [`${segments.length} chunk${segments.length === 1 ? '' : 's'}`];
     if (text) parts.push(`${text} text`);
     if (images) parts.push(`${images} image${images === 1 ? '' : 's'}`);
-    if (audio) parts.push(`${audio} slice${audio === 1 ? '' : 's'}`);
     return parts.join(' · ');
   });
 

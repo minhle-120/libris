@@ -17,7 +17,7 @@ func TestSegmentString(t *testing.T) {
 
 func TestKinds(t *testing.T) {
 	// These strings are persisted, so treat them as an API.
-	if KindText != "text" || KindImage != "image" || KindAudio != "audio" {
+	if KindText != "text" || KindImage != "image" {
 		t.Fatal("segment kinds changed")
 	}
 	if SourcePDF != "pdf" || SourceUnsupported != "unsupported" {

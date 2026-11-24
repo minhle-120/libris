@@ -16,7 +16,7 @@ import (
 // at all — a vector per row is dead weight in a query that will not score it.
 const segmentSearchSelect = `
 	SELECT g.id, g.source_id, g.doc_id, g.kind, g.ordinal, g.text,
-	       g.page, g.page_end, g.char_start, g.char_end, g.t0, g.t1,
+	       g.page, g.page_end, g.char_start, g.char_end,
 	       a.id, a.path, a.mime, a.bytes,
 	       g.embedding, g.dim, g.model, s.name
 	  FROM segments g
@@ -110,7 +110,6 @@ func scanHit(rows *sql.Rows, vector []float32, qn float64) (domain.Hit, error) {
 		&hit.Segment.Ordinal, &hit.Segment.Text,
 		&hit.Segment.Span.Page, &hit.Segment.Span.PageEnd,
 		&hit.Segment.Span.CharStart, &hit.Segment.Span.CharEnd,
-		&hit.Segment.Span.T0, &hit.Segment.Span.T1,
 		&assetID, &path, &mime, &size,
 		&blob, &dim, &model, &source); err != nil {
 		return domain.Hit{}, err

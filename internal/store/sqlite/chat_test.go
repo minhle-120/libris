@@ -170,9 +170,11 @@ func TestCitationSurvivesReingest(t *testing.T) {
 	}
 }
 
-// T0 is the first audio slice's timestamp and it is zero, so a decoder that
-// dropped zero would silently make audio citations unopenable.
-func TestCitationKeepsZeroTimestamp(t *testing.T) {
+// A citation is stored as JSON, and an ordinal of zero is the only citation a
+// one-segment document has — so a round-trip that dropped zero-valued fields
+// would silently drop the reference the reader clicked. The asset must survive
+// too, with its path kept out.
+func TestCitationKeepsZeroOrdinal(t *testing.T) {
 	ctx := context.Background()
 	db := openDB(t)
 	n := notebook(t, db, "A")
@@ -181,9 +183,9 @@ func TestCitationKeepsZeroTimestamp(t *testing.T) {
 	_, err := db.AppendMessage(ctx, domain.Message{
 		ChatID: c.ID, Role: domain.RoleAssistant,
 		Citations: []domain.Citation{{
-			Chunk: 1, Segment: "sha2:0000", Kind: domain.KindAudio,
-			Span:  domain.Provenance{T0: 0, T1: 30},
-			Asset: &domain.Asset{ID: "sha2/slices/slice-0001.wav", MIME: "audio/wav", Bytes: 960},
+			Chunk: 1, Segment: "sha2:0000", Kind: domain.KindImage, Ordinal: 0,
+			Span:  domain.Provenance{Page: 0},
+			Asset: &domain.Asset{ID: "sha2/pages/page-0001.png", MIME: "image/png", Bytes: 960},
 		}},
 	})
 	if err != nil {
@@ -196,13 +198,13 @@ func TestCitationKeepsZeroTimestamp(t *testing.T) {
 	}
 	cit := list[0].Citations[0]
 	if cit.Asset == nil || cit.Asset.ID == "" {
-		t.Fatalf("asset = %+v, want the slice a citation opens", cit.Asset)
+		t.Fatalf("asset = %+v, want the raster a citation opens", cit.Asset)
 	}
 	if cit.Asset.Path != "" {
 		t.Errorf("asset path leaked: %q", cit.Asset.Path)
 	}
-	if cit.Span.T1 != 30 {
-		t.Errorf("span = %+v", cit.Span)
+	if cit.Ordinal != 0 || cit.Kind != domain.KindImage {
+		t.Errorf("citation = %+v", cit)
 	}
 }
 

@@ -32,35 +32,35 @@ type Message struct {
 
 // ── multimodal content ────────────────────────────────────────────
 
+// Only the part types libris actually sends. input_audio and input_video were
+// declared and never built by anything: audio stopped being an input modality, and
+// video never was, so a client carrying both was a menu of wire shapes rather than
+// a description of this program's traffic.
 const (
 	PartText  = "text"
 	PartImage = "image_url"
-	PartAudio = "input_audio"
-	PartVideo = "input_video"
 )
 
 type ContentPart struct {
-	Type       string      `json:"type"`
-	Text       string      `json:"text,omitempty"`
-	ImageURL   *ImageURL   `json:"image_url,omitempty"`
-	InputAudio *InputMedia `json:"input_audio,omitempty"`
-	InputVideo *InputMedia `json:"input_video,omitempty"`
+	Type     string    `json:"type"`
+	Text     string    `json:"text,omitempty"`
+	ImageURL *ImageURL `json:"image_url,omitempty"`
 }
 
 type ImageURL struct {
 	URL string `json:"url"`
 }
 
-// InputMedia carries either raw base64 (Data) or a local path / URL (URL).
-type InputMedia struct {
-	Data string `json:"data,omitempty"`
-	URL  string `json:"url,omitempty"`
-}
-
 func Parts(p ...ContentPart) []ContentPart { return p }
 
 func TextPart(s string) ContentPart { return ContentPart{Type: PartText, Text: s} }
 
+// ImagePart references an image by URL. There is no auto-detection between the two
+// constructors: a path such as "path/to/file" is indistinguishable from base64 by
+// charset alone, so choosing to inline raw bytes is always explicit.
+//
+// llama.cpp requires a local reference to be prefixed with file:// and the server
+// to be started with --media-path; anything else is treated as remote.
 func ImagePart(url string) ContentPart {
 	return ContentPart{Type: PartImage, ImageURL: &ImageURL{URL: url}}
 }
@@ -78,30 +78,6 @@ func ImageBase64(mimeType, data string) ContentPart {
 		Type:     PartImage,
 		ImageURL: &ImageURL{URL: "data:" + mimeType + ";base64," + data},
 	}
-}
-
-// AudioPart and VideoPart reference media by URL or local file, keeping whole
-// files out of the request body. There is no auto-detection: a path such as
-// "path/to/file" is indistinguishable from base64 by charset alone, so
-// embedding raw bytes is always an explicit choice.
-//
-// llama.cpp requires local references to be prefixed with file:// and the
-// server to be started with --media-path; anything else is treated as remote.
-func AudioPart(src string) ContentPart {
-	return ContentPart{Type: PartAudio, InputAudio: &InputMedia{URL: src}}
-}
-
-func VideoPart(src string) ContentPart {
-	return ContentPart{Type: PartVideo, InputVideo: &InputMedia{URL: src}}
-}
-
-// AudioBase64 and VideoBase64 inline raw base64 payloads.
-func AudioBase64(data string) ContentPart {
-	return ContentPart{Type: PartAudio, InputAudio: &InputMedia{Data: data}}
-}
-
-func VideoBase64(data string) ContentPart {
-	return ContentPart{Type: PartVideo, InputVideo: &InputMedia{Data: data}}
 }
 
 // ── tools ─────────────────────────────────────────────────────────

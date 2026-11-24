@@ -7,10 +7,8 @@
 //   - text goes as a plain string input;
 //   - a page raster goes as a base64 data URL, which works against a plain
 //     llama-server, where a file:// path would demand --media-path;
-//   - an audio slice goes as raw base64 in input_audio.data;
-//   - a media segment with a text rendition (a caption or transcript) sends both
-//     parts in one content object, so the vector covers what is on the page and
-//     what was said about it.
+//   - a page raster with a caption sends image and text in one content object, so
+//     the vector covers what is on the page and what was said about it.
 //
 // The server normalises every vector (Euclidean norm), so nothing here does.
 package index
@@ -226,7 +224,7 @@ func (e *Embedder) inputFor(title string, seg domain.Segment) (llm.EmbedInput, e
 		}
 		return llm.TextInput(DocumentPrompt(title, seg.Text)), nil
 
-	case domain.KindImage, domain.KindAudio:
+	case domain.KindImage:
 		if seg.Asset == nil {
 			return llm.EmbedInput{}, fmt.Errorf("%s segment has no asset", seg.Kind)
 		}
@@ -241,15 +239,11 @@ func (e *Embedder) inputFor(title string, seg domain.Segment) (llm.EmbedInput, e
 		encoded := base64.StdEncoding.EncodeToString(raw)
 
 		parts := make([]llm.ContentPart, 0, 2)
-		if seg.Kind == domain.KindImage {
-			mime := seg.Asset.MIME
-			if mime == "" {
-				mime = "image/png"
-			}
-			parts = append(parts, llm.ImageBase64(mime, encoded))
-		} else {
-			parts = append(parts, llm.AudioBase64(encoded))
+		mime := seg.Asset.MIME
+		if mime == "" {
+			mime = "image/png"
 		}
+		parts = append(parts, llm.ImageBase64(mime, encoded))
 		// A rendition travels with the media it describes, in the same content
 		// object, so one vector covers both — and it stays unprefixed. The card's
 		// prefixes are for text inputs; "pass images, video, and audio without any

@@ -354,7 +354,7 @@ func TestEmbedMultimodalInputs(t *testing.T) {
 	_, err := c.Embed(context.Background(), llm.EmbedRequest{
 		Input: []llm.EmbedInput{
 			llm.PartsInput(llm.ImagePart("/tmp/page-1.png")),
-			llm.PartsInput(llm.AudioPart("/tmp/clip.wav")),
+			llm.PartsInput(llm.ImageBase64("image/png", "cG5n")),
 		},
 	})
 	if err != nil {
@@ -378,6 +378,13 @@ func TestEmbedMultimodalInputs(t *testing.T) {
 	img, _ := part["image_url"].(map[string]any)
 	if img["url"] != "/tmp/page-1.png" {
 		t.Fatalf("image url = %v", img["url"])
+	}
+
+	second, _ := inputs[1].(map[string]any)
+	parts2, _ := second["content"].([]any)
+	inner, _ := parts2[0].(map[string]any)
+	if url, _ := inner["image_url"].(map[string]any); url["url"] != "data:image/png;base64,cG5n" {
+		t.Fatalf("inlined image = %v", url)
 	}
 }
 

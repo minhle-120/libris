@@ -2,7 +2,7 @@
 
 ## What this is
 
-A local-first RAG notebook. Sources — PDFs, images, audio, text — go into a notebook, get
+A local-first RAG notebook. Sources — PDFs, images, text — go into a notebook, get
 chunked and embedded, and a question about them is answered by a model call that cites the
 segments it was given. One machine runs the UI, the database and the model servers; nothing
 leaves localhost. `cmd/libris` wires it, `internal/` holds the modules, `web/` is the Svelte

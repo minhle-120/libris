@@ -112,8 +112,8 @@ type Config struct {
 	// field would ask someone to type a name they can only learn by running a command.
 	EngineDevice string `key:"engineDevice" group:"servers" label:"Run models on" help:"Which device llama.cpp offloads to. The choices are what the installed engine reports; Auto uses the first device that build can use, which is CPU only when the engine found no GPU." mode:"managed" noview:"true"`
 
-	ChatURL        string `key:"chatURL" group:"servers" label:"Chat server" help:"Text, image and audio input." kind:"url" required:"true" mode:"external"`
-	EmbedURL       string `key:"embedURL" group:"servers" label:"Embedding server" help:"Multimodal embeddings for text, page images and audio." kind:"url" required:"true" mode:"external"`
+	ChatURL        string `key:"chatURL" group:"servers" label:"Chat server" help:"Text and image input." kind:"url" required:"true" mode:"external"`
+	EmbedURL       string `key:"embedURL" group:"servers" label:"Embedding server" help:"Multimodal embeddings for text and page images." kind:"url" required:"true" mode:"external"`
 	TimeoutSeconds int    `key:"timeoutSeconds" group:"servers" label:"Request timeout" help:"Local CPU inference is slow. Lower it for GPU." min:"5" max:"3600" unit:"s"`
 
 	// ── models ───────────────────────────────────────────────────
@@ -136,11 +136,10 @@ type Config struct {
 	ChunkOverlap    int `key:"chunkOverlap" group:"retrieval" label:"Chunk overlap" help:"Words carried into the next chunk." min:"0" max:"999" unit:"words"`
 
 	// ── ingest ───────────────────────────────────────────────────
-	PDFMode            PDFMode `key:"pdfPageImages" group:"ingest" label:"PDF embeddings" help:"A PDF becomes two documents: page text and page rasters." kind:"enum" enum:"pdfModes"`
-	PDFDPI             int     `key:"pdfDPI" group:"ingest" label:"PDF raster DPI" help:"Resolution for page images. Only affects how legible a cited page looks: the embedding cost per image is fixed." min:"50" max:"600" unit:"dpi"`
-	AudioWindowSeconds int     `key:"audioWindowSeconds" group:"ingest" label:"Audio window" help:"Clip length for audio segments; align with transcript boundaries." min:"5" max:"600" unit:"s"`
-	MaxFileMB          int     `key:"maxFileMB" group:"ingest" label:"Max file size" help:"Larger files are refused at the door, not mid-job." min:"1" max:"102400" unit:"MB"`
-	KeepOriginals      bool    `key:"keepOriginals" group:"ingest" label:"Keep originals" help:"Required for page and timestamp citations." readonly:"true"`
+	PDFMode       PDFMode `key:"pdfPageImages" group:"ingest" label:"PDF embeddings" help:"A PDF becomes two documents: page text and page rasters." kind:"enum" enum:"pdfModes"`
+	PDFDPI        int     `key:"pdfDPI" group:"ingest" label:"PDF raster DPI" help:"Resolution for page images. Only affects how legible a cited page looks: the embedding cost per image is fixed." min:"50" max:"600" unit:"dpi"`
+	MaxFileMB     int     `key:"maxFileMB" group:"ingest" label:"Max file size" help:"Larger files are refused at the door, not mid-job." min:"1" max:"102400" unit:"MB"`
+	KeepOriginals bool    `key:"keepOriginals" group:"ingest" label:"Keep originals" help:"Required for citations that open the original file." readonly:"true"`
 }
 
 // Group titles and copy. Presentation only; the fields themselves are above.
@@ -179,11 +178,10 @@ func Default() Config {
 		ChunkWords:      100,
 		ChunkOverlap:    50,
 
-		PDFMode:            PDFModeAlways,
-		PDFDPI:             110,
-		AudioWindowSeconds: 30,
-		MaxFileMB:          512,
-		KeepOriginals:      true,
+		PDFMode:       PDFModeAlways,
+		PDFDPI:        110,
+		MaxFileMB:     512,
+		KeepOriginals: true,
 	}
 }
 

@@ -35,18 +35,15 @@ func TestFirstLine(t *testing.T) {
 
 func TestMediaParts(t *testing.T) {
 	raw := strings.Repeat("QUJD", 100)
-	if p := AudioBase64(raw); p.InputAudio == nil || p.InputAudio.Data != raw || p.InputAudio.URL != "" {
-		t.Errorf("AudioBase64 = %+v", p.InputAudio)
+	if p := ImageBase64("image/png", raw); p.ImageURL == nil ||
+		!strings.HasPrefix(p.ImageURL.URL, "data:image/png;base64,") ||
+		!strings.HasSuffix(p.ImageURL.URL, raw) {
+		t.Errorf("ImageBase64 = %+v", p.ImageURL)
 	}
-	if p := VideoBase64(raw); p.InputVideo == nil || p.InputVideo.Data != raw {
-		t.Errorf("VideoBase64 = %+v", p.InputVideo)
-	}
-	// A path made only of letters and slashes must never be mistaken for data.
-	if p := AudioPart("path/to/file"); p.InputAudio == nil || p.InputAudio.URL != "path/to/file" || p.InputAudio.Data != "" {
-		t.Errorf("AudioPart(path) = %+v", p.InputAudio)
-	}
-	if p := VideoPart("/tmp/v.mp4"); p.InputVideo == nil || p.InputVideo.URL != "/tmp/v.mp4" {
-		t.Errorf("VideoPart = %+v", p.InputVideo)
+	// A path made only of letters and slashes must never be mistaken for data:
+	// the two constructors are separate precisely so the choice is explicit.
+	if p := ImagePart("path/to/file"); p.ImageURL == nil || p.ImageURL.URL != "path/to/file" {
+		t.Errorf("ImagePart(path) = %+v", p.ImageURL)
 	}
 	if p := TextPart("hi"); p.Type != PartText || p.Text != "hi" {
 		t.Errorf("TextPart = %+v", p)

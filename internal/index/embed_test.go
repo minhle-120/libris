@@ -242,37 +242,6 @@ func TestImageWithRenditionSendsBothParts(t *testing.T) {
 	}
 }
 
-func TestEmbedsAudioAsRawBase64(t *testing.T) {
-	dir := t.TempDir()
-	wav := filepath.Join(dir, "slice-0001.wav")
-	raw := []byte("RIFF....WAVEfmt ")
-	if err := os.WriteFile(wav, raw, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	c := newCapture(t)
-
-	seg := domain.Segment{
-		ID:    "s#audio:0000",
-		Kind:  domain.KindAudio,
-		Asset: &domain.Asset{ID: "s/audio/slice-0001.wav", Path: wav, MIME: "audio/wav"},
-	}
-	if _, err := c.embedder(t, 0).Embed(context.Background(), docTitle, []domain.Segment{seg}); err != nil {
-		t.Fatal(err)
-	}
-
-	part := firstPart(t, c.inputs(t, 0)[0])
-	audio, ok := part["input_audio"].(map[string]any)
-	if !ok {
-		t.Fatalf("part = %v, want input_audio", part)
-	}
-	if got := audio["data"].(string); got != base64.StdEncoding.EncodeToString(raw) {
-		t.Error("input_audio.data is not the slice as raw base64")
-	}
-	if _, hasURL := audio["url"]; hasURL {
-		t.Error("sent a url; raw base64 needs no --media-path")
-	}
-}
-
 func firstPart(t *testing.T, input any) map[string]any {
 	t.Helper()
 	obj, ok := input.(map[string]any)
@@ -490,15 +459,15 @@ func TestMediaInputsAreNeverPrefixed(t *testing.T) {
 	segs := []domain.Segment{
 		{ID: "s#pages:0000", Kind: domain.KindImage, Text: "figure 3: latency",
 			Asset: &domain.Asset{ID: "a", Path: write("p.png", []byte{0x89, 'P', 'N', 'G'}), MIME: "image/png"}},
-		{ID: "s#audio:0000", Kind: domain.KindAudio, Text: "and then the speaker paused",
-			Asset: &domain.Asset{ID: "b", Path: write("s.wav", []byte("RIFFxxxx")), MIME: "audio/wav"}},
+		{ID: "s#figures:0000", Kind: domain.KindImage, Text: "caption: latency over quarters",
+			Asset: &domain.Asset{ID: "b", Path: write("f.png", []byte{0x89, 'P', 'N', 'G'}), MIME: "image/png"}},
 	}
 	if _, err := c.embedder(t, 0).Embed(context.Background(), docTitle, segs); err != nil {
 		t.Fatal(err)
 	}
 
 	inputs := c.inputs(t, 0)
-	for i, want := range []string{"figure 3: latency", "and then the speaker paused"} {
+	for i, want := range []string{"figure 3: latency", "caption: latency over quarters"} {
 		if got := textPartOf(t, inputs[i]); got != want {
 			t.Errorf("media %d carries %q, want the rendition verbatim and unprefixed", i, got)
 		}
