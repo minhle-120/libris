@@ -1,25 +1,32 @@
-<script lang="ts">
-  /**
-   * A placeholder, not a screen.
-   *
-   * The UI has been deleted deliberately: it was assembled part by part as features landed, and the plan is
-   * to write it once, coherently, from a description rather than patch its inconsistencies in place. The
-   * description is `docs/ui-spec.md` — read that, not git history.
-   *
-   * This file exists so that `go build`, `make web` and `make web-check` stay green while the real shell is
-   * written, and so a half-built app is never mistaken for a working one. Replace it with the shell from
-   * §5 of the spec. Nothing in here is design: no tokens, no components, no layout to imitate.
-   */
-</script>
-
+<!--
+  The shell used to live here. Everything below the boot gate is in views/Shell.svelte; this
+  file is only the gate, because "does the machine have a model server yet" is the one thing
+  that must be decided before there is a chrome to decide it for.
+-->
 <svelte:head>
-  <title>Libris — UI rebuild</title>
+  <!-- The stored theme is painted before the stylesheet resolves. The first frame is the
+       only time it matters, and the only place it can be done. -->
+  <script>
+    const saved = localStorage.getItem('libris.theme');
+    document.documentElement.dataset.theme =
+      saved === 'dark' || saved === 'light'
+        ? saved
+        : matchMedia('(prefers-color-scheme: dark)').matches
+          ? 'dark'
+          : 'light';
+  </script>
 </svelte:head>
 
-<main>
-  <h1>No screens yet</h1>
-  <p>
-    The interface is being rebuilt from <code>docs/ui-spec.md</code>. The backend and its API are unchanged
-    and fully working; only the frontend is missing.
-  </p>
-</main>
+<script lang="ts">
+  import { app, boot } from './lib/store.svelte';
+  import Setup from './views/Setup.svelte';
+  import Shell from './views/Shell.svelte';
+
+  void boot();
+</script>
+
+{#if app.gated}
+  <Setup />
+{:else}
+  <Shell />
+{/if}
