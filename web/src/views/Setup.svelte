@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import * as api from '../lib/api';
-  import { app, saveSettings } from '../lib/store.svelte';
+  import { app, saveSettings, skipSetup } from '../lib/store.svelte';
   import { errorMessage, formatBytes } from '../lib/format';
   import { ackForConfirm } from '../lib/device';
   import type { DeviceReport, EngineView, Fact, ModelsView } from '../lib/types';
@@ -260,6 +260,12 @@
     <span class="word">libris</span>
     <h1>Set up Libris</h1>
     <span class="stepcount">{stepIndex + 1} of {steps.length}</span>
+    <Button
+      klass="skip"
+      variant="ghost"
+      size="sm"
+      title="Go in without a model server. This configures nothing and starts nothing: asking a question will fail until a server answers, and the setup screen is here again the next time libris opens."
+      onclick={skipSetup}>Skip for now</Button>
   </header>
 
   <div class="column">
@@ -461,6 +467,12 @@
     padding: 0 14px;
     border-bottom: 1px solid var(--border);
     background: var(--chrome);
+  }
+
+  /* The way out of the wizard is the far end of its own header, so it reads as an
+     escape and never as the next step. */
+  .skip {
+    margin-inline-start: auto;
   }
 
   .mark {

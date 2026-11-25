@@ -79,6 +79,36 @@ const code = await withBrowser(
       if (!process.env.EXPECT_STEP) {
         checks.check("it opens on the engine step", seen.active === "Engine", seen.active);
         checks.check("it offers the engine download", /Download llama\.cpp/.test(seen.buttons), seen.buttons);
+        // The way past the wall, for a machine that will not run a model server today. It
+        // has to open the app, and stay open through a reload — a skip that a refresh
+        // takes back is a wall with an extra step in front of it.
+        checks.check(
+          "it offers a way past the wizard",
+          /Skip for now/.test(seen.buttons),
+          seen.buttons,
+        );
+        const skip = async () =>
+          await ui.eval(`
+            [...document.querySelectorAll('.setup button')]
+              .find((b) => b.textContent.includes('Skip'))?.click();
+            return true;
+          `);
+        const where = async () =>
+          await ui.eval(
+            `return { wizard: !!document.querySelector('.setup'), shell: !!document.querySelector('.sidebar') }`,
+          );
+        await skip();
+        await ui.settle(1500);
+        const inApp = await where();
+        checks.check("skipping walks past it", inApp.shell && !inApp.wizard, JSON.stringify(inApp));
+        await ui.reload(app);
+        await ui.settle(1500);
+        const reloaded = await where();
+        checks.check(
+          "and a reload does not put the wizard back",
+          reloaded.shell && !reloaded.wizard,
+          JSON.stringify(reloaded),
+        );
       }
     }
 

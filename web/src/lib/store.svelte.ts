@@ -159,6 +159,39 @@ export function initPanels() {
   app.sideOpen = readOpen(SIDE);
 }
 
+/** The tab's own "not yet" for the setup wizard.
+ *
+ *  It lives in the browser and not in a setting because it changes nothing about the
+ *  machine: no server is configured, nothing is started, nothing is promised. The gate
+ *  stays the server's rule — this only steps aside from it for as long as the tab is
+ *  open, so reloading during a look-around does not put the wizard back in front of
+ *  the thing being looked at, and the next opening asks again. */
+const SETUP_SKIPPED = 'libris.setupSkipped';
+
+function setupSkipped(): boolean {
+  try {
+    return sessionStorage.getItem(SETUP_SKIPPED) === '1';
+  } catch {
+    return false;
+  }
+}
+
+/** Walks past the wizard into an app that cannot answer a question yet.
+ *
+ *  Deliberately does the bare minimum: the shell reads the settings and the sources it
+ *  can read, and asking anything fails with the server's own reason. The way back to
+ *  the setup screen is Settings → Servers, which is where the same choices live. */
+export function skipSetup() {
+  try {
+    sessionStorage.setItem(SETUP_SKIPPED, '1');
+  } catch {
+    // A browser that refuses storage loses only the reload-proof, not the skip.
+  }
+  app.gated = false;
+  app.loading = false;
+  void refreshNotebooks();
+}
+
 export async function boot() {
   initPanels();
   applyNarrow(true);
@@ -186,6 +219,7 @@ export async function boot() {
     app.ready = true;
     app.gated = false;
   }
+  if (app.gated && setupSkipped()) app.gated = false;
   // The page shell painted the theme before this ran, so the stylesheet never flashes; this is
   // the other half, the state the toggle button reads. Without it the button offers the theme
   // the page is already in, and the first press appears to do nothing.
