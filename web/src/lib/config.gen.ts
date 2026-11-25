@@ -40,7 +40,6 @@ export type Settings = {
 	pdfPageImages: 'always' | 'fallback';
 	pdfDPI: number;
 	maxFileMB: number;
-	keepOriginals: boolean;
 };
 
 export const settingGroups: SettingGroup[] = [
@@ -238,13 +237,6 @@ export const settingGroups: SettingGroup[] = [
 				"unit": "MB",
 				"min": 1,
 				"max": 102400
-			},
-			{
-				"key": "keepOriginals",
-				"label": "Keep originals",
-				"help": "Required for citations that open the original file.",
-				"kind": "bool",
-				"readonly": true
 			}
 		]
 	}
@@ -271,6 +263,5 @@ export function defaultSettings(): Settings {
 		pdfPageImages: "always",
 		pdfDPI: 110,
 		maxFileMB: 512,
-		keepOriginals: true,
 	};
 }

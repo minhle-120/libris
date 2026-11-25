@@ -30,7 +30,7 @@ func TestLoadEnvNamesFollowKeys(t *testing.T) {
 	t.Setenv("LIBRIS_CHAT_URL", "http://127.0.0.1:9999")
 	t.Setenv("LIBRIS_PDF_DPI", "200")
 	t.Setenv("LIBRIS_MAX_FILE_MB", "32")
-	t.Setenv("LIBRIS_KEEP_ORIGINALS", "false")
+	t.Setenv("LIBRIS_RESEARCH_THINKING", "true")
 
 	c, err := Load()
 	if err != nil {
@@ -45,10 +45,10 @@ func TestLoadEnvNamesFollowKeys(t *testing.T) {
 	if c.MaxFileBytes() != 32<<20 {
 		t.Errorf("MaxFileBytes = %d", c.MaxFileBytes())
 	}
-	// A bool whose default is true, so this proves the environment actually moved it
+	// A bool whose default is false, so this proves the environment actually moved it
 	// rather than agreeing with the default by accident.
-	if c.KeepOriginals {
-		t.Error("KeepOriginals should be false")
+	if !c.ResearchThinking {
+		t.Error("ResearchThinking should be true")
 	}
 }
 
@@ -64,7 +64,7 @@ func TestLoadDefaultsWhenEnvEmpty(t *testing.T) {
 }
 
 func TestLoadParseErrors(t *testing.T) {
-	for _, key := range []string{"LIBRIS_PDF_DPI", "LIBRIS_TIMEOUT_SECONDS", "LIBRIS_KEEP_ORIGINALS"} {
+	for _, key := range []string{"LIBRIS_PDF_DPI", "LIBRIS_TIMEOUT_SECONDS", "LIBRIS_RESEARCH_THINKING"} {
 		t.Run(key, func(t *testing.T) {
 			t.Setenv(key, "not-valid")
 			if _, err := Load(); err == nil {

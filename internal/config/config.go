@@ -164,10 +164,9 @@ type Config struct {
 	ChunkOverlap     int  `key:"chunkOverlap" group:"retrieval" label:"Chunk overlap" help:"Words carried into the next chunk." min:"0" max:"999" unit:"words"`
 
 	// ── ingest ───────────────────────────────────────────────────
-	PDFMode       PDFMode `key:"pdfPageImages" group:"ingest" label:"PDF embeddings" help:"A PDF becomes two documents: page text and page rasters." kind:"enum" enum:"pdfModes"`
-	PDFDPI        int     `key:"pdfDPI" group:"ingest" label:"PDF raster DPI" help:"Resolution for page images. Only affects how legible a cited page looks: the embedding cost per image is fixed." min:"50" max:"600" unit:"dpi"`
-	MaxFileMB     int     `key:"maxFileMB" group:"ingest" label:"Max file size" help:"Larger files are refused at the door, not mid-job." min:"1" max:"102400" unit:"MB"`
-	KeepOriginals bool    `key:"keepOriginals" group:"ingest" label:"Keep originals" help:"Required for citations that open the original file." readonly:"true"`
+	PDFMode   PDFMode `key:"pdfPageImages" group:"ingest" label:"PDF embeddings" help:"A PDF becomes two documents: page text and page rasters." kind:"enum" enum:"pdfModes"`
+	PDFDPI    int     `key:"pdfDPI" group:"ingest" label:"PDF raster DPI" help:"Resolution for page images. Only affects how legible a cited page looks: the embedding cost per image is fixed." min:"50" max:"600" unit:"dpi"`
+	MaxFileMB int     `key:"maxFileMB" group:"ingest" label:"Max file size" help:"Larger files are refused at the door, not mid-job." min:"1" max:"102400" unit:"MB"`
 }
 
 // Group titles and copy. Presentation only; the fields themselves are above.
@@ -208,10 +207,9 @@ func Default() Config {
 		ChunkWords:       100,
 		ChunkOverlap:     50,
 
-		PDFMode:       PDFModeAlways,
-		PDFDPI:        110,
-		MaxFileMB:     512,
-		KeepOriginals: true,
+		PDFMode:   PDFModeAlways,
+		PDFDPI:    110,
+		MaxFileMB: 512,
 	}
 }
 
