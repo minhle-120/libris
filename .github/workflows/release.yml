@@ -140,7 +140,11 @@ jobs:
           mv stage "$dir"
           "$tar" -a -cf "$out" "$dir"
           test -s "$out"
-          first=$("$tar" -tf "$out" | head -1)
+          # No `| head` here: the runner's shell runs with pipefail, and tar
+          # fails the step with "stdout: write error" the moment head stops
+          # reading. The listing is a few hundred lines; take its first here.
+          listing=$("$tar" -tf "$out")
+          first=${listing%%$'\n'*}
           case "$first" in
             "$dir"/ | "$dir"/*) ;;
             *)
