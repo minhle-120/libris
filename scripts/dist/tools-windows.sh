@@ -90,14 +90,23 @@ fi
 licenses="$out/share/licenses"
 mkdir -p "$licenses"
 if command -v pacman >/dev/null 2>&1; then
-  for pkg in $(
+  # Which packages the two programs came from, and what they were pulled in by. Asked two
+  # ways because pacman answers the two questions differently: -Qqo names the owner of a
+  # file, pactree names the dependency tree — and a DLL copied out of a dependency's own
+  # folder has no license folder beside it, so the tree is what makes the set complete.
+  pkgs=$(
     pacman -Qqo "$prefix/bin/pdftotext.exe" "$prefix/bin/pdftoppm.exe" 2>/dev/null
     pactree -l mingw-w64-ucrt-x86_64-poppler 2>/dev/null | sed 's/ .*//'
-  ) 2>/dev/null | sort -u; do
+  )
+  for pkg in $(printf '%s\n' "$pkgs" | sort -u); do
     [ -d "$prefix/share/licenses/$pkg" ] && cp -r "$prefix/share/licenses/$pkg" "$licenses/"
   done
 fi
 find "$licenses" -type d -empty -delete 2>/dev/null || true
+if [ ! -d "$licenses" ] || [ -z "$(ls -A "$licenses" 2>/dev/null)" ]; then
+  echo "tools-windows: no license texts found — the archive must not ship without them" >&2
+  exit 1
+fi
 
 echo "tools: $(cd "$out" && ls -1 | tr '\n' ' ')"
 echo "dlls:  $(cd "$out" && ls -1 *.dll 2>/dev/null | wc -l), total $(du -sh "$out" | cut -f1)"

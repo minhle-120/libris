@@ -48,15 +48,16 @@ done
 # binaries is a failure nobody can read.
 copy_deps() {
   local binary=$1 lib
-  # ldd prints resolved paths in the third column, and the loader itself in the first.
-  ldd "$binary" | awk '{ if ($3 ~ /^\//) print $3; else if ($1 ~ /^\//) print $1 }' |
-    sort -u |
+  # ldd prints resolved paths in the third column, and the loader itself in the first. The
+  # C library's own parts are filtered out here rather than by a later grep, so a run whose
+  # closure is entirely C-library-shaped is an empty folder and not an exit code 1.
+  ldd "$binary" | awk -v skip='(^|/)(libc|libm|libdl|librt|libpthread|libnsl|libutil|libresolv|libanl|libBrokenLocale|ld-linux|linux-vdso|ld-musl)[.-]' '
+    {
+      lib = ($3 ~ /^\//) ? $3 : (($1 ~ /^\//) ? $1 : "")
+      if (lib != "" && lib !~ skip) print lib
+    }
+  ' | sort -u |
     while read -r lib; do
-      case "$lib" in
-      *libc.so* | *libm.so* | *libdl.so* | *librt.so* | *libpthread.so* |
-        *libnsl.so* | *libutil.so* | *libresolv.so* | *libanl.so* |
-        *libBrokenLocale* | *ld-linux* | *linux-vdso* | *ld-musl*) continue ;;
-      esac
       [ -e "$out/lib/$(basename "$lib")" ] || cp -L "$lib" "$out/lib/"
     done
 }
