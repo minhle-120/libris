@@ -168,6 +168,9 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           set -eu
-          gh release create "$TAG" dist/* --title "$TAG" \
+          # The repo is named because this job checks nothing out, and gh
+          # otherwise goes looking for a remote in a .git that is not there.
+          gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" \
+            --title "$TAG" \
             --notes "Unpack and run. Keep \`libris\` and its \`tools\` folder
           together, or a PDF will say so."
