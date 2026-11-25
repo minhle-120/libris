@@ -45,7 +45,7 @@ func TestTheServingModelIsAskedWhatItCanBeShown(t *testing.T) {
 	srv := capsServer(t, http.StatusOK,
 		`{"model_alias":"libris-chat","modalities":{"vision":true,"video":false,"audio":false}}`)
 
-	caps := chatCaps(capsClient(t, srv.URL))
+	caps := chatCaps(capsClient(t, srv.URL), "libris-chat")
 	if caps == nil || !caps.Vision || caps.Model != "libris-chat" {
 		t.Fatalf("caps = %+v", caps)
 	}
@@ -62,8 +62,11 @@ func TestNothingIsGuessedFromAServerThatDoesNotAnswer(t *testing.T) {
 	for _, srv := range []*httptest.Server{
 		capsServer(t, http.StatusNotFound, `{"error":{"message":"not found"}}`),
 		capsServer(t, http.StatusOK, `<html>not a llama.cpp server</html>`),
+		// The router answering about itself, which is what an unqualified /props is
+		// worth: nothing, and least of all a denial.
+		capsServer(t, http.StatusOK, `{"role":"router","model_alias":"llama-server","model_path":"none"}`),
 	} {
-		if caps := chatCaps(capsClient(t, srv.URL)); caps != nil {
+		if caps := chatCaps(capsClient(t, srv.URL), "libris-chat"); caps != nil {
 			t.Errorf("a server that never answered produced caps: %+v", caps)
 		}
 	}

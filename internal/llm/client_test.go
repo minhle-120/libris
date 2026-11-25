@@ -16,6 +16,7 @@ import (
 
 type recorded struct {
 	path   string
+	query  string
 	auth   string
 	accept string
 	body   []byte
@@ -28,6 +29,7 @@ func server(t *testing.T, status int, body string, headers map[string]string) (*
 	rec := &recorded{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rec.path = r.URL.Path
+		rec.query = r.URL.RawQuery
 		rec.auth = r.Header.Get("Authorization")
 		rec.accept = r.Header.Get("Accept")
 		rec.body, _ = io.ReadAll(r.Body)

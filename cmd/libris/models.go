@@ -34,11 +34,15 @@ const capsTimeout = 2 * time.Second
 // take it speak for itself. That is the case for a server libris does not manage, where
 // /props may not exist at all — guessing no from here would withhold pages the model
 // could read.
-func chatCaps(client *llm.Client) *llm.Caps {
+// It is named in the ask because the engine is a router until it is told otherwise:
+// asked about nothing, /props describes the router — no model, no modalities — and that
+// silence used to be read as "no vision" here, which refused a question about a page in
+// front of a chat model started with the projector for it.
+func chatCaps(client *llm.Client, model string) *llm.Caps {
 	ctx, cancel := context.WithTimeout(context.Background(), capsTimeout)
 	defer cancel()
 
-	caps, err := client.Props(ctx)
+	caps, err := client.Props(ctx, model)
 	if err != nil {
 		return nil
 	}
@@ -77,7 +81,7 @@ func modelSource(clients *clientCache, embedders *index.Supplier) app.ModelsFor 
 			ChatModel: target.ChatModel,
 			Chat:      client,
 			Probe:     probe,
-			Caps:      chatCaps(client),
+			Caps:      chatCaps(client, target.ChatModel),
 		}, nil
 	}
 }

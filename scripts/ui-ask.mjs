@@ -241,6 +241,14 @@ const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ask-p
     (wire.lastAnswerMedia?.user ?? 0) > 0,
     () => `media=${JSON.stringify(wire.lastAnswerMedia)}`
   );
+  // A capability question asked about nothing is answered by the router about itself,
+  // and that answer says no model and no modalities — which is a text-only verdict on a
+  // machine running a vision model. Every page in the notebook then fails to arrive.
+  checks.check(
+    'the capability question was asked about the model, never about the router',
+    wire.propsNamed > 0 && wire.propsUnnamed === 0,
+    () => `named=${wire.propsNamed} unnamed=${wire.propsUnnamed}`
+  );
   // At least one searched and exactly one did not: the call that writes the answer is
   // never given tools, which is what keeps the research trace out of the prose.
   checks.check(

@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -77,14 +78,36 @@ func (e *MediaUnsupported) Error() string {
 		subject, e.Kind.Modality(), e.Count, noun)
 }
 
-// Props reads what the chat server is serving and what it can take.
+// Props reads what a serving model can be shown, naming it first.
+//
+// The name is the part that matters, and it is why a call that looks like a one-line
+// GET is not one. Libris runs the engine in router mode: one process holding a preset,
+// which starts whichever model a request names. A router answers GET /props about
+// itself (server-models.cpp, get_router_props) — role "router", model_alias the
+// placeholder "llama-server", model_path "none", and no modalities key at all. Read
+// that as the serving model's account and every notebook holding a page fails with an
+// error about a projector, on a machine where the projector is loaded and running; the
+// placeholder is even commented upstream as "a dummy response to make sure the UI
+// doesn't break". With ?model=<alias> the same URL is proxied to the instance, which
+// answers from its own loaded mtmd context.
+//
+// autoload=false is the other half of the query. Models load on demand and the router
+// obliges a probe: without it, asking a capability question costs loading the model,
+// the caller's short budget is spent on a load that cannot fit inside it, and the
+// answer is "unknown" either way.
 //
 // The endpoint is /props at the root, not /v1/props, so this does not go through
-// endpoint(). It is a GET on a loopback port that answers in microseconds, which is
-// what buys calling it per question rather than caching an answer a serving restart
-// would quietly invalidate.
-func (c *Client) Props(ctx context.Context) (*Caps, error) {
-	resp, err := c.get(ctx, root(c.cfg.ChatURL), "props")
+// endpoint(). It is a GET on a loopback port that answers in microseconds once the
+// model is up, which is what buys asking per question rather than caching an answer a
+// serving restart would quietly invalidate.
+func (c *Client) Props(ctx context.Context, model string) (*Caps, error) {
+	target := root(c.cfg.ChatURL) + "/props"
+	if name := strings.TrimSpace(model); name != "" {
+		q := url.Values{"model": {name}, "autoload": {"false"}}
+		target += "?" + q.Encode()
+	}
+
+	resp, err := c.getProps(ctx, target)
 	if err != nil {
 		return nil, err
 	}
@@ -94,13 +117,16 @@ func (c *Client) Props(ctx context.Context) (*Caps, error) {
 		return nil, readError(resp)
 	}
 
-	// modalities is the object server-context.cpp writes from the model's own mtmd
-	// capabilities, so it says what the loaded projector can do — not what the file
-	// on disk suggests it might.
+	// modalities is the object server-context.cpp writes from the instance's own mtmd
+	// capabilities — meta.has_inp_image — so it says what the loaded projector can do,
+	// not what a file on disk suggests it might. It is a pointer because absence must
+	// not be read as a denial: a struct here would decode a payload without the key into
+	// vision:false, which is the one mistake this whole path exists to avoid.
 	var raw struct {
+		Role       string `json:"role"`
 		ModelAlias string `json:"model_alias"`
 		Model      string `json:"model"`
-		Modalities struct {
+		Modalities *struct {
 			Vision bool `json:"vision"`
 			Video  bool `json:"video"`
 			Audio  bool `json:"audio"`
@@ -108,6 +134,13 @@ func (c *Client) Props(ctx context.Context) (*Caps, error) {
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
 		return nil, fmt.Errorf("llm: decode props: %w", err)
+	}
+
+	// Spoken about the router, or about a model that never named its modalities: nobody
+	// answered. Callers read that as "it did not say", which is the right fallback here
+	// — which is why this is a returned error and not something louder.
+	if raw.Modalities == nil || raw.Role == "router" {
+		return nil, fmt.Errorf("llm: /props spoke about %q and named no model to show anything", raw.Role)
 	}
 
 	name := raw.ModelAlias
@@ -129,17 +162,17 @@ func root(base string) string {
 	return strings.TrimSuffix(base, "/v1")
 }
 
-func (c *Client) get(ctx context.Context, base, path string) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(base, "/")+"/"+path, nil)
+func (c *Client) getProps(ctx context.Context, target string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
-		return nil, fmt.Errorf("llm: %s: %w", path, err)
+		return nil, fmt.Errorf("llm: props: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", c.cfg.UserAgent)
 
 	resp, err := c.hc.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("llm: %s: %w", path, err)
+		return nil, fmt.Errorf("llm: props: %w", err)
 	}
 	return resp, nil
 }

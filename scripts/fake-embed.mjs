@@ -73,6 +73,34 @@ function citedChunks(body) {
   return [...seen].sort((a, b) => a - b);
 }
 
+/**
+ * One of the two things GET /props can mean. With ?model= the router proxies to the
+ * instance, and the instance's "modalities" is written from its loaded projector. Without
+ * it the router speaks about itself: no model, no modalities, and an alias upstream
+ * comments as "a dummy response to make sure the UI doesn't break" — which is exactly
+ * what a client reads as "no vision" if it asks the wrong question and decodes absence
+ * into a bool. Both answers are served here so that mistake cannot pass quietly.
+ */
+function propsPayload(query, vision) {
+  const named = query.get('model');
+  if (named) {
+    return {
+      model_alias: named,
+      modalities: { vision, video: false, audio: false },
+      media_marker: '<__media__>',
+      total_slots: 1,
+      is_sleeping: false
+    };
+  }
+  return {
+    role: 'router',
+    max_instances: 3,
+    model_alias: 'llama-server',
+    model_path: 'none',
+    default_generation_settings: { params: {}, n_ctx: 0 }
+  };
+}
+
 function questionFrom(body) {
   const user = [...body.messages].reverse().find((m) => m.role === 'user');
   const text = typeof user?.content === 'string' ? user.content : (user?.content?.[0]?.text ?? '');
@@ -107,6 +135,12 @@ export class EmbedServer {
     this.chatHold = false;
     this.chatDown = false;
     this.answer = 'The sources support this. [[Chunk 1]]';
+
+    // GET /props, answered twice over: the router talks about itself, and an instance
+    // talks about its projector. Both exist because only the pair tells a client
+    // whether it asked the right question — see the handler.
+    this.vision = true;
+    this.propsAsked = { named: 0, unnamed: 0 };
 
     this.server = createServer((req, res) => {
       let body = '';
@@ -144,6 +178,9 @@ export class EmbedServer {
           // Off unless asked for, so a harness that is not looking at the thinking sees the
           // answer exactly as it did before.
           if ('think' in cmd) this.think = cmd.think || null;
+          // What the serving model can be shown. Off makes the fake a text-only model,
+          // which is how a check sees the refusal rather than the answer.
+          if ('vision' in cmd) this.vision = !!cmd.vision;
           res.writeHead(204);
           res.end();
           return;
@@ -167,9 +204,29 @@ export class EmbedServer {
             researchCalls: this.chatRequests.filter((r) => r.tools?.length).length,
             lastTools: this.chatRequests.filter((r) => r.tools?.length).at(-1)?.tools?.map((t) => t.function?.name) ?? null,
             lastStream: this.chatRequests.at(-1)?.stream ?? null,
+            // Which of the two /props answers was asked for. An unqualified ask is worth
+            // nothing about a model, so a client that makes only those has a bug even
+            // when every other check passes.
+            propsNamed: this.propsAsked.named,
+            propsUnnamed: this.propsAsked.unnamed,
             ...this.mediaSeen(),
             ...this.thinkingSeen()
           }));
+          return;
+        }
+
+        // A router answers GET /props about itself unless the query names a model
+        // (server-models.cpp, get_router_props): role "router", an alias upstream
+        // comments as "a dummy response to make sure the UI doesn't break", and no
+        // modalities key at all. Naming the model proxies to the instance, which answers
+        // from its own loaded projector. Answering only one of the two would let a
+        // client that asks the wrong question read the dummy as a verdict and pass every
+        // check in this file.
+        if ((req.url ?? '').startsWith('/props')) {
+          const query = new URL(req.url, 'http://libris.invalid').searchParams;
+          this.propsAsked[query.get('model') ? 'named' : 'unnamed']++;
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify(propsPayload(query, this.vision)));
           return;
         }
 
