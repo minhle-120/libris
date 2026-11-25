@@ -1402,10 +1402,28 @@ func TestAutostartWaitsForWhatTheWizardAsks(t *testing.T) {
 	}
 	srv2 := &fakeServer{}
 	h2, _ := newTestHostWith(t, eng, cfg, HostOptions{Serve: srv2, ModelsDir: modelsDir})
+
+	// The gate still belongs to the wizard here. This is the machine that finished its
+	// steps part-way through a session, after start-up had stood down: nothing is bringing
+	// the router up, so the wizard's Start button is the only thing that would, and a gate
+	// opened on the missing process alone would walk past it into an app that answers
+	// nothing.
+	if before, _ := h2.Engine(ctx, false); before.Setup.Starting {
+		t.Errorf("the gate opened with no start in flight: %+v", before.Setup)
+	}
+
+	h2.ExpectEngineAutostart()
 	h2.EngineAutostart(ctx)
 	if srv2.starts != 1 {
 		v2, _ := h2.Engine(ctx, false)
 		t.Fatalf("starts = %d, want one; the page says %+v", srv2.starts, v2.Setup)
+	}
+
+	// Now the router is either up, or start-up has taken it on and it is loading. Either
+	// way the person has nothing left to do, so there is no reason to be standing in a
+	// wizard looking at it.
+	if after, _ := h2.Engine(ctx, false); !after.Setup.Starting && !after.Setup.Ready {
+		t.Errorf("the gate stayed shut beside a router start-up has taken on: %+v", after.Setup)
 	}
 }
 

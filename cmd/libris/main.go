@@ -171,6 +171,7 @@ func main() {
 		// pressed a Start button is not a local-first app. Everything about the decision is
 		// the supervisor's (installed? models? already up?), and a failure is a log line and a
 		// settings page that says why — never a reason not to serve the UI.
+		host.ExpectEngineAutostart()
 		go host.EngineAutostart(context.Background())
 	}
 

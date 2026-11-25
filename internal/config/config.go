@@ -105,11 +105,15 @@ type Config struct {
 	// the installed build prints with --list-devices, which differ per machine and per build —
 	// "Vulkan0" on the build libris downloads, "CUDA0" on one a person built themselves — and a
 	// name that build does not know is an argument error, not a fallback. Blank means libris
-	// picks the first device that build can use (deviceinfo.Report.DefaultDevice).
+	// picks the first device that build can use (deviceinfo.Report.DefaultDevice) — nothing on
+	// the page offers that any more, but a setting written before the choice was taken, or one
+	// edited by hand, still has to mean something.
 	//
-	// noview: the control is the picker beside the device report in EnginePanel, because a text
-	// field would ask someone to type a name they can only learn by running a command.
-	EngineDevice string `key:"engineDevice" group:"servers" label:"Run models on" help:"Which device llama.cpp offloads to. The choices are what the installed engine reports; Auto uses the first device that build can use, which is CPU only when the engine found no GPU." mode:"managed" noview:"true"`
+	// noview: the control is the picker beside the device report in the machine section, because
+	// a text field would ask someone to type a name they can only learn by running a command.
+	// The CPU is one of the choices rather than a fallback sentence: its name is llama.cpp's own
+	// "none", so the value the row carries is the value the preset needs.
+	EngineDevice string `key:"engineDevice" group:"servers" label:"Run models on" help:"Which device llama.cpp offloads to. The choices are the slots the installed engine reports, CPU among them." mode:"managed" noview:"true"`
 	// EngineDeviceAck records that a person has looked at the device choice for this engine
 	// build on this machine. It is not a preference and no form should offer it: it is the
 	// difference between “libris picked a device” and “nobody was ever asked”, which only the

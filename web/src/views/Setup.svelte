@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import * as api from '../lib/api';
-  import { app, saveSettings, skipSetup } from '../lib/store.svelte';
+  import { app, applyGate, saveSettings, skipSetup } from '../lib/store.svelte';
   import { errorMessage, formatBytes } from '../lib/format';
   import { ackForConfirm } from '../lib/device';
   import type { DeviceReport, EngineView, Fact, ModelsView } from '../lib/types';
@@ -156,8 +156,7 @@
       if (!alive) return;
       engine = e;
       // The gate is the server's rule. When the last missing fact lands, the app is let in.
-      app.ready = e.setup?.ready ?? true;
-      app.gated = !app.ready;
+      applyGate(e.setup);
     } catch (e) {
       if (alive) error = errorMessage(e);
     }
@@ -338,8 +337,7 @@
       {:else if active === 'Inference device'}
         <h2>Where does it run?</h2>
         <p>
-          These are the slots the engine itself reported. Libris picks one when you do not, and
-          this can be changed later in Settings.
+          These are the slots the engine itself reported. This can be changed later in Settings.
         </p>
         {#if !report}
           <p class="quiet">Asking the engine what it can run on…</p>
@@ -347,13 +345,13 @@
             <Button size="sm" disabled={busy} onclick={() => act(askDevices)}>Try again</Button>
           </div>
         {:else if !devices.length}
-          <p class="quiet">The engine reported no accelerator, so the CPU will be used.</p>
+          <!-- The step has to stay escapable, and a slot list with nothing in it escapes
+               nowhere. So this asks again rather than offering a choice the engine never
+               named: the CPU is a row in every report, so a report with no rows at all is a
+               probe that did not answer, not a machine without a processor. -->
+          <p class="quiet">The engine reported no device at all.</p>
           <div class="verbs">
-            <!-- Still the step's one action: a machine with nothing to pick needs its ack
-                 recorded too, or the step has no way out. -->
-            <Button variant="primary" disabled={busy} onclick={() => choose('')}>
-              Let libris choose
-            </Button>
+            <Button size="sm" disabled={busy} onclick={() => act(askDevices)}>Try again</Button>
           </div>
         {:else}
           <div class="devices">
@@ -365,11 +363,6 @@
                 </span>
               </button>
             {/each}
-            <!-- The same quiet action as the settings device picker, from the same control: two
-                 renderers is fine, two hover states is not. -->
-            <Button variant="ghost" size="sm" onclick={() => choose('')}>
-              Let libris choose
-            </Button>
           </div>
         {/if}
 

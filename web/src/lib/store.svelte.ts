@@ -27,6 +27,7 @@ import type {
   Notebook,
   Panel,
   Segment,
+  SetupView,
   Source,
   ToolsReport
 } from './types';
@@ -192,6 +193,21 @@ export function skipSetup() {
   void refreshNotebooks();
 }
 
+/** Paints the gate from the server's answer, which is the only copy of that rule the
+ *  frontend holds: both places that read the gate call this, so neither can decide on its
+ *  own when the wizard is the screen.
+ *
+ *  `starting` opens the gate. The machine has nothing left to ask and the model server is a
+ *  process libris's own start-up is already bringing up, so a wizard here is a screen
+ *  describing a wait — and on a cold start the model takes longer to load than the page takes
+ *  to ask, which is how a set-up machine kept meeting the wizard at every boot. A question
+ *  asked in the meantime fails with the server's own reason, the same way the walked-past
+ *  setup behaves. */
+export function applyGate(setup?: SetupView): void {
+  app.ready = setup?.ready ?? true;
+  app.gated = !(app.ready || (setup?.starting ?? false));
+}
+
 export async function boot() {
   initPanels();
   applyNarrow(true);
@@ -213,11 +229,9 @@ export async function boot() {
   // is on screen. A settings change made inside the app must not tear the app away.
   try {
     const engine = await api.getEngine();
-    app.ready = engine.setup?.ready ?? true;
-    app.gated = !app.ready;
+    applyGate(engine.setup);
   } catch {
-    app.ready = true;
-    app.gated = false;
+    applyGate(undefined);
   }
   if (app.gated && setupSkipped()) app.gated = false;
   // The page shell painted the theme before this ran, so the stylesheet never flashes; this is

@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"libris/internal/config"
@@ -142,6 +143,11 @@ type Host struct {
 	checking    bool
 	lastErr     string
 	lastAttempt time.Time
+
+	// autostart says start-up has taken responsibility for bringing the router up in this
+	// process, which is the difference between a router on its way and a router nobody is
+	// starting. Unlocked because the page reads it beside the answer it qualifies.
+	autostart atomic.Bool
 }
 
 func NewHost(opts HostOptions) (*Host, error) {
@@ -921,6 +927,14 @@ func (h *Host) presetDevice(ctx context.Context, cfg config.Config) (device, why
 	return def, fmt.Sprintf("%q is not among the devices the installed engine reports; running on %s instead", want, def)
 }
 
+// ExpectEngineAutostart records that start-up is about to take the router on, and is called
+// before the goroutine that does it runs: the first page read must not see a settled machine
+// as one waiting on a person, which is what made a set-up box open its own wizard at every
+// cold start. EngineAutostart clears the promise on every path that leaves the router down.
+func (h *Host) ExpectEngineAutostart() {
+	h.autostart.Store(true)
+}
+
 // EngineAutostart brings the router up on boot when managed mode asked for a server and one
 // can be run. It is quiet by design — a debug line on success, a warning on failure — because
 // it runs beside the listener, and a machine that cannot start a model server still gets a
@@ -928,9 +942,11 @@ func (h *Host) presetDevice(ctx context.Context, cfg config.Config) (device, why
 func (h *Host) EngineAutostart(ctx context.Context) {
 	cfg := h.settings.Get()
 	if cfg.EngineMode != config.EngineManaged || h.serve == nil {
+		h.autostart.Store(false)
 		return
 	}
 	if cur := h.serve.Status(); cur.Running {
+		h.autostart.Store(false)
 		return
 	}
 	// The same rule the settings screen renders, read from the same facts. It used to be a
@@ -942,11 +958,13 @@ func (h *Host) EngineAutostart(ctx context.Context) {
 	if !setup.Startable(in) {
 		// The reason is the rule's own answer, not a second copy of it: what is missing is
 		// written once, and the log repeats it.
+		h.autostart.Store(false)
 		h.log.Debug("engine: not started", "missing", setup.For(in).Blocking)
 		return
 	}
 	srv, err := h.EngineServeStart(ctx)
 	if err != nil {
+		h.autostart.Store(false)
 		h.log.Warn("engine: not running; the settings page says why", "err", err, "said", srv.Error)
 		return
 	}
@@ -975,6 +993,10 @@ func (h *Host) EngineServeStop(ctx context.Context) (engine.Serving, error) {
 	if err := h.serve.Stop(); err != nil && !errors.Is(err, engine.ErrNotServing) {
 		return h.serveStatus(), fmt.Errorf("app: stop the engine: %w", err)
 	}
+	// A stop the person asked for ends any start still said to be on its way, so the gate
+	// cannot open on a server that was just put down.
+	h.autostart.Store(false)
+
 	srv := h.serveStatus()
 	if srv.Running {
 		// The one outcome stopping exists to prevent, said by the module that would have to
@@ -988,11 +1010,12 @@ func (h *Host) EngineServeStop(ctx context.Context) (engine.Serving, error) {
 // setupInputs gathers what the one readiness rule reads, and returns the key a device
 // confirmation would record today alongside it.
 //
-// The key is the engine build's tag with the machine's fingerprint, which is what the
+// The key is the engine build's tag with the machine's own id, which is what the
 // confirmation is a claim about: a new build reports a different device list, and a data
-// directory copied onto other hardware has never been shown this one. Keeping the formula
-// here rather than in the screen is the point — a courier that computes what it carries is
-// a second copy of the rule.
+// directory copied onto other hardware has never been shown this one. It is AckKey and not
+// the device cache's Fingerprint, because that one is keyed to this start-up on purpose and
+// would reopen the wizard on every boot. Keeping the formula here rather than in the screen
+// is the point — a courier that computes what it carries is a second copy of the rule.
 func (h *Host) setupInputs(cfg config.Config) (setup.Input, string) {
 	in := setup.Input{
 		Managed: cfg.EngineMode == config.EngineManaged,
@@ -1000,11 +1023,12 @@ func (h *Host) setupInputs(cfg config.Config) (setup.Input, string) {
 	}
 	if installed, ok := h.engine.Status(); ok {
 		in.EngineInstalled = true
-		in.AckNow = installed.Tag + ":" + deviceinfo.Fingerprint(h.engineProbe())
+		in.AckNow = installed.Tag + ":" + deviceinfo.AckKey(h.engineProbe())
 	}
 	if h.serve != nil {
 		in.Serving = h.serve.Status().Running
 	}
+	in.Autostart = h.autostart.Load()
 	if h.modelsDir != "" {
 		for _, st := range models.Statuses(h.modelsDir) {
 			if !st.Complete {

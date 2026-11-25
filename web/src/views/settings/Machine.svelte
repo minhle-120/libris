@@ -285,14 +285,6 @@
         <dd>
           <p class="label">{deviceLabel?.help}</p>
           <div class="slots">
-            <button
-              class="slot"
-              class:on={app.settings.engineDevice === ''}
-              onclick={() => pick('')}
-            >
-              <span class="name">Let libris choose</span>
-              <span class="desc">The first device this build can use.</span>
-            </button>
             {#each report?.devices ?? [] as d (d.name)}
               <button
                 class="slot"

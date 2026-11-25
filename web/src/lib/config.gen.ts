@@ -78,7 +78,7 @@ export const settingGroups: SettingGroup[] = [
 			{
 				"key": "engineDevice",
 				"label": "Run models on",
-				"help": "Which device llama.cpp offloads to. The choices are what the installed engine reports; Auto uses the first device that build can use, which is CPU only when the engine found no GPU.",
+				"help": "Which device llama.cpp offloads to. The choices are the slots the installed engine reports, CPU among them.",
 				"kind": "text",
 				"hidden": true,
 				"mode": "managed"

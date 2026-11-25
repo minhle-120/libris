@@ -57,6 +57,13 @@ type Input struct {
 	EmbedComplete bool
 
 	Serving bool
+
+	// Autostart says libris's own start-up has taken responsibility for bringing the
+	// router up in this process. It is what turns "the process is the only thing
+	// missing" into "the process is on its way": without it, a machine that finished
+	// its steps part-way through a session would be let into the app with no router,
+	// no start in flight, and the one button that starts it gone with the wizard.
+	Autostart bool
 }
 
 // View is the answer, in the shape a caller uses.
@@ -83,6 +90,14 @@ type View struct {
 	// entry — serving — is the state libris can fix by itself, and start-up reads it
 	// to decide whether it should.
 	Blocking []Fact `json:"blocking,omitempty"`
+
+	// Starting is that same single entry read the other way: the person has nothing
+	// left to do and the router is the only thing missing, so the thing to look at is
+	// the app with the server arriving behind it, not a wizard describing a wait.
+	// It is a separate answer from Ready — "a question would be answered right now"
+	// is still false while the model loads — and it is in the view rather than a
+	// second rule in the screen, which is what the one-rule decision was about.
+	Starting bool `json:"starting"`
 }
 
 // For computes the answer. Pure: nothing is asked of the world, and nothing is
@@ -103,25 +118,33 @@ func For(in Input) View {
 	serving := in.Serving
 
 	v := View{Engine: engine, Device: device, Models: models, Serving: serving}
-	if !engine {
-		v.Step = string(FactEngine)
-	} else if !device {
-		v.Step = string(FactDevice)
-	} else if !models {
-		v.Step = string(FactModels)
+
+	// The facts in the order a person would fix them. This one list decides both what is
+	// standing in the way and which thing to ask about first, so the order the screen
+	// shows and the order start-up reads cannot drift apart.
+	for _, f := range []struct {
+		fact   Fact
+		missed bool
+	}{
+		{FactEngine, !engine},
+		{FactDevice, engine && !device},
+		{FactModels, !models},
+		{FactServing, !serving},
+	} {
+		if f.missed {
+			v.Blocking = append(v.Blocking, f.fact)
+		}
 	}
 
-	if !engine {
-		v.Blocking = append(v.Blocking, FactEngine)
-	}
-	if engine && !device {
-		v.Blocking = append(v.Blocking, FactDevice)
-	}
-	if !models {
-		v.Blocking = append(v.Blocking, FactModels)
-	}
-	if !serving {
-		v.Blocking = append(v.Blocking, FactServing)
+	// The head of that list is the step, except when the only thing missing is serving —
+	// libris's own job, which no person has to act on. That exception is also the only
+	// case Starting can mean anything: nothing left to ask, and a start either in flight
+	// or not.
+	switch {
+	case len(v.Blocking) == 1 && v.Blocking[0] == FactServing:
+		v.Starting = in.Autostart
+	case len(v.Blocking) > 0:
+		v.Step = string(v.Blocking[0])
 	}
 
 	v.Ready = len(v.Blocking) == 0
@@ -133,10 +156,16 @@ func For(in Input) View {
 // this machine is already settled, and stay out of the way otherwise — a router
 // started before anyone confirmed the device, or holding one of two models, would
 // be a process that reports itself healthy and fails the next question.
+//
+// It is read from the same Blocking list the screen renders, because the program that
+// starts the process and the page that waits for it are asking one question. It ignores
+// Autostart on purpose: start-up is what sets that flag, so answering this one from it
+// would let the flag decide whether to set itself. Unmanaged mode needs no clause —
+// For has already said there is nothing blocking, so nothing is missing.
 func Startable(in Input) bool {
-	if !in.Managed || in.Serving {
-		return false
+	if in.Managed && !in.Serving {
+		v := For(in)
+		return len(v.Blocking) == 1 && v.Blocking[0] == FactServing
 	}
-	v := For(in)
-	return len(v.Blocking) == 1 && v.Blocking[0] == FactServing
+	return false
 }

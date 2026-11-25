@@ -8,7 +8,7 @@ import (
 func completeMachine() Input {
 	return Input{
 		Managed: true, EngineInstalled: true,
-		Ack: "b12674:boot-1|engine=b12674|linux/amd64", AckNow: "b12674:boot-1|engine=b12674|linux/amd64",
+		Ack: "b12674:machine-1|engine=b12674|linux/amd64", AckNow: "b12674:machine-1|engine=b12674|linux/amd64",
 		ChatComplete: true, EmbedComplete: true,
 	}
 }
@@ -47,18 +47,33 @@ func TestUnconfirmedDeviceIsAStepNotAPass(t *testing.T) {
 	}
 }
 
-// The confirmation is about this engine build on this machine. A reboot, a new build
-// with a different device list, or a data directory copied onto other hardware all
-// mean the row has never been shown for what is here now.
+// The confirmation is about this engine build on this machine: a new build reports a
+// different device list, and a directory copied onto other hardware has never been shown the
+// row. A reboot is neither of those. It changes what the machine can be asked — that is the
+// device cache's key, which does move — but not who was already told, so a key that moved
+// with it reopened the setup screen on every start of a machine that was set up.
 func TestConfirmationIsKeyedToEngineAndMachine(t *testing.T) {
-	in := completeMachine()
-	in.AckNow = "b12674:boot-2|engine=b12674|linux/amd64" // rebooted
-	v := For(in)
-	if v.Device {
-		t.Errorf("a stale confirmation answered for a machine never shown the row: %+v", v)
-	}
-	if v.Step != string(FactDevice) {
-		t.Errorf("step = %q, want device", v.Step)
+	for _, tc := range []struct {
+		name   string
+		ackNow string
+		device bool
+	}{
+		{"the same machine, next start-up", "b12674:machine-1|engine=b12674|linux/amd64", true},
+		{"a newer engine build", "b12700:machine-1|engine=b12700|linux/amd64", false},
+		{"a copied data directory", "b12674:machine-2|engine=b12674|linux/amd64", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in := completeMachine()
+			in.AckNow = tc.ackNow
+			v := For(in)
+
+			if v.Device != tc.device {
+				t.Errorf("device = %v, want %v for %q", v.Device, tc.device, tc.ackNow)
+			}
+			if !tc.device && v.Step != string(FactDevice) {
+				t.Errorf("step = %q, want device", v.Step)
+			}
+		})
 	}
 }
 
@@ -129,6 +144,54 @@ func TestStartableIsEverythingButTheProcess(t *testing.T) {
 	noEngine.EngineInstalled = false
 	if Startable(noEngine) {
 		t.Error("start-up started an engine that is not on disk")
+	}
+}
+
+// The gate is the wizard being the screen. A machine that has done everything a person
+// can do, while libris's own start-up brings its model server up, has nothing left to ask
+// — and every cold start used to answer it with a wizard anyway, because the gate was read
+// once at boot and the router takes longer to load a model than the page takes to ask.
+func TestTheWizardDoesNotWaitForAProcessLibrisIsStarting(t *testing.T) {
+	going := completeMachine()
+	going.Autostart = true
+	v := For(going)
+	if v.Ready {
+		t.Fatal("a router that is not up would not answer a question")
+	}
+	if !v.Starting {
+		t.Errorf("the only thing missing is a process libris is starting: %+v", v)
+	}
+	if v.Step != "" {
+		t.Errorf("step = %q, want none: there is nothing left to ask", v.Step)
+	}
+
+	// Nobody is starting it — the machine only finished its steps part-way through a
+	// session, after start-up had already stood down. Here the wizard is the only thing
+	// with a Start button, so it is the screen, and a flag invented from the missing fact
+	// alone would have walked past it into an app that answers nothing.
+	if For(completeMachine()).Starting {
+		t.Error("a missing router with no start in flight opened the gate anyway")
+	}
+
+	up := completeMachine()
+	up.Serving = true
+	up.Autostart = true
+	if w := For(up); w.Starting || !w.Ready {
+		t.Errorf("a running router is not a start in flight: %+v", w)
+	}
+
+	// A machine still waiting on a person stays behind the gate, even though the router is
+	// missing from it too — Starting means nothing left to ask, not merely something running.
+	noDevice := completeMachine()
+	noDevice.Ack = ""
+	noDevice.Autostart = true
+	if For(noDevice).Starting {
+		t.Error("an unconfirmed device is a step for a person, not a process libris is starting")
+	}
+
+	// Unmanaged mode runs nothing, so there is no start for a wizard to wait on.
+	if For(Input{Managed: false}).Starting {
+		t.Error("external mode reported a start it does not own")
 	}
 }
 

@@ -105,9 +105,10 @@ type Options struct {
 
 	Run Run
 
-	// Now and BootID keep Detect deterministic in tests.
-	Now    func() time.Time
-	BootID func() string
+	// Now, BootID and MachineID keep Detect and the two keys deterministic in tests.
+	Now       func() time.Time
+	BootID    func() string
+	MachineID func() string
 }
 
 func (o Options) withDefaults() Options {
@@ -121,6 +122,9 @@ func (o Options) withDefaults() Options {
 	}
 	if o.BootID == nil {
 		o.BootID = readBootID
+	}
+	if o.MachineID == nil {
+		o.MachineID = readMachineID
 	}
 	return o
 }
@@ -180,13 +184,18 @@ func Detect(ctx context.Context, opts Options) Report {
 // that asked only the engine could not say that a CPU exists — and "this runs on the CPU"
 // is the answer a person on the box with no GPU needs. Nothing is read or run: it is a
 // property of the binary already executing.
+//
+// The name is llama.cpp's own word for the choice rather than the human one, because the
+// row is what the device picker sends back: "CPU" would reach the preset as --device CPU,
+// which ggml rejects and exits on, leaving a settings page that said everything was fine.
+// The human words go in the description, which is where the picker prints them.
 func cpuDevice() Device {
-	d := Device{Kind: CPU, Name: "CPU", Source: "go"}
+	d := Device{Kind: CPU, Name: DeviceNone, Source: "go", Description: "CPU"}
 	switch runtime.GOARCH {
 	case "amd64":
-		d.Name = "x86-64 CPU"
+		d.Description = "x86-64 CPU"
 	case "arm64":
-		d.Name = "ARM64 CPU"
+		d.Description = "ARM64 CPU"
 	}
 	return d
 }
@@ -299,6 +308,30 @@ func Fingerprint(o Options) string {
 	if id := o.BootID(); id != "" {
 		parts = append(parts, "boot="+id)
 	}
+	return key(o, parts)
+}
+
+// AckKey is the key a device confirmation is stamped with, and it is deliberately not
+// Fingerprint. A confirmation is a claim about an engine build on a machine, and a reboot
+// changes neither — a key that moves every boot re-asks a person who already answered,
+// which on Linux meant the whole setup screen reopened on every start. The per-install
+// machine id is the identity that survives a reboot and still differs between two machines,
+// so a data directory copied onto other hardware asks again, which is the answer the
+// confirmation exists to give. Where no machine id can be read — Windows, macOS — the key
+// is the engine build and the architecture, the same thing it has always been there.
+func AckKey(o Options) string {
+	o = o.withDefaults()
+
+	var parts []string
+	if id := o.MachineID(); id != "" {
+		parts = append(parts, "machine="+id)
+	}
+	return key(o, parts)
+}
+
+// key finishes both keys with the halves they share: which engine build answers, and what
+// kind of machine it is on.
+func key(o Options, parts []string) string {
 	if o.EngineBin != "" {
 		tag := o.EngineTag
 		if tag == "" {
@@ -321,6 +354,23 @@ func readBootID() string {
 		return ""
 	}
 	return strings.TrimSpace(string(raw))
+}
+
+// readMachineID is the other Linux identity file, and it is a different thing: written once
+// at install, so it says which machine this is rather than which start-up. The second path
+// is where distributions that do not ship /etc/machine-id put it; both are empty on
+// Windows and macOS, where AckKey falls back to the engine build alone.
+func readMachineID() string {
+	for _, path := range []string{"/etc/machine-id", "/var/lib/dbus/machine-id"} {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		if id := strings.TrimSpace(string(raw)); id != "" {
+			return id
+		}
+	}
+	return ""
 }
 
 // ---- cache --------------------------------------------------------------------------

@@ -149,8 +149,11 @@ func TestDetectNoneIsAnAnswerNotAFailure(t *testing.T) {
 	if len(rep.Warnings) == 0 || !strings.Contains(rep.Warnings[0], "run on the CPU") {
 		t.Fatalf("want the CPU-only sentence, got %q", rep.Warnings)
 	}
-	if rep.Devices[0].Kind != CPU || rep.Devices[0].Name == "" {
-		t.Errorf("cpu row = %+v, want a generic one", rep.Devices[0])
+	if rep.Devices[0].Kind != CPU || rep.Devices[0].Name != DeviceNone {
+		t.Errorf("cpu row = %+v, want one named by the value the picker sends to llama.cpp", rep.Devices[0])
+	}
+	if rep.Devices[0].Description == "" {
+		t.Error("the cpu row's name is a flag value, so the human words have to live somewhere else")
 	}
 }
 
@@ -331,6 +334,55 @@ func TestFingerprintIsThisBootAndThisEngine(t *testing.T) {
 	// another machine on the same architecture.
 	if e := Fingerprint(o("", "", "")); strings.Contains(e, "boot=") {
 		t.Errorf("fingerprint %q, want no boot part when there is no boot id to read", e)
+	}
+}
+
+// The two keys answer different questions, and the bug this pins is what came from asking
+// one key to answer both: keyed to the boot, the device confirmation expired every time the
+// machine restarted, so a fully set-up box reopened its own wizard on every start.
+func TestAckKeyIgnoresTheBootAndKeepsTheMachine(t *testing.T) {
+	o := func(bin, tag, boot, machine string) Options {
+		return Options{
+			EngineBin: bin,
+			EngineTag: tag,
+			BootID:    func() string { return boot },
+			MachineID: func() string { return machine },
+		}
+	}
+	const bin = "/data/bin/b12649/llama-server"
+
+	a := AckKey(o(bin, "b12649", bootID, "machine-1"))
+	if strings.Contains(a, "boot=") {
+		t.Errorf("ack key %q, want no boot part: a confirmation is not about a start-up", a)
+	}
+	if !strings.Contains(a, "machine=machine-1") || !strings.Contains(a, "engine=b12649") {
+		t.Errorf("ack key %q, want it keyed to this machine and this build", a)
+	}
+
+	// Restarting changes which start-up this is, and leaves the confirmation where it was.
+	if b := AckKey(o(bin, "b12649", "boot-2", "machine-1")); b != a {
+		t.Error("a different boot changed the ack key, so the wizard re-asks a person who answered")
+	}
+	// The device cache does notice, because a fresh start-up really can report a different
+	// device list. That is the whole reason the two keys are not one key.
+	if Fingerprint(o(bin, "b12649", "boot-2", "machine-1")) ==
+		Fingerprint(o(bin, "b12649", bootID, "machine-1")) {
+		t.Error("the cache key stopped noticing a reboot")
+	}
+
+	// A data directory copied onto other hardware has never been shown the row; neither has
+	// a new build, whose device list is a different list.
+	if c := AckKey(o(bin, "b12649", bootID, "machine-2")); c == a {
+		t.Error("another machine produced the same ack key")
+	}
+	if d := AckKey(o("/data/bin/b12700/llama-server", "b12700", bootID, "machine-1")); d == a {
+		t.Error("a different engine build produced the same ack key")
+	}
+
+	// Where no machine id can be read — Windows, macOS — the build and the architecture are
+	// all the key has, which is what it was keyed to there before.
+	if e := AckKey(o(bin, "b12649", bootID, "")); strings.Contains(e, "machine=") {
+		t.Errorf("ack key %q, want no machine part when there is no machine id to read", e)
 	}
 }
 

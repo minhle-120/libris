@@ -99,8 +99,8 @@ the program has already acted on.
 _Avoid_: Readiness, onboarding, first run
 
 **Confirmed**:
-Somebody saw what this engine build reports about this machine, and chose a device or told
-libris to pick. Not inferable from the device setting, which is blank both when libris picks
+Somebody saw what this engine build reports about this machine, and chose one of the devices it
+names. Not inferable from the device setting, which is blank both when libris picks
 and when nobody was asked; and not permanent, since a new build reports different devices and a
 copied data directory sits on different hardware.
 _Avoid_: Acknowledged, accepted, dismissed

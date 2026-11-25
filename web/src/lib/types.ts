@@ -328,6 +328,10 @@ export type Fact = 'engine' | 'device' | 'models' | 'serving';
 
 export type SetupView = {
   ready: boolean;
+  /** The only thing missing is libris's own model server, which its start-up is bringing up.
+   *  Nothing is left for a person to do, so this is not a reason to show the wizard — unlike
+   *  ready, which is still false while the model loads. */
+  starting: boolean;
   /** The first thing to do about it; absent when there is nothing left to do. */
   step?: Fact;
   engine: boolean;
