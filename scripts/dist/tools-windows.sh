@@ -90,16 +90,26 @@ fi
 licenses="$out/share/licenses"
 mkdir -p "$licenses"
 if command -v pacman >/dev/null 2>&1; then
-  # Which packages the two programs came from, and what they were pulled in by. Asked two
-  # ways because pacman answers the two questions differently: -Qqo names the owner of a
-  # file, pactree names the dependency tree — and a DLL copied out of a dependency's own
-  # folder has no license folder beside it, so the tree is what makes the set complete.
+  # Who owns each file that went into the bundle — asked of the files themselves rather than
+  # of a dependency tree, because the tree is what pacman *thinks* poppler needs, while this
+  # is what it resolved to and what is actually being redistributed. pacman is a Windows
+  # program: hand it the Windows form of a path or it answers nothing at all, which is a
+  # quiet way to ship GPL binaries without their texts.
   pkgs=$(
-    pacman -Qqo "$prefix/bin/pdftotext.exe" "$prefix/bin/pdftoppm.exe" 2>/dev/null
-    pactree -l mingw-w64-ucrt-x86_64-poppler 2>/dev/null | sed 's/ .*//'
-  )
+    {
+      for f in "$out"/*.exe "$out"/*.dll; do cygpath -w "$f"; done
+      cygpath -w "$prefix/share/poppler"
+    } | xargs -r pacman -Qqo 2>/dev/null
+  ) || pkgs=
+
   for pkg in $(printf '%s\n' "$pkgs" | sort -u); do
-    [ -d "$prefix/share/licenses/$pkg" ] && cp -r "$prefix/share/licenses/$pkg" "$licenses/"
+    if [ -d "$prefix/share/licenses/$pkg" ]; then
+      cp -r "$prefix/share/licenses/$pkg" "$licenses/"
+    else
+      # Named rather than skipped: a package with no license folder here is a hole in the
+      # redistribution, and an empty folder would not say which one.
+      echo "tools-windows: $pkg owns a shipped file and has no license folder" >&2
+    fi
   done
 fi
 find "$licenses" -type d -empty -delete 2>/dev/null || true
