@@ -12,6 +12,30 @@ import (
 	"libris/internal/engine"
 )
 
+// TestPresetWritesNoSlotCount asserts an absence, which the presence loop cannot.
+//
+// Nothing is written for slots, and the absence is the choice: llama-server's default for a
+// model instance is auto, which is 4 slots *with* one KV buffer shared across them. Naming the
+// key keeps the slots but hands each one ctx-size/N of context instead of the shared pool, and a
+// page raster is not a 100-word chunk. So an edit that puts a number back here is not a tuning
+// change — it is a switch back to the thing leaving it out exists to avoid.
+func TestPresetWritesNoSlotCount(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "libris.ini")
+	if err := engine.Preset(path, "", []engine.Model{
+		{Alias: engine.AliasEmbed, Kind: engine.KindEmbed, Path: "/m/emb.gguf"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := string(raw); strings.Contains(got, "parallel") {
+		t.Errorf("preset names a slot count; the default that leaves it out is the one that also shares the KV buffer:\n%s", got)
+	}
+}
+
 func TestPresetWritesOneSectionPerModel(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "libris.ini")
 	err := engine.Preset(path, "", []engine.Model{
@@ -48,13 +72,14 @@ func TestPresetWritesOneSectionPerModel(t *testing.T) {
 		}
 	}
 
-	// Capacity is here, on the server, and never on the wire. Each number is per
-	// architecture: the chat model's context is what the research loop's history needs, the
-	// embedder's is its own training limit, and -fit still shrinks either one to the memory
-	// llama.cpp actually finds.
+	// Capacity is here, on the server, and never on the wire. The chat model's context is what
+	// the research loop's history needs. The embedder's is not a trained limit (its GGUF says
+	// 262144) but the pool that the four sequences of one embeddings request share, sized so a
+	// page raster's vision tokens and three prose chunks fit in it together. -fit still shrinks
+	// either one to the memory llama.cpp actually finds.
 	for _, want := range []string{
 		"[libris-chat]\nmodel = /m/chat.gguf", "ctx-size = 32768",
-		"ctx-size = 4096", // the embedder
+		"ctx-size = 8192", // the embedder
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("preset is missing %q:\n%s", want, got)

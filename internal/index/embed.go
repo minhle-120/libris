@@ -25,10 +25,13 @@ import (
 	"libris/internal/llm"
 )
 
-// batchLimit bounds how many segments go into one request. Multimodal inputs
-// carry whole page rasters, so a large batch is a large body and a long stall on
-// a server with one slot; eight is enough to keep the round trips down without
-// making a request that a busy server must refuse outright.
+// batchLimit bounds how many segments go into one request. llama.cpp makes one task per input
+// and queues them together, so this is how many the instance may have in hand, not how many it
+// runs at once — and eight deliberately sits ahead of the four slots a model instance is given
+// by default. A batch that exactly fills the slots empties the queue at every round trip, and
+// the GPU then waits on this file while the next request is assembled. Multimodal inputs carry
+// whole page rasters, so a far larger batch is a large body and a long stall, and eight stays
+// small enough that a busy server never has to refuse a request outright.
 const batchLimit = 8
 
 // MaxAssetBytes refuses to inline a media file this large. It is not a tuning

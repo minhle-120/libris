@@ -58,6 +58,15 @@ func PresetPath(dataDir, id string) string {
 // arguments that fit the memory it finds rather than libris claiming numbers it cannot
 // measure — which is also why the device report stops at reporting.
 //
+// Nothing is written for slots, and the absence is the choice. llama-server's default for a
+// model instance is auto, and auto means 4 slots *and* one KV buffer shared across them
+// ("n_parallel is set to auto, using n_parallel = 4 and kv_unified = true", tools/server/
+// server.cpp). A count of 1 gives continuous batching — which is on by default — exactly one
+// task to schedule, so the eight chunks one embeddings request queues ran one after another.
+// Writing 4 outright would keep the slots and lose the shared buffer, because that is only
+// implied by auto: naming the key hands each slot ctx-size/4 of context, and a page raster is
+// not a 100-word chunk. So the key stays out, and serve_test.go asserts that it is.
+//
 // device is the one global that varies by machine, and it is not a preference: the value is a
 // slot name from that build's --list-devices, and a name it does not know is a parse error
 // that stops the server from starting at all (measured on the build libris downloads:
@@ -106,7 +115,6 @@ func Preset(path string, device string, models []Model) error {
 	b.WriteString("no-warmup = true\n")
 	b.WriteString("backend-sampling = true\n")
 	b.WriteString("fit = on\n")
-	b.WriteString("parallel = 1\n")
 	b.WriteString("cache-type-k = q8_0\n")
 	b.WriteString("cache-type-v = q8_0\n")
 	fmt.Fprintf(&b, "cache-ram = %d\n", chatCacheRAMMiB)

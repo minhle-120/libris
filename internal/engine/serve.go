@@ -79,8 +79,12 @@ type Model struct {
 //
 // The context sizes are per architecture, not per machine: 32k for the chat model is what its
 // template and the research loop's history want, and llama.cpp still shrinks the ones it has
-// to with -fit; 4k for the embedder is its own training limit, and a longer context there
-// would be a longer scan for a vector of the same length.
+// to with -fit. The embedder's 8k is not what a 100-word chunk needs — its own GGUF says
+// gemma-embedding2.context_length = 262144, so 8k is nowhere near the trained limit, and the
+// four slots of an embeddings instance share one pool rather than each getting a quarter of it.
+// What shares that pool is not only prose: a page raster arrives as vision tokens, several times
+// the size of the paragraph it shows. The pool is where concurrent segments collide, so the pool
+// is sized for the largest of them and the others.
 //
 // The five sampling numbers are on the chat model because the chat model is the one thing that
 // plans. A research turn that must answer with a tool call wants a cold distribution — temp
@@ -90,7 +94,7 @@ type Model struct {
 // paraphrase a citation it should copy.
 const (
 	chatCtx  = 32768
-	embedCtx = 4096
+	embedCtx = 8192
 )
 
 // Serving is the truth about libris's own llama-server, as the settings page shows it.
