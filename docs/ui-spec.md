@@ -423,6 +423,12 @@ scrolls would move the input out from under the keyboard mid-question.
   It is neither the answer nor the evidence for it (the citation chips are the evidence), and the panel
   says so in its own caption. Nothing feeds it back to a model.
 
+  What is disclosed here is the **answer's** thinking, and by default the only thinking there is: the
+  research loop is asked not to think, because whatever it wrote to itself before naming a search is
+  thrown away the moment the call lands. Settings → Retrieval → **Think before searching** puts the loop
+  back to deliberating, and the screen does not change either way — that thinking is never drawn, only
+  paid for.
+
 #### The turn in flight
 
 The moment a question is sent it appears on screen. A turn can take half a minute and a spinner for that

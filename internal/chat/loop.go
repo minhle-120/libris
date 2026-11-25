@@ -29,6 +29,19 @@ type Config struct {
 	MaxIterations int
 	RecallTopK    int
 	FinalTopK     int
+
+	// Thinking decides whether the model is allowed to deliberate before it names a
+	// search. Off is the default because the loop throws that writing away the moment the
+	// tool call lands, and it is paid for on every iteration — unlike the answer turn,
+	// where the reader is shown the deliberation and asked to trust it.
+	Thinking bool
+}
+
+// templateKwargs is how that decision reaches the model. Sent on every turn rather than
+// omitted when it agrees with the server, because a switch on screen that only works when
+// llama.cpp happens to have been started the same way is not a switch.
+func (c Config) templateKwargs() *llm.ChatTemplateKwargs {
+	return &llm.ChatTemplateKwargs{EnableThinking: c.Thinking}
 }
 
 // Options is the retrieval depth this turn searches at.
@@ -178,6 +191,10 @@ func (r *Research) Ask(ctx context.Context, notebookID, question, history string
 			// which is the one failure the whole loop exists to prevent. The prose
 			// fallback below is for the models that ignore this anyway.
 			ToolChoice: llm.ToolChoiceRequired,
+			// The turn's whole output is a tool call, so this is the one place in
+			// the answer path where a model's private deliberation buys nothing —
+			// see Config.Thinking for why the switch is off unless it is asked for.
+			ChatTemplateKwargs: r.cfg.templateKwargs(),
 		})
 		if err != nil {
 			// A turn the user stopped is not a failure, and reporting it as one

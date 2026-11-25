@@ -151,7 +151,8 @@ export class EmbedServer {
             // tools, so a count of them is a count of research calls.
             researchCalls: this.chatRequests.filter((r) => r.tools?.length).length,
             lastTools: this.chatRequests.filter((r) => r.tools?.length).at(-1)?.tools?.map((t) => t.function?.name) ?? null,
-            lastStream: this.chatRequests.at(-1)?.stream ?? null
+            lastStream: this.chatRequests.at(-1)?.stream ?? null,
+            ...this.thinkingSeen()
           }));
           return;
         }
@@ -191,6 +192,20 @@ export class EmbedServer {
         res.end(JSON.stringify({ object: 'list', model: parsed.model, data }));
       });
     });
+  }
+
+  /**
+   * What the last research call and the last answer call were told about thinking, for a
+   * harness in another process that can only ask. The research call is expected to carry the
+   * user's switch; the answer call is expected to say nothing and let the server decide.
+   */
+  thinkingSeen() {
+    const last = (withTools) =>
+      this.chatRequests.filter((r) => Boolean(r.tools?.length) === withTools).at(-1);
+    return {
+      lastResearchKwargs: last(true)?.chat_template_kwargs ?? null,
+      lastAnswerKwargs: last(false)?.chat_template_kwargs ?? null
+    };
   }
 
   /**

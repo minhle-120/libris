@@ -419,6 +419,7 @@ func chatConfig(cfg config.Config, models Models) chat.Config {
 		MaxIterations: cfg.MaxIterations,
 		RecallTopK:    cfg.RecallTopK,
 		FinalTopK:     cfg.FinalTopK,
+		Thinking:      cfg.ResearchThinking,
 	}
 }
 

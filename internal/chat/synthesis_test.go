@@ -353,3 +353,20 @@ func TestSynthesisRefusesAnEmptyQuestion(t *testing.T) {
 		t.Fatal("an empty question was answered")
 	}
 }
+
+// The answer turn says nothing about thinking, on purpose. What the model wrote to itself
+// there is shown to the reader and asked to be trusted, so the server's own default is the
+// thing worth keeping — the switch above is about the turn nobody watches.
+func TestSynthesisLeavesThinkingToTheServer(t *testing.T) {
+	stream := &fakeStream{chunks: textChunks("The coast retreats 3mm [[Chunk 1]].")}
+	synth := synthesizer(stream, nil)
+	if _, err := synth.Write(context.Background(), nil, evidenceSet(t), "How fast is the coastline retreating?", nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(stream.requests) != 1 {
+		t.Fatalf("%d calls, want 1", len(stream.requests))
+	}
+	if stream.requests[0].ChatTemplateKwargs != nil {
+		t.Error("the answer turn sent chat_template_kwargs: the synthesizer does not own that switch")
+	}
+}

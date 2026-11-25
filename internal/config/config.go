@@ -137,12 +137,20 @@ type Config struct {
 	EmbedDim   string `key:"embedDimensions" group:"models" label:"Embedding dimensions" help:"Probed once at startup and recorded with every segment." readonly:"true"`
 
 	// ── retrieval ────────────────────────────────────────────────
-	RecallTopK      int `key:"recallTopK" group:"retrieval" label:"Recall depth" help:"Candidates pulled from the vector scan, best first." min:"1" max:"100" unit:"candidates"`
-	FinalTopK       int `key:"finalTopK" group:"retrieval" label:"Evidence per search" help:"What the research agent sees in a tool result." min:"1" max:"50" unit:"chunks"`
-	MaxIterations   int `key:"maxIterations" group:"retrieval" label:"Max iterations" help:"Deeper multi-hop research; diminishing returns past 3." min:"1" max:"10"`
-	HistoryMessages int `key:"historyMessages" group:"retrieval" label:"History window" help:"Recent turns given to the synthesizer." min:"0" max:"64" unit:"messages"`
-	ChunkWords      int `key:"chunkWords" group:"retrieval" label:"Chunk size" help:"Target words per text chunk." min:"10" max:"1000" unit:"words"`
-	ChunkOverlap    int `key:"chunkOverlap" group:"retrieval" label:"Chunk overlap" help:"Words carried into the next chunk." min:"0" max:"999" unit:"words"`
+	RecallTopK    int `key:"recallTopK" group:"retrieval" label:"Recall depth" help:"Candidates pulled from the vector scan, best first." min:"1" max:"100" unit:"candidates"`
+	FinalTopK     int `key:"finalTopK" group:"retrieval" label:"Evidence per search" help:"What the research agent sees in a tool result." min:"1" max:"50" unit:"chunks"`
+	MaxIterations int `key:"maxIterations" group:"retrieval" label:"Max iterations" help:"Deeper multi-hop research; diminishing returns past 3." min:"1" max:"10"`
+
+	// The research turn's only output is a tool call, so what a model wrote to itself
+	// before naming that search is thrown away the moment the call lands — paid for in
+	// seconds on every iteration, read by nobody. The answer turn is not in this switch
+	// because its deliberation is shown to the reader, which is why there is one setting
+	// here and not two. Sent explicitly rather than left to the server's default: a switch
+	// that works only when llama.cpp was started the same way is not a switch.
+	ResearchThinking bool `key:"researchThinking" group:"retrieval" label:"Think before searching" help:"Off sends the search request straight away. On lets the model reason first, which costs time each iteration and sometimes picks a better search. The answer's own thinking is unaffected."`
+	HistoryMessages  int  `key:"historyMessages" group:"retrieval" label:"History window" help:"Recent turns given to the synthesizer." min:"0" max:"64" unit:"messages"`
+	ChunkWords       int  `key:"chunkWords" group:"retrieval" label:"Chunk size" help:"Target words per text chunk." min:"10" max:"1000" unit:"words"`
+	ChunkOverlap     int  `key:"chunkOverlap" group:"retrieval" label:"Chunk overlap" help:"Words carried into the next chunk." min:"0" max:"999" unit:"words"`
 
 	// ── ingest ───────────────────────────────────────────────────
 	PDFMode       PDFMode `key:"pdfPageImages" group:"ingest" label:"PDF embeddings" help:"A PDF becomes two documents: page text and page rasters." kind:"enum" enum:"pdfModes"`
@@ -180,12 +188,15 @@ func Default() Config {
 		EmbedModel: "",
 		EmbedDim:   "",
 
-		RecallTopK:      10,
-		FinalTopK:       5,
-		MaxIterations:   5,
-		HistoryMessages: 8,
-		ChunkWords:      100,
-		ChunkOverlap:    50,
+		RecallTopK:    10,
+		FinalTopK:     5,
+		MaxIterations: 5,
+		// Off, and worth writing down rather than inheriting from the zero value: the
+		// thinking a research turn does is the one thinking nobody sees.
+		ResearchThinking: false,
+		HistoryMessages:  8,
+		ChunkWords:       100,
+		ChunkOverlap:     50,
 
 		PDFMode:       PDFModeAlways,
 		PDFDPI:        110,

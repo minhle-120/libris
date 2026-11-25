@@ -237,6 +237,20 @@ const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ask-p
   );
   checks.check('the answer call streamed', wire.lastStream === true, () => `stream=${wire.lastStream}`);
 
+  // The switch that lets a research model think before it searching is only a setting if it
+  // reaches the wire. Off is the default, and the answer turn is expected to say nothing
+  // about thinking either way: what the reader is shown stays the server's to offer.
+  checks.check(
+    'the research call carried the thinking switch, off by default',
+    wire.lastResearchKwargs?.enable_thinking === false,
+    () => JSON.stringify(wire.lastResearchKwargs)
+  );
+  checks.check(
+    'the answer call said nothing about thinking',
+    wire.lastAnswerKwargs === null,
+    () => JSON.stringify(wire.lastAnswerKwargs)
+  );
+
   // The row appeared because the question did, and it is the server's title — the
   // question, one line — not a string the browser made up on the way past.
   const thread = await ui.until(`
@@ -828,6 +842,130 @@ An invented [[Chunk 99]] and a malformed [[chunk 3]] label.`;
     () => `${stopped?.text.length} of ${long.length} chars`
   );
   checks.check('and says that it was stopped', /Stopped/.test(stopped?.note ?? ''), where);
+
+  // ── the thinking switch, from the row in Settings to the request body ──
+  // Off by default and proven on the wire above. This is the other half: that the row
+  // Settings generates is clickable, that the save lands on the server, and that the next
+  // turn's research call carries what was clicked. The answer call stays silent throughout.
+  await control({ reset: true });
+  await ui.eval(
+    `const b = [...document.querySelectorAll('button')].find((x) => x.title === 'Settings'); if (b) b.click(); return !!b;`
+  );
+  await ui.settle(400);
+
+  const thinkRow = `
+    const row = [...document.querySelectorAll('.row')].find((r) =>
+      r.querySelector('.label span')?.textContent.trim() === 'Think before searching');
+    const sw = row?.querySelector('button.switch');
+    return sw
+      ? { checked: sw.getAttribute('aria-checked'), label: sw.getAttribute('aria-label') }
+      : null;
+  `;
+  const offRow = await ui.until(thinkRow);
+  checks.check(
+    'Settings renders the thinking switch, off',
+    offRow?.checked === 'false' && offRow?.label === 'Think before searching',
+    () => JSON.stringify(offRow)
+  );
+
+  await ui.eval(`
+    const row = [...document.querySelectorAll('.row')].find((r) =>
+      r.querySelector('.label span')?.textContent.trim() === 'Think before searching');
+    row.querySelector('button.switch').click();
+    return true;
+  `);
+  await ui.settle(200);
+  const flipped = await ui.eval(`
+    const sw = [...document.querySelectorAll('button.switch')]
+      .find((s) => s.getAttribute('aria-label') === 'Think before searching');
+    const save = [...document.querySelectorAll('.panels button')]
+      .find((b) => b.textContent.trim() === 'Save changes');
+    return { checked: sw?.getAttribute('aria-checked'), saveDisabled: save?.disabled === true };
+  `);
+  checks.check(
+    'the click flips it and marks the page unsaved',
+    flipped.checked === 'true' && flipped.saveDisabled === false,
+    () => JSON.stringify(flipped)
+  );
+
+  await ui.click('Save changes');
+  const savedAgain = await ui.until(`
+    const save = [...document.querySelectorAll('.panels button')]
+      .find((b) => b.textContent.trim() === 'Save changes');
+    return save && save.disabled ? { clean: true } : null;
+  `);
+  checks.check('and it saves', savedAgain?.clean === true, () => JSON.stringify(savedAgain));
+
+  const savedOnServer = await fetch(`${api}/api/settings`).then((r) => r.json());
+  checks.check(
+    'the server kept the new value',
+    savedOnServer.researchThinking === true,
+    () => JSON.stringify(savedOnServer).slice(0, 160)
+  );
+
+  // Reloaded rather than navigated back: it is what a person who just changed a setting
+  // does next, and it lets the row be read again from the server's copy rather than from
+  // the click that produced it.
+  await ui.reload(app);
+  await ui.eval(
+    `const b = [...document.querySelectorAll('button')].find((x) => x.title === 'Settings'); if (b) b.click(); return !!b;`
+  );
+  const onRow = await ui.until(thinkRow);
+  checks.check(
+    'after a reload the row is drawn from what was saved, not from the click',
+    onRow?.checked === 'true',
+    () => JSON.stringify(onRow)
+  );
+
+  await ui.reload(app);
+  checks.check(
+    'the notebook is back after the detour',
+    (await openNotebook(ui, name)).ok
+  );
+  const withThinking = await askAndRead(ui, 'What does the paper measure now?');
+  checks.check('that turn answered', !!withThinking?.text, () => JSON.stringify(withThinking));
+  const afterSwitch = await stats();
+  checks.check(
+    'with the switch on, the research call says enable_thinking true',
+    afterSwitch.lastResearchKwargs?.enable_thinking === true,
+    () => JSON.stringify(afterSwitch.lastResearchKwargs)
+  );
+  checks.check(
+    'the answer call still says nothing about thinking',
+    afterSwitch.lastAnswerKwargs === null,
+    () => JSON.stringify(afterSwitch.lastAnswerKwargs)
+  );
+
+  // `make ui` runs every harness against one server and one data directory, so the switch
+  // is put back the way it was found rather than left on for whoever runs next.
+  await ui.eval(
+    `const b = [...document.querySelectorAll('button')].find((x) => x.title === 'Settings'); if (b) b.click(); return !!b;`
+  );
+  await ui.settle(400);
+  await ui.eval(`
+    const sw = [...document.querySelectorAll('button.switch')]
+      .find((s) => s.getAttribute('aria-label') === 'Think before searching');
+    if (!sw) throw new Error('the thinking switch is gone');
+    if (sw.getAttribute('aria-checked') === 'true') sw.click();
+    return true;
+  `);
+  await ui.settle(200);
+  const backOff = await ui.until(`
+    const sw = [...document.querySelectorAll('button.switch')]
+      .find((s) => s.getAttribute('aria-label') === 'Think before searching');
+    return sw ? { checked: sw.getAttribute('aria-checked') } : null;
+  `);
+  await ui.click('Save changes');
+  const cleanAgain = await ui.until(`
+    const save = [...document.querySelectorAll('.panels button')]
+      .find((b) => b.textContent.trim() === 'Save changes');
+    return save && save.disabled ? { clean: true } : null;
+  `);
+  checks.check(
+    'the switch is saved back off, as the run found it',
+    backOff?.checked === 'false' && cleanAgain?.clean === true,
+    () => JSON.stringify({ ...backOff, ...cleanAgain })
+  );
 
   // Everything above is a deliberate failure — a dead server, a stopped stream, a
   // model that refuses to search. None of it may look like a bug in the page.

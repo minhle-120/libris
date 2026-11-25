@@ -316,6 +316,39 @@ func TestChatStreamBadChunk(t *testing.T) {
 	}
 }
 
+// chat_template_kwargs is the one part of the request that is not a top-level key: llama.cpp
+// merges the object into the chat template and throws on a kwarg of the wrong JSON type, so a
+// bool has to arrive as a bool. Silence has to stay silence — an absent object is what leaves
+// the server's own default in charge.
+func TestChatTemplateKwargsOnTheWire(t *testing.T) {
+	srv, rec := server(t, 200, `{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`, nil)
+	c := newClient(t, llm.Config{ChatURL: srv.URL})
+
+	_, err := c.Chat(context.Background(), llm.ChatRequest{
+		Messages:           []llm.Message{{Role: llm.RoleUser, Content: "hi"}},
+		ChatTemplateKwargs: &llm.ChatTemplateKwargs{EnableThinking: false},
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	kw, ok := decode[map[string]any](t, rec.body)["chat_template_kwargs"].(map[string]any)
+	if !ok {
+		t.Fatalf("no chat_template_kwargs object on the wire: %s", rec.body)
+	}
+	if got, ok := kw["enable_thinking"].(bool); !ok || got {
+		t.Errorf("enable_thinking = %#v, want the JSON boolean false", kw["enable_thinking"])
+	}
+
+	if _, err := c.Chat(context.Background(), llm.ChatRequest{
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}},
+	}); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if _, ok := decode[map[string]any](t, rec.body)["chat_template_kwargs"]; ok {
+		t.Error("a request with no opinion about thinking still sent chat_template_kwargs")
+	}
+}
+
 // ── embeddings ───────────────────────────────────────────────────
 
 func TestEmbedTextInputs(t *testing.T) {

@@ -814,4 +814,29 @@ func containsContaining(lines []string, substr string) bool {
 	return false
 }
 
+// The loop's one output is a tool call, so the writing a model does before naming that
+// search is thrown away — which is why the switch is off. It is still sent when it is off:
+// a setting that only works when llama.cpp was started the same way is not a setting.
+func TestThinkingSwitchTravelsOnEveryResearchRequest(t *testing.T) {
+	for _, thinking := range []bool{false, true} {
+		cfg := defaultConfig()
+		cfg.Thinking = thinking
+		model := &fakeLLM{replies: []llm.ChatResponse{textReply("answering from memory")}}
+		r := NewResearch(model, retrieve.New(&stubCorpus{}, &stubEmbed{}, nil), cfg, nil)
+		if _, err := r.Ask(context.Background(), "nb1", "How fast is the coastline retreating?", ""); err != nil {
+			t.Fatalf("Thinking=%v: the turn raised: %v", thinking, err)
+		}
+		if len(model.requests) != 1 {
+			t.Fatalf("Thinking=%v: %d requests reached the model, want 1", thinking, len(model.requests))
+		}
+		kw := model.requests[0].ChatTemplateKwargs
+		if kw == nil {
+			t.Fatalf("Thinking=%v: no chat_template_kwargs sent, so the server default answered for the user", thinking)
+		}
+		if kw.EnableThinking != thinking {
+			t.Errorf("Thinking=%v sent enable_thinking=%v", thinking, kw.EnableThinking)
+		}
+	}
+}
+
 var _ = json.Marshal

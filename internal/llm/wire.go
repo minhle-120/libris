@@ -145,6 +145,25 @@ type ChatRequest struct {
 	Stream     bool      `json:"stream,omitempty"`
 	Tools      []Tool    `json:"tools,omitempty"`
 	ToolChoice string    `json:"tool_choice,omitempty"` // auto | none | required
+
+	// ChatTemplateKwargs is the object a server merges into the chat template before it
+	// renders the prompt. Nil sends no such object and leaves the server's own default in
+	// place — which is not the same as sending a value: llama.cpp starts some models with
+	// thinking on and others with it off, and only one of the two says what the user chose.
+	ChatTemplateKwargs *ChatTemplateKwargs `json:"chat_template_kwargs,omitempty"`
+}
+
+// ChatTemplateKwargs holds the one template flag libris sends. It is a struct rather than a
+// map so the key cannot be mistyped into something a server ignores in silence, and the flag
+// is a Go bool rather than an `any` because llama.cpp throws on a template kwarg of the wrong
+// type — {"enable_thinking": "false"} is a 500, not a preference.
+//
+// Checked against the pinned clone: tools/server/server-common.cpp merges the request object
+// over the --chat-template-kwargs defaults and reads enable_thinking out of it, overriding
+// whatever the server was started with. The CLI flag for the same key is deprecated in favour
+// of --reasoning; the request field is not.
+type ChatTemplateKwargs struct {
+	EnableThinking bool `json:"enable_thinking"`
 }
 
 type Usage struct {

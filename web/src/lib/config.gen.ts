@@ -34,6 +34,7 @@ export type Settings = {
 	recallTopK: number;
 	finalTopK: number;
 	maxIterations: number;
+	researchThinking: boolean;
 	historyMessages: number;
 	chunkWords: number;
 	chunkOverlap: number;
@@ -175,6 +176,12 @@ export const settingGroups: SettingGroup[] = [
 				"max": 10
 			},
 			{
+				"key": "researchThinking",
+				"label": "Think before searching",
+				"help": "Off sends the search request straight away. On lets the model reason first, which costs time each iteration and sometimes picks a better search. The answer's own thinking is unaffected.",
+				"kind": "bool"
+			},
+			{
 				"key": "historyMessages",
 				"label": "History window",
 				"help": "Recent turns given to the synthesizer.",
@@ -268,6 +275,7 @@ export function defaultSettings(): Settings {
 		recallTopK: 10,
 		finalTopK: 5,
 		maxIterations: 5,
+		researchThinking: false,
 		historyMessages: 8,
 		chunkWords: 100,
 		chunkOverlap: 50,
