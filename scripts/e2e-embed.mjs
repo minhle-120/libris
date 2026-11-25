@@ -310,9 +310,9 @@ try {
   const oldDims = sqlite(join(dataDir, 'libris.db'), `SELECT DISTINCT dim FROM segments WHERE source_id != '${third.id}'`);
   checks.check('earlier sources keep the length they were embedded at', oldDims.trim() === String(DIM), `dims=${oldDims.trim()}`);
   // ── what a delete actually takes ───────────────────────────────
-  // The confirmation dialog promises that a file another notebook uses survives,
-  // and that nothing does when the last one lets go. That is asserted on the
-  // filesystem, because "the rows went" is not the promise anyone cares about.
+  // A file another notebook still uses survives a deletion, and nothing does when the
+  // last one lets go. Asserted on the filesystem, because "the rows went" is not what
+  // anyone cares about.
   {
     const mk = async (name) =>
       await (

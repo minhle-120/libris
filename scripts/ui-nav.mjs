@@ -197,7 +197,7 @@ const code = await withBrowser(
       return {
         open: d?.open === true,
         names: /Doomed Book/.test(d?.querySelector('h2')?.textContent ?? ''),
-        files: /no other notebook uses goes with it/.test(d?.textContent ?? ''),
+        scope: /only the notebook goes/.test(d?.textContent ?? ''),
         focused: document.activeElement?.textContent.trim(),
         danger: [...(d?.querySelectorAll('button') ?? [])]
           .some((b) => b.textContent.trim() === 'Delete notebook' && b.className.includes('btn-danger'))
@@ -209,9 +209,9 @@ const code = await withBrowser(
       JSON.stringify(confirm),
     );
     checks.check(
-      "the confirmation says which files go and which stay",
-      confirm.files,
-      "the promise changed: a shared file stays, an unshared one goes, and the box must say both",
+      "the confirmation says what this notebook takes",
+      confirm.scope,
+      "the box states its own scope: an empty notebook loses the notebook and nothing else",
     );
     checks.check(
       "the destructive button is red and Cancel has the focus",

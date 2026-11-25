@@ -18,13 +18,6 @@
   import Modal from '../lib/ui/Modal.svelte';
 
   /**
-   * Spelled in every notebook deletion, whether the notebook held files or not: a promise about
-   * what happens to a file must not depend on the reader asking the second question.
-   */
-  const FILE_RULE =
-    'A file another notebook also uses stays; a file that no other notebook uses goes with it — the file, its page images and its chunks.';
-
-  /**
    * The notebook list, and the conversations of the one notebook you are in.
    *
    * Conversations are a second level under the open notebook rather than a chevron per row:
@@ -298,9 +291,6 @@
   variant="danger"
   {error}
   onconfirm={confirmDelete}
-  keeps={`${target?.source_count
-    ? `Its conversations, every answer in them, and this notebook's own list of ${target.source_count} ${target.source_count === 1 ? 'source' : 'sources'} go. `
-    : 'It has no files of its own, so this takes the notebook, its conversations and every answer in them. '}${FILE_RULE}`}
 >
   <p class="lead">
     {#if target?.source_count}
