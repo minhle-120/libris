@@ -34,6 +34,10 @@ export type Live = {
   question: string;
   status: string;
   reasoning: string;
+  /** The disclosure holding the thinking, open while it is still arriving. The caller of the
+   *  disclosure could hold this itself, but then the close would live in the view — and the
+   *  thing that knows a sentence has begun is the stream, three levels away. */
+  thinkingOpen: boolean;
   answer: string;
   citations: Citation[];
   /** The stream is open. Off once the row comes down, so the caret stops. */
@@ -528,6 +532,22 @@ export function stopTurn() {
   abort?.abort();
 }
 
+/** One answer delta folded into the live turn.
+ *
+ * Both halves accumulate: a delta is a piece, not a running total, and assigning the
+ * thinking rather than appending it shows the reader the newest fragment and throws the rest
+ * away. The first sentence of the answer closes the window on the thinking — the moment the
+ * reader stops watching the work and starts reading its result. */
+function fold(live: Live, text: string, reasoning: string) {
+  if (reasoning) {
+    live.reasoning += reasoning;
+    live.thinkingOpen = true;
+  }
+  if (!text) return;
+  if (!live.answer) live.thinkingOpen = false;
+  live.answer += text;
+}
+
 export async function ask(question: string) {
   const notebook = app.notebookId;
   if (!notebook || app.live) return;
@@ -542,6 +562,7 @@ export async function ask(question: string) {
     question: asked,
     status: '',
     reasoning: '',
+    thinkingOpen: false,
     answer: '',
     citations: [],
     streaming: true
@@ -570,9 +591,7 @@ export async function ask(question: string) {
           if (app.live === live) live.citations = citations;
         },
         onDelta: (text, reasoning) => {
-          if (app.live !== live) return;
-          if (text) live.answer += text;
-          if (reasoning) live.reasoning = reasoning;
+          if (app.live === live) fold(live, text, reasoning);
         },
         onDone: (message) => {
           saved = message;

@@ -151,6 +151,11 @@ export type Message = {
   status?: MessageStatus;
   created_at: number;
   citations?: Citation[];
+  /** What the model said to itself before Content, stored so the answer's disclosure still
+   *  opens a week later. Never part of Content, and never given back to a model. */
+  reasoning?: string;
+  /** How long it took, in milliseconds; absent when nothing was thought. */
+  reasoning_ms?: number;
 };
 
 // ── the machine ──────────────────────────────────────────────────

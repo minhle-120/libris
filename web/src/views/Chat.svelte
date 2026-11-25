@@ -10,6 +10,7 @@
   import { chipLabel } from '../lib/format';
   import type { MessageStatus } from '../lib/types';
   import Rich from '../lib/Rich.svelte';
+  import Reasoning from '../lib/Reasoning.svelte';
   import Badge from '../lib/ui/Badge.svelte';
   import Banner from '../lib/ui/Banner.svelte';
   import Button from '../lib/ui/Button.svelte';
@@ -177,6 +178,9 @@
                   {/each}
                 </div>
               {/if}
+              {#if m.reasoning}
+                <Reasoning text={m.reasoning} ms={m.reasoning_ms ?? 0} />
+              {/if}
               <div class="answer">
                 <Rich
                   text={m.content}
@@ -208,6 +212,12 @@
                 {/each}
               </div>
             {/if}
+            {#if live.reasoning}
+              <!-- Open while the model is still thinking, and closed by the stream itself when
+                   the first sentence arrives: watching the work and reading the result are two
+                   different things to do with the same screen. -->
+              <Reasoning bind:open={live.thinkingOpen} text={live.reasoning} live={!live.answer} />
+            {/if}
             <div class="answer" class:pulse={!live.answer}>
               {#if live.answer}
                 <Rich
@@ -219,11 +229,6 @@
               {:else}
                 <p class="status">
                   <span class="pulse">{live.status || 'Searching your sources'}</span>
-                  {#if live.reasoning}
-                    <span class="think" title="The model is working out where to look.">
-                      {live.reasoning}
-                    </span>
-                  {/if}
                 </p>
               {/if}
             </div>
@@ -380,13 +385,6 @@
     gap: 8px;
     font-size: var(--fs-sm);
     color: var(--muted);
-  }
-
-  .think {
-    color: var(--border);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   .empty {

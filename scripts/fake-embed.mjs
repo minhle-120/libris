@@ -10,6 +10,21 @@
 import { createServer } from 'node:http';
 
 /**
+ * The deltas of one streamed answer, in the order a reasoning model sends them: the thinking
+ * first, in its own field, then the prose. Both cut into small pieces, because a client that
+ * replaces its copy of either one on every delta instead of appending looks correct against a
+ * server that sends one big frame.
+ */
+function streamPieces(think, text) {
+  const thoughts = think ? (String(think).match(/.{1,14}/gs) ?? []) : [];
+  const pieces = text.match(/.{1,9}/gs) ?? [];
+  return [
+    ...thoughts.map((reasoning_content) => ({ reasoning_content })),
+    ...pieces.map((content) => ({ content }))
+  ];
+}
+
+/**
  * The research model's two moves, derived from the request rather than scripted, so
  * one fake answers a question about any corpus: a research call with no tool reply in
  * front of it searches, and one that already has a search result finalises. That is
@@ -96,6 +111,7 @@ export class EmbedServer {
           // Reset first: a caller that says "start over, and say this" means the
           // script it named, and a reset processed afterwards would delete it.
           if ('reset' in cmd) {
+            this.think = null;
             this.chatScript = null;
             this.chatHold = false;
             this.chatRequests = [];
@@ -109,6 +125,10 @@ export class EmbedServer {
           // fall back to the compliant default after the first refusal.
           if ('hold' in cmd) this.chatHold = !!cmd.hold;
           if ('answer' in cmd) this.answer = cmd.answer;
+          // Thinking for the next streamed answer, in the field a reasoning model uses.
+          // Off unless asked for, so a harness that is not looking at the thinking sees the
+          // answer exactly as it did before.
+          if ('think' in cmd) this.think = cmd.think || null;
           res.writeHead(204);
           res.end();
           return;
@@ -217,11 +237,11 @@ export class EmbedServer {
       'x-accel-buffering': 'no'
     });
     const text = completion.choices?.[0]?.message?.content ?? '';
-    const pieces = text.match(/.{1,9}/gs) ?? [];
+    const deltas = streamPieces(this.think, text);
     let i = 0;
     const send = () => {
-      const delta = i < pieces.length ? { content: pieces[i] } : {};
-      const finish = i >= pieces.length ? 'stop' : null;
+      const delta = i < deltas.length ? deltas[i] : {};
+      const finish = i >= deltas.length ? 'stop' : null;
       res.write(
         `data: ${JSON.stringify({
           object: 'chat.completion.chunk',
@@ -230,7 +250,7 @@ export class EmbedServer {
         })}\n\n`
       );
       i++;
-      if (i <= pieces.length) return setTimeout(send, 12);
+      if (i <= deltas.length) return setTimeout(send, 12);
       res.write('data: [DONE]\n\n');
       res.end();
     };

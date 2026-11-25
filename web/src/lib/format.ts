@@ -84,3 +84,19 @@ export function formatSince(iso?: string): string {
   if (hours < 24) return `${hours} h ago`;
   return `${Math.round(hours / 24)} d ago`;
 }
+
+/** How long a model spent thinking, in the words its row is labelled with. An empty answer
+ *  means nobody measured — which is a different fact from "no time", and the caller renders
+ *  no claim at all when it hears one. */
+export function formatDuration(ms?: number): string {
+  if (!ms || ms < 0) return "";
+  const seconds = ms / 1000;
+  if (seconds < 1) return "under a second";
+  // One decimal until ten seconds, because that is where reading the number stops being
+  // useful — and a thinking model's pause is mostly under it.
+  if (seconds < 10) return `${seconds.toFixed(1)}s`;
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = Math.round(seconds % 60);
+  return rest ? `${minutes}m ${rest}s` : `${minutes}m`;
+}

@@ -101,12 +101,23 @@ func scanChat(row rowScanner) (domain.Chat, error) {
 	return c, err
 }
 
-// messageSelect is the reading projection. trace_json is absent because listing a
-// chat's messages renders prose and citations, and a transcript per row is dead
-// weight in a query that will not use it — the same reason the listing queries do
-// not read vectors.
+// The columns every message query reads, in the order messages() scans them.
+const messageColumns = `id, chat_id, role, content, status, created_at, citations`
+
+// messageSelect is the reading projection for a reader: the prose, the citations, and
+// the thinking behind the prose, which is what the answer's disclosure opens. Like
+// trace_json, a transcript per row would be dead weight in a query that will not use
+// it — but this one is used, every time a chat is opened.
 const messageSelect = `
-	SELECT id, chat_id, role, content, status, created_at, citations
+	SELECT ` + messageColumns + `, reasoning, reasoning_ms
+	  FROM messages`
+
+// historySelect is the projection a prompt is built from. Its last two columns are
+// literals, not columns: a model assembling the next answer is given prose and
+// nothing else, so the reasoning a previous turn thought with is read as ” and 0 and
+// cannot reach it by accident. Same reason trace_json is never selected.
+const historySelect = `
+	SELECT ` + messageColumns + `, '', 0
 	  FROM messages`
 
 // AppendMessage writes one turn and returns it with its id. Content is often empty
@@ -153,9 +164,10 @@ func (db *DB) UpdateMessage(ctx context.Context, id int64, u domain.MessageUpdat
 
 	res, err := db.sql.ExecContext(ctx,
 		`UPDATE messages
-		    SET content = ?, status = ?, citations = ?, trace_json = ?
+		   SET content = ?, status = ?, citations = ?, trace_json = ?,
+		      reasoning = ?, reasoning_ms = ?
 		  WHERE id = ?`,
-		u.Content, string(u.Status), string(citations), u.Trace, id)
+		u.Content, string(u.Status), string(citations), u.Trace, u.Reasoning, u.ReasoningMS, id)
 	if err != nil {
 		return fmt.Errorf("store: update message: %w", err)
 	}
@@ -200,7 +212,7 @@ func (db *DB) RecentMessages(ctx context.Context, chatID string, limit int) ([]d
 	}
 
 	out, err := db.messages(ctx,
-		messageSelect+` WHERE chat_id = ? AND exclude_from_history = 0 ORDER BY id DESC LIMIT ?`,
+		historySelect+` WHERE chat_id = ? AND exclude_from_history = 0 ORDER BY id DESC LIMIT ?`,
 		chatID, limit)
 	if err != nil {
 		return nil, err
@@ -260,7 +272,8 @@ func (db *DB) messages(ctx context.Context, query string, args ...any) ([]domain
 			status    string
 			citations string
 		)
-		if err := rows.Scan(&m.ID, &m.ChatID, &role, &m.Content, &status, &m.CreatedAt, &citations); err != nil {
+		if err := rows.Scan(&m.ID, &m.ChatID, &role, &m.Content, &status, &m.CreatedAt, &citations,
+			&m.Reasoning, &m.ReasoningMS); err != nil {
 			return nil, fmt.Errorf("store: scan message: %w", err)
 		}
 		m.Role, m.Status = domain.Role(role), domain.MessageStatus(status)

@@ -63,6 +63,17 @@ type Message struct {
 	// Citations is what the [[Chunk N]] labels in Content resolved to, frozen at
 	// the time the answer was written. Empty for a user message.
 	Citations []Citation `json:"citations,omitempty"`
+
+	// Reasoning is what the model thought out loud before it wrote Content, kept in a
+	// field of its own so nothing can mistake one for the other. Stored so a reader
+	// can open the thinking behind an answer days later, and read by nothing else —
+	// a turn's history is built from Content, because thinking about how to look
+	// something up is not a fact this library established.
+	Reasoning string `json:"reasoning,omitempty"`
+
+	// ReasoningMS is how long the model thought before its first sentence. Zero means
+	// it never thought, which is a different thing from thinking for no time.
+	ReasoningMS int64 `json:"reasoning_ms,omitempty"`
 }
 
 // MessageUpdate is what a finished turn writes back into the row that was appended
@@ -78,6 +89,12 @@ type MessageUpdate struct {
 	Status    MessageStatus
 	Citations []Citation
 	Trace     string
+
+	// Reasoning and ReasoningMS close out the thinking the stream carried. Empty
+	// when the turn had none: a no-info reason and a depth message are written by the
+	// research loop, which thinks in tool calls rather than in prose.
+	Reasoning   string
+	ReasoningMS int64
 }
 
 // Citation is a resolved [[Chunk N]].

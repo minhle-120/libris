@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"libris/internal/config"
 
@@ -33,6 +34,9 @@ type askModel struct {
 	chatErr   error
 	streamErr error
 
+	// reasoning is what a model that thinks out loud streams before its first sentence.
+	reasoning []string
+
 	// onStream runs before any delta is yielded, which is the only moment a test can
 	// look at the database mid-answer.
 	onStream func()
@@ -59,6 +63,17 @@ func (m *askModel) ChatStream(ctx context.Context, req llm.ChatRequest, yield fu
 	m.synthReqs = append(m.synthReqs, req)
 	if m.onStream != nil {
 		m.onStream()
+	}
+	// A thinking model pauses before it writes. The pause is real rather than faked
+	// because the length of it is a number this path measures and stores, and a fake
+	// that arrived instantly could not tell a stored number from a zero.
+	if len(m.reasoning) > 0 {
+		for _, piece := range m.reasoning {
+			if err := yield(llm.Chunk{Delta: llm.Delta{ReasoningContent: piece}}); err != nil {
+				return err
+			}
+		}
+		time.Sleep(2 * time.Millisecond)
 	}
 	// The answer arrives, and then the server dies: the case that decides whether a
 	// partial answer is kept.
@@ -341,6 +356,74 @@ func TestAskAnswersFromEvidence(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "What did Smith measure?") {
 		t.Error("synthesis prompt does not end with the question")
+	}
+}
+
+// The thinking a reasoning model streams is stored beside its answer, so the disclosure
+// on an answer still opens a week later. The second half of this test is what makes the
+// first half safe: nothing re-reads the thinking into a later prompt, because thinking
+// about how to look something up is not a fact this library established, and a turn that
+// repeated it would be repeating a conclusion it never checked.
+func TestAskStoresTheThinkingWithTheAnswer(t *testing.T) {
+	svc, db, model := askWiring(t,
+		toolReply("c1", "query_knowledge_base", `{"keywords":"smith","query":"what did smith measure"}`),
+		toolReply("c2", "finalize_research_response", `{"indices":[1]}`),
+		toolReply("c3", "query_knowledge_base", `{"keywords":"unit","query":"what unit was the figure in"}`),
+		toolReply("c4", "finalize_research_response", `{"indices":[1]}`),
+	)
+	nb := notebookID(t, svc)
+	seedReady(t, db, nb, "sha-a", "Smith measured 4.2 K.", "An unrelated page.")
+
+	const thought = "The question names Smith, and the first chunk holds a figure. "
+	model.reasoning = []string{"The question names Smith, ", "and the first chunk holds a figure. "}
+
+	var streamed strings.Builder
+	msg, err := svc.Ask(context.Background(), nb, "", "What did Smith measure?", AskEvents{
+		Delta: func(_, reasoning string) { streamed.WriteString(reasoning) },
+	})
+	if err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+
+	// Streamed first, so the reader watching the answer arrive can read it now.
+	if streamed.String() != thought {
+		t.Errorf("the reader was streamed %q as thinking, want the thinking", streamed.String())
+	}
+	// And stored, so the same reader can ask a week later.
+	if msg.Reasoning != thought {
+		t.Errorf("reasoning = %q, want what the stream carried", msg.Reasoning)
+	}
+	if msg.ReasoningMS <= 0 {
+		t.Errorf("reasoning_ms = %d, want the pause between the thinking and the first sentence", msg.ReasoningMS)
+	}
+	if msg.Content != "Smith measured 4.2 K [[Chunk 1]]." {
+		t.Errorf("content = %q, want the answer on its own and the thinking off it", msg.Content)
+	}
+
+	list := rows(t, db, msg.ChatID)
+	if len(list) != 2 {
+		t.Fatalf("%d rows, want the question and the answer", len(list))
+	}
+	if list[1].Reasoning != thought || list[1].ReasoningMS != msg.ReasoningMS {
+		t.Errorf("stored row = %+v, want the thinking and its length read back for the disclosure", list[1])
+	}
+
+	// The turn after this one is given its prose and none of its thinking.
+	ask(t, svc, nb, msg.ChatID, "And what unit was that?")
+	if len(model.synthReqs) != 2 {
+		t.Fatalf("%d synthesis calls, want 2", len(model.synthReqs))
+	}
+	var prompt strings.Builder
+	for _, m := range model.synthReqs[1].Messages {
+		prompt.WriteString(textContent(m))
+	}
+	if strings.Contains(prompt.String(), "The question names Smith") {
+		t.Error("a previous turn's thinking reached the next turn's prompt")
+	}
+	// The prose does arrive — with its chunk labels stripped, since the next turn's
+	// registry numbers nothing the last turn used.
+	if !strings.Contains(prompt.String(), "Smith measured 4.2 K") {
+		t.Error("a previous turn's answer did not reach the next turn's prompt")
 	}
 }
 

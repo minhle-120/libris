@@ -416,15 +416,21 @@ scrolls would move the input out from under the keyboard mid-question.
   | errored | `Interrupted` | libris stopped while the answer was being written |
 
   A clean answer shows nothing: the absence of a verdict is the good news.
-- **Reasoning** a model emits is shown *while* it works, dimmed, beside the status, and **is never
-  appended to the answer**. Once the answer starts arriving, the thinking comes off the screen.
+- **Reasoning** a model emits is **never appended to the answer**. It is stored beside it and shown above
+  the prose in a disclosure, **collapsed by default**, labelled with how long the model thought:
+  `Thought for 6s`. A turn read back from the database opens to the same text — the thinking is stored,
+  not remembered — and a row that has no measurement says `Thought` rather than inventing a length.
+  It is neither the answer nor the evidence for it (the citation chips are the evidence), and the panel
+  says so in its own caption. Nothing feeds it back to a model.
 
 #### The turn in flight
 
 The moment a question is sent it appears on screen. A turn can take half a minute and a spinner for that
 long reads as a hang — particularly as the answer arrives *under* the question it answers. Then:
 
-1. a status line where the answer will be, replaced by the research loop's own words as they arrive;
+1. a status line where the answer will be, replaced by the research loop's own words as they arrive; and
+   while a model is thinking out loud, its thinking streaming into the disclosure above — **open**, with
+   the label `Thinking…`, until the answer's first sentence arrives and closes it;
 2. the citations the loop is working from, above the answer, as soon as they are known — **disabled**,
    because they are not yet the frozen set the answer was written against;
 3. the answer streaming in as real markdown, forming as it arrives (a list that forms *is* the answer

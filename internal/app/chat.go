@@ -211,12 +211,17 @@ func (s *Service) Ask(ctx context.Context, notebookID, chatID, question string, 
 	// (4) The answer. Accumulated here as it arrives so an interrupted stream can
 	// still be finished with what the user actually saw.
 	var streamed strings.Builder
+
+	// The thinking is collected for the reader, not for the next turn.
+	var thought thinking
+
 	answer, err := chat.NewSynthesizer(models.Chat, retriever, models.ChatModel, ev.status).Write(
 		ctx,
 		chat.SynthesisHistory(past, cfg.HistoryMessages),
 		res.Evidence,
 		question,
 		func(d chat.Delta) error {
+			thought.add(d)
 			streamed.WriteString(d.Text)
 			ev.delta(d)
 			return nil
@@ -226,17 +231,23 @@ func (s *Service) Ask(ctx context.Context, notebookID, chatID, question string, 
 	case err == nil:
 		// The synthesiser's own assembly of the text, not the accumulation: a caller
 		// that showed deltas and a caller that reads the row cannot then disagree
-		// about what was said.
+		// about what was said. The thinking is taken the same way, for the same reason.
 		return finish(domain.MessageUpdate{
-			Content:   answer.Text,
-			Status:    domain.MessageAnswered,
-			Citations: citations,
+			Content:     answer.Text,
+			Status:      domain.MessageAnswered,
+			Citations:   citations,
+			Reasoning:   answer.Reasoning,
+			ReasoningMS: thought.close(),
 		})
 	case stopped(ctx):
+		// The accumulation is all there is: the stream was cut off before the
+		// synthesiser could assemble either half.
 		return finish(domain.MessageUpdate{
-			Content:   streamed.String(),
-			Status:    domain.MessageCanceled,
-			Citations: citations,
+			Content:     streamed.String(),
+			Status:      domain.MessageCanceled,
+			Citations:   citations,
+			Reasoning:   thought.String(),
+			ReasoningMS: thought.close(),
 		})
 	default:
 		// The partial answer is kept and labelled: losing text the user read is worse
@@ -245,13 +256,53 @@ func (s *Service) Ask(ctx context.Context, notebookID, chatID, question string, 
 		// without being able to check it.
 		s.log.Error("answer stream failed", "chat", c.ID, "err", err)
 		_, _ = finish(domain.MessageUpdate{
-			Content:   streamed.String(),
-			Status:    domain.MessageInterrupted,
-			Citations: citations,
+			Content:     streamed.String(),
+			Status:      domain.MessageInterrupted,
+			Citations:   citations,
+			Reasoning:   thought.String(),
+			ReasoningMS: thought.close(),
 		})
 		return domain.Message{}, err
 	}
 }
+
+// thinking accumulates the reasoning a synthesis stream carries, with the time it took
+// before the first sentence arrived. A type rather than three locals inside Ask, which
+// already decides more than its share — and the two are only meaningful together: the
+// length is measured from the model's first word of thinking, not from the first byte
+// of the request, so a slow round trip of research is not billed to the thinking.
+type thinking struct {
+	text strings.Builder
+	at   time.Time
+	ms   int64
+}
+
+// add folds one delta in. The clock stops at the first sentence, because the number
+// labels the pause the reader waited through: a model that thinks again mid-answer is
+// not measured twice.
+func (t *thinking) add(d chat.Delta) {
+	if d.Reasoning != "" {
+		if t.at.IsZero() {
+			t.at = time.Now()
+		}
+		t.text.WriteString(d.Reasoning)
+	}
+	if d.Text != "" && t.ms == 0 && !t.at.IsZero() {
+		t.ms = time.Since(t.at).Milliseconds()
+	}
+}
+
+// close ends the measurement, for the streams that never reached a sentence: stopped
+// by the user, or cut off by a dead server. 0 when nothing was thought, which the UI
+// reads as no claim at all rather than as thinking for no time.
+func (t *thinking) close() int64 {
+	if t.ms == 0 && !t.at.IsZero() {
+		t.ms = time.Since(t.at).Milliseconds()
+	}
+	return t.ms
+}
+
+func (t *thinking) String() string { return t.text.String() }
 
 // answerStatus translates how the loop ended into what a reader learns. They are not
 // one vocabulary: "synthesize" is control flow — evidence in hand, prose not yet

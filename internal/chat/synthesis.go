@@ -31,8 +31,9 @@ func NewSynthesizer(client Streamer, retriever *retrieve.Retriever, model string
 }
 
 // Delta is one piece of a streaming answer. Both fields may be empty; a server that
-// thinks separately reports its thinking in Reasoning first, which the caller may
-// show as progress and must never persist as the answer.
+// thinks separately reports its thinking in Reasoning first. It is the thinking and
+// not the answer: the caller shows it as progress, stores it in a field of its own
+// beside the answer, and never merges it into the prose.
 type Delta struct {
 	Text      string
 	Reasoning string

@@ -317,6 +317,133 @@ const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ask-p
     () => `title=${afterReload?.title}`
   );
 
+  // ── the thinking behind an answer ───────────────────────────
+  // A model that thinks out loud used to have it shown for a moment and thrown away, so the
+  // only reader who could see it was one who happened to be looking. It goes into a
+  // disclosure now: open while the thinking arrives, closed by the first sentence, and still
+  // openable after a reload, because the thinking is stored with the answer.
+  const THOUGHT =
+    'The question asks for a figure. Page two holds one, and the registry numbers it first, ' +
+    'so the answer is a sentence with one label in it. '.repeat(8);
+  // Long on purpose, both halves: each phase has to last longer than a poll takes, or the
+  // harness asserts on a race it happens to win.
+  const SAID =
+    'It reports 4.2 K again. ' +
+    'The figure is repeated on the second page for the reader of the table. '.repeat(12) +
+    ' [[Chunk 1]]';
+  await control({ answer: SAID, think: THOUGHT });
+  await send(ui, 'And the figure again?');
+  await ask(ui);
+
+  const thinking = await ui.until(
+    `
+    const row = document.querySelector('.turn.live .think');
+    return row && row.classList.contains('open') && {
+      label: row.querySelector('.label')?.textContent.trim(),
+      shown: row.querySelector('.scroll')?.textContent.trim().length ?? 0,
+      hidden: getComputedStyle(row.querySelector('.panel')).display !== 'none'
+    };
+    `,
+    200,
+    10
+  );
+  checks.check(
+    'the thinking is on screen while it arrives',
+    thinking?.label === 'Thinking…' && thinking?.hidden && (thinking?.shown ?? 0) > 0,
+    () => JSON.stringify(thinking)
+  );
+
+  const midAnswer = await ui.until(
+    `
+    const turn = document.querySelector('.turn.live');
+    const row = turn && turn.querySelector('.think');
+    return row && !row.classList.contains('open') && turn.querySelector('.answer') && {
+      expanded: row.querySelector('.row').getAttribute('aria-expanded'),
+      hidden: getComputedStyle(row.querySelector('.panel')).display === 'none'
+    };
+    `,
+    200,
+    10
+  );
+  checks.check(
+    'the first sentence closes it',
+    midAnswer?.expanded === 'false' && midAnswer?.hidden,
+    () => JSON.stringify(midAnswer)
+  );
+
+  const stored = await ui.until(`
+    const last = [...document.querySelectorAll('.turn.assistant')].at(-1);
+    const row = last && !last.classList.contains('live') && last.querySelector('.think');
+    return row && {
+      expanded: row.querySelector('.row').getAttribute('aria-expanded'),
+      controls: row.querySelector('.row').getAttribute('aria-controls'),
+      label: row.querySelector('.label').textContent.trim(),
+      hidden: getComputedStyle(row.querySelector('.panel')).display === 'none'
+    };
+  `);
+  checks.check(
+    'the row it leaves behind is closed, and says so',
+    stored?.expanded === 'false' && stored?.hidden,
+    () => JSON.stringify(stored)
+  );
+  checks.check(
+    'and the row says how long the model thought',
+    /^Thought for (\d|under a second)/.test(stored?.label ?? ''),
+    () => `label=${stored?.label}`
+  );
+
+  // Read separately from the click: the click writes state, and the row it re-renders on
+  // arrives a microtask later — read in the same breath and you see the old attribute.
+  const read = (sel) =>
+    ui.eval(`
+      const row = ${sel};
+      const panel = document.getElementById(row.getAttribute('aria-controls'));
+      const turn = row.closest('.turn');
+      return {
+        expanded: row.getAttribute('aria-expanded'),
+        shown: getComputedStyle(panel).display !== 'none',
+        text: panel.textContent.trim(),
+        answer: turn.querySelector('.answer')?.textContent.trim() ?? ''
+      };
+    `);
+
+  const open = async (sel) => {
+    await ui.eval(`${sel}.click(); return true`);
+    await ui.settle(80);
+    return read(sel);
+  };
+
+  const seen = await open(`[...document.querySelectorAll('.turn.assistant .think .row')].at(-1)`);
+  checks.check(
+    'a click opens it',
+    seen?.expanded === 'true' && seen?.shown,
+    () => JSON.stringify({ expanded: seen?.expanded, shown: seen?.shown })
+  );
+  checks.check(
+    'every piece of the thinking arrived, not only the last one',
+    (seen?.text ?? '').startsWith(THOUGHT.slice(0, 40)) &&
+      (seen?.text ?? '').length > THOUGHT.length - 60,
+    () => `${seen?.text?.length} chars, want ${THOUGHT.length}`
+  );
+  checks.check(
+    'none of it leaked into the answer',
+    /4\.2 K/.test(seen?.answer ?? '') && !/Page two holds one/.test(seen?.answer ?? ''),
+    () => `answer=${seen?.answer?.slice(0, 90)}`
+  );
+
+  // Stored, not remembered: the page forgets the turn and reads it back from the database.
+  await control({ think: '' });
+  await ui.reload(app);
+  checks.check('the notebook is still the one on screen', (await openNotebook(ui, name)).ok);
+  checks.check('and the Ask tab is reachable again', await openAskTab(ui));
+  await ui.settle(300);
+  const again = await open(`[...document.querySelectorAll('.turn.assistant .think .row')].at(-1)`);
+  checks.check(
+    'an answer read back from the database still opens',
+    again?.expanded === 'true' && (again?.text ?? '').startsWith(THOUGHT.slice(0, 40)),
+    () => `${again?.expanded} · ${(again?.text ?? '').slice(0, 40)}`
+  );
+
   // ── a rendered answer ──────────────────────────────────────
   // The synthesiser writes markdown, LaTeX and — if a source provoked it — HTML. This one
   // answer exercises the whole surface, including the two things it must never do: run
