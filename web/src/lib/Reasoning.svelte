@@ -23,6 +23,10 @@
    * reader who only wonders about it after the fact deserves the same look as one who
    * happened to be watching while it streamed.
    *
+   * The panel holds the thinking and no commentary on it. The chips already say where an
+   * answer came from; a line here explaining that the thinking is not evidence would be a
+   * third voice saying it, in the one place a reader has stopped reading to look.
+   *
    * `live` is the same control while the thinking is still arriving. The caller holds it
    * open and closes it when the first sentence lands, which is the moment the reading stops
    * being a spectator of the work and becomes the work's result.
@@ -60,7 +64,6 @@
        not the row is open. Nothing inside it takes focus, so nothing focusable is hidden. -->
   <div id={panel} class="panel" role="region" aria-label="The model's reasoning">
     <div class="scroll">{text}</div>
-    <p class="aside">What the model wrote to itself. The sources it used are the chips above.</p>
   </div>
 </div>
 
@@ -119,11 +122,6 @@
     line-height: var(--lh);
     white-space: pre-wrap;
     overflow-wrap: anywhere;
-  }
-
-  .aside {
-    margin: 8px 0 0;
-    font-size: var(--fs-xs);
   }
 
   @keyframes think-in {
