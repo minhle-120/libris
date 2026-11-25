@@ -59,12 +59,45 @@ const code = await withBrowser(
             `return document.querySelector('.steps li.active .name')?.textContent ?? 'gone'`,
           );
           // Either the next step, or the whole screen gone: on a machine that only lacked a device
-  // choice, choosing one is the last thing standing between it and a running Libris.
-  checks.check(
-    'choosing one lets go of the step',
-    after === 'Models' || after === 'gone',
-    after,
-  );
+          // choice, choosing one is the last thing standing between it and a running Libris.
+          checks.check(
+            'choosing one lets go of the step',
+            after === 'Models' || after === 'gone',
+            after,
+          );
+
+          if (process.env.SERVE === '1') {
+            // The last step there is a server to raise, so ask for it and wait for the gate.
+            // This is the way out of the wizard that is not the Skip button, and the shell
+            // mounts the moment the gate opens — boot() having stopped at that gate, an app
+            // that lands here on "Loading…" is a person who has to reload the page to get in.
+            await ui.eval(`
+              const b = [...document.querySelectorAll('.setup button')]
+                .find((b) => /start/i.test(b.textContent));
+              if (b) b.click();
+              return !!b;
+            `);
+            let out = null;
+            for (let i = 0; i < 24 && !out; i++) {
+              await ui.settle(5000);
+              const now = await ui.eval(`
+                if (document.querySelector('.setup')) return null;
+                const m = document.querySelector('main');
+                const t = m ? m.innerText : '';
+                return {
+                  shell: !!document.querySelector('.shell'),
+                  stuck: /Loading/.test(t),
+                  text: t.slice(0, 40).replace(/\\n/g, ' · '),
+                };
+              `);
+              if (now) out = now;
+            }
+            checks.check(
+              'and letting go opens an app that is already in',
+              !!out && out.shell && !out.stuck && out.text !== '',
+              JSON.stringify(out),
+            );
+          }
         }
       }
     }
@@ -95,12 +128,24 @@ const code = await withBrowser(
           `);
         const where = async () =>
           await ui.eval(
-            `return { wizard: !!document.querySelector('.setup'), shell: !!document.querySelector('.sidebar') }`,
+            `const m = document.querySelector('main');
+             const t = m ? m.innerText : '';
+             return {
+               wizard: !!document.querySelector('.setup'),
+               shell: !!document.querySelector('.sidebar'),
+               stuck: /Loading/.test(t),
+             }`,
           );
         await skip();
         await ui.settle(1500);
         const inApp = await where();
-        checks.check("skipping walks past it", inApp.shell && !inApp.wizard, JSON.stringify(inApp));
+        // Not "the wizard is off screen" but "there is an app to use": a shell that mounts
+        // onto the boot the gate stopped shows a loading page and nothing else.
+        checks.check(
+          "skipping walks past it",
+          inApp.shell && !inApp.wizard && !inApp.stuck,
+          JSON.stringify(inApp),
+        );
         await ui.reload(app);
         await ui.settle(1500);
         const reloaded = await where();

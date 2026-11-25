@@ -189,8 +189,27 @@ export function skipSetup() {
     // A browser that refuses storage loses only the reload-proof, not the skip.
   }
   app.gated = false;
+  void enterApp();
+}
+
+/** Walking into the app the gate cut short.
+ *
+ *  boot() stops at the gate, so a machine that opens on the wizard never runs the tail that
+ *  reads the notebooks and ends the loading page. When the last step lands, the shell mounts
+ *  onto that half-finished boot and holds "Loading…" until the person reloads the page — the
+ *  wizard is gone and nothing answers for it. Both ways out of the wizard come through here,
+ *  the last step landing and walking past it, so neither can leave the shell waiting.
+ *
+ *  Not the newest-notebook open a cold boot does: whoever leaves the wizard is either at a
+ *  machine with no notebooks yet or at one they just chose to skip, and Landing is where both
+ *  belong. Idempotent, because the poll that sees the gate open can answer again before the
+ *  wizard is off the screen. */
+let entered = false;
+async function enterApp(): Promise<void> {
+  if (entered) return;
+  entered = true;
   app.loading = false;
-  void refreshNotebooks();
+  await refreshNotebooks();
 }
 
 /** Paints the gate from the server's answer, which is the only copy of that rule the
@@ -202,10 +221,16 @@ export function skipSetup() {
  *  describing a wait — and on a cold start the model takes longer to load than the page takes
  *  to ask, which is how a set-up machine kept meeting the wizard at every boot. A question
  *  asked in the meantime fails with the server's own reason, the same way the walked-past
- *  setup behaves. */
+ *  setup behaves.
+ *
+ *  It is also the one place that sees the wizard let go, so the walk into the app hangs off
+ *  it: whoever opens the gate finishes the boot the gate stopped, and a new caller cannot
+ *  forget to. */
 export function applyGate(setup?: SetupView): void {
   app.ready = setup?.ready ?? true;
-  app.gated = !(app.ready || (setup?.starting ?? false));
+  const gated = !(app.ready || (setup?.starting ?? false));
+  if (app.gated && !gated) void enterApp();
+  app.gated = gated;
 }
 
 export async function boot() {
