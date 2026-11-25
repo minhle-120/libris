@@ -1,16 +1,16 @@
 package engine
 
-// The drift rule, tested where it now lives: read the file, compare the three things libris
-// derives, write only when one of them moved, and answer with what the file says.
+// The write rule, tested where it lives: write the file from what libris derives, read it back,
+// and answer with what the file now says — at every start, whether or not anything moved.
 //
 // Every one of these is a file and a string — no spawn, no readiness probe, no port — which is
-// what the rule was worth taking out of Start for. It was testable before, but only by starting
-// a process and reading the file afterwards, so the test described the supervisor rather than
-// the rule, and a change to how a process is spawned could have broken it for no reason.
+// what the rule was worth taking out of Start for. It was testable before, but only by starting a
+// process and reading the file afterwards, so the test described the supervisor rather than the
+// rule, and a change to how a process is spawned could have broken it for no reason.
 //
-// These are in package engine because refreshPreset is not part of what the package offers:
-// the supervisor is its only caller, and making the rule public would put a second way to
-// rewrite a user's configuration on the interface for no caller.
+// These are in package engine because refreshPreset is not part of what the package offers: the
+// supervisor is its only caller, and making the rule public would put a second way to rewrite a
+// user's configuration on the interface for no caller.
 
 import (
 	"errors"
@@ -45,37 +45,22 @@ func TestRefreshPresetWritesWhatIsMissing(t *testing.T) {
 	}
 }
 
-func TestRefreshPresetLeavesAFileThatAlreadyAgrees(t *testing.T) {
-	path := writePreset(t, "Vulkan0", oneChat())
-	// The whole point of a file in the data directory: a number changed by hand survives,
-	// because nothing rewrote the file.
-	edited := strings.Replace(string(readFile(t, path)), "cache-ram = 2048", "cache-ram = 4096", 1)
-	if edited == string(readFile(t, path)) {
-		t.Fatal("fixture: no cache-ram line to edit")
-	}
-	if err := os.WriteFile(path, []byte(edited), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := refreshPreset(path, "Vulkan0", oneChat())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(readFile(t, path)) != edited {
-		t.Errorf("a start that changed nothing rewrote the file:\n%s", readFile(t, path))
-	}
-	// And the answer carries the edit, not the derivation: the file is what the router reads.
-	if got.Device != "Vulkan0" || len(got.Models) != 1 || got.Models[0].Path != "/m/c.gguf" {
-		t.Errorf("answered with %+v", got)
-	}
-}
-
-func TestRefreshPresetRewritesWhenADerivedThingMoves(t *testing.T) {
+// TestRefreshPresetWritesWhetherOrNotAnythingMoved is the rule in one table: there is no start
+// that leaves the file as it found it.
+//
+// The first row is the one that matters, and it is the row the code this replaced existed to
+// make possible — same device, same models, a hand-edited cache-ram, and the file untouched.
+// Losing that edit is the deliberate trade, argued on refreshPreset: the comparison that granted
+// it looked only at what libris *reports*, so a change to what libris *writes* — a context size,
+// the default number of slots — never reached a machine that had started once already. A test
+// that asserts the rewrite is therefore a test that a preset change actually ships.
+func TestRefreshPresetWritesWhetherOrNotAnythingMoved(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		device string
 		models []Model
 	}{
+		{"nothing moved at all", "Vulkan0", oneChat()},
 		{"a device was chosen", "none", oneChat()},
 		{"a model downloaded", "Vulkan0", append(oneChat(),
 			Model{Alias: AliasEmbed, Kind: KindEmbed, Path: "/m/e.gguf"})},
@@ -85,6 +70,9 @@ func TestRefreshPresetRewritesWhenADerivedThingMoves(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			path := writePreset(t, "Vulkan0", oneChat())
 			edited := strings.Replace(string(readFile(t, path)), "cache-ram = 2048", "cache-ram = 4096", 1)
+			if edited == string(readFile(t, path)) {
+				t.Fatal("fixture: no cache-ram line to edit")
+			}
 			if err := os.WriteFile(path, []byte(edited), 0o644); err != nil {
 				t.Fatal(err)
 			}
@@ -95,8 +83,12 @@ func TestRefreshPresetRewritesWhenADerivedThingMoves(t *testing.T) {
 			}
 			after := string(readFile(t, path))
 			if strings.Contains(after, "cache-ram = 4096") {
-				t.Errorf("%s: the file was not rewritten:\n%s", tc.name, after)
+				t.Errorf("%s: the hand edit outlived the start, so nothing was written:\n%s", tc.name, after)
 			}
+			if !strings.Contains(after, "cache-ram = 2048") {
+				t.Errorf("%s: the new file does not say what libris derives:\n%s", tc.name, after)
+			}
+
 			// The answer is read back from the new file, so a caller reporting it cannot
 			// report a derivation the router never got.
 			if got.Device != tc.device {
@@ -115,10 +107,11 @@ func TestRefreshPresetRewritesWhenADerivedThingMoves(t *testing.T) {
 	}
 }
 
-// Unreadable is not absent. A file the program cannot read may be a preset somebody edited into
-// something this build does not understand — and rewriting it would delete an edit nobody has
-// been told about, which is the one thing this module's reason for existing forbids.
-func TestRefreshPresetRefusesToOverwriteWhatItCannotRead(t *testing.T) {
+// A start that cannot write its preset says so, rather than spawning a router that would read
+// whatever the file happened to hold. The fixture is a directory where the file belongs: a
+// temporary file cannot be renamed over one, and the directory has to still be there afterwards —
+// deleting it on the way out would turn a failed start into a missing file.
+func TestRefreshPresetFailsWhenThePresetCannotBeWritten(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "presets", "libris.ini")
 	if err := os.MkdirAll(path, 0o755); err != nil { // a directory where the file belongs
@@ -126,12 +119,12 @@ func TestRefreshPresetRefusesToOverwriteWhatItCannotRead(t *testing.T) {
 	}
 
 	if _, err := refreshPreset(path, "Vulkan0", oneChat()); err == nil {
-		t.Fatal("a preset that cannot be read was accepted as one that is missing")
+		t.Fatal("a preset that cannot be written was accepted")
 	} else if errors.Is(err, os.ErrNotExist) {
-		t.Errorf("err = %v, want the read failure rather than an absence", err)
+		t.Errorf("err = %v, want the write failure rather than an absence", err)
 	}
 	if _, err := os.Stat(path); err != nil {
-		t.Errorf("the unreadable thing was removed on the way out: %v", err)
+		t.Errorf("the thing that could not be replaced was removed on the way out: %v", err)
 	}
 }
 

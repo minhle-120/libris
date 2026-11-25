@@ -1,12 +1,14 @@
 package engine
 
-// The router's configuration file: what libris writes, what llama.cpp reads, and the one
-// question the supervisor is allowed to ask about it.
+// The router's configuration file: what libris writes, and what llama.cpp reads.
 //
-// Write (Preset), read (ReadPreset), and the comparison the two imply (refreshPreset) belong
-// together, and were split across the supervisor: the supervisor held the rule about when a
-// format needs rewriting, which is the one question it should not have been asking. Why the
-// configuration is a file at all is PresetsDir's and Preset's own comments — said once, there.
+// Write (Preset) and read (ReadPreset) belong together, and the pair is what the supervisor asks
+// for at every start: write the file from what libris derives, read it back, serve what the file
+// says. Whether a write could be skipped is no longer a question anyone gets to ask, and
+// refreshPreset says why not.
+//
+// Why the configuration is a file at all, and where it lives, is PresetsDir's and Preset's own
+// comments — said once, there.
 
 import (
 	"errors"
@@ -33,11 +35,12 @@ const RouterID = "libris"
 // PresetsDir is where the model server's configuration lives: the data directory, beside the
 // database and the models — deliberately NOT beside the binary.
 //
-// The file is the only place a model server's behaviour exists, and the binary that
-// reads it can be removed and re-fetched by a button. A hand-edited cache-ram that vanished
-// with the engine would be a setting the user did not change, which is exactly what this
-// arrangement refuses. So the configuration outlives the engine by construction, and "where is my
-// configuration" has one answer for every file libris keeps.
+// The engine directory is what the "Remove" button deletes, and this file describes the models
+// and the device rather than the program that reads them — a file naming
+// <data>/models/lfm3.gguf does not belong under a tree a button can make go away, and it would
+// have to sit there for removing the engine to also delete the record of what was last served.
+// So it is a sibling of the engine, and "where is my model server's configuration" keeps one
+// answer for every file libris keeps.
 func PresetsDir(dataDir string) string { return filepath.Join(dataDir, "presets") }
 
 // PresetPath is the file one router process reads.
@@ -78,18 +81,21 @@ func PresetPath(dataDir, id string) string {
 // nothing fails, the vectors are just wrong. Measured on the catalogue's own embedder, with and
 // without `pooling = mean`, the vectors are identical (one row of 768, the same twelve hex
 // digits of a digest), which is the answer that let this line stay absent.
-// The file is the configuration. libris writes it once, and afterwards only when what it
-// derives has actually changed — which models exist, where their files are, and which device
-// to offload to. A number edited by hand in the meantime (cache-ram, ctx-size, a quantisation
-// someone wants to try against the pinned one) survives until one of those three moves, which
-// is the whole reason it is a file in the data directory rather than flags assembled at a call
-// site: it is the one place the server's own behaviour can be read and changed on a machine
-// where nothing else about llama.cpp is configurable.
+// The file is what the router is told, in full, every time it starts: libris writes it from what
+// it derives — which models exist, where their files are, which device to offload to, and what
+// each kind is given — and nothing is carried over from the previous file. So a number changed by
+// hand here is what the server runs until the next start, and not after it. That is the trade,
+// made on purpose: the file can never be behind the program, so an installed machine cannot be
+// left serving a configuration no build writes any more. It is still a file rather than flags
+// assembled at a call site because llama.cpp reads a file, and because this stays the one place
+// on a machine where nothing else about the model server is configurable at which to read what
+// was actually passed.
 func Preset(path string, device string, models []Model) error {
 	var b strings.Builder
 	b.WriteString("; The model server's own configuration, in the libris data directory.\n")
-	b.WriteString("; llama-server reads this file; libris rewrites it only when the models or the device\n")
-	b.WriteString("; it derives have changed, so an edit to a number here survives until one of them moves.\n")
+	b.WriteString("; llama-server reads this file. libris rewrites it from its own defaults at every\n")
+	b.WriteString("; start, so a number changed here is what the server runs until the next start, and\n")
+	b.WriteString("; not after it.\n")
 	b.WriteString("; A name llama.cpp does not recognise here stops the server from starting at all.\n")
 	b.WriteString("; Capacity and sampling belong to the server, not to a request.\n")
 	b.WriteString("; load-on-startup is off: the router comes up empty and loads a model when a request\n")
@@ -155,20 +161,18 @@ func Preset(path string, device string, models []Model) error {
 	return nil
 }
 
-// PresetFile is what the file on disk says, read back before the router is started. Only the
-// parts libris compares against its own derivation are kept: the global device, and each
-// section's name and files. Everything else in the file — every key libris writes and every key
-// a person writes — is passed to llama.cpp untouched, because this program is not the one
-// running the model server.
+// PresetFile is what the file on disk says, read back after it has been written. Only the parts
+// the caller reports are kept: the global device, and each section's name and files. Everything
+// else in the file is passed to llama.cpp untouched, because this program is not the one running
+// the model server.
 type PresetFile struct {
 	Device string
 	Models []Model
 }
 
-// ReadPreset reads the file the router is about to read. A file that is not there is not an
-// error: it is the state a data directory is in before the first start, and the caller writes
-// one. A file that cannot be read at all is an error rather than an absence, because overwriting
-// it would delete an edit nobody has been told about.
+// ReadPreset reads what the file says. A file that is not there reads as nil rather than an
+// error, so asking what a file says never has to interpret a filesystem; a file that cannot be
+// read at all is an error, because it is there and its contents are unknown.
 func ReadPreset(path string) (*PresetFile, error) {
 	raw, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -249,57 +253,33 @@ func truthy(v string) bool {
 	return false
 }
 
-// Matches is whether the file already says what libris would write about the three things it
-// derives: which models exist, which file each one is, and which device to offload to. Section
-// order is not compared — rearranging the file changes nothing libris can care about — and
-// neither is any other key, which is the point of the comparison being this narrow.
-func (p *PresetFile) Matches(device string, models []Model) bool {
-	if p == nil || p.Device != device {
-		return false
-	}
-	want := map[string]Model{}
-	for _, m := range models {
-		if m.Path != "" {
-			want[string(m.Alias)] = m
-		}
-	}
-	if len(want) != len(p.Models) {
-		return false
-	}
-	for _, have := range p.Models {
-		got, ok := want[string(have.Alias)]
-		if !ok || got.Path != have.Path || got.MMProj != have.MMProj {
-			return false
-		}
-	}
-	return true
-}
-
-// refreshPreset brings the file up to date with what libris derives, and answers with what the
-// file now says — which is what the router is about to serve, so the caller reports this rather
-// than what it hoped for.
+// refreshPreset writes the preset from what libris derives and answers with what the file now
+// says — which is what the router is about to serve, so the caller reports the file rather than
+// what it meant to write.
 //
-// The rule, in one place: read what is there; write only when one of the three things libris
-// derives has moved (which models exist, where their files are, which device to offload to);
-// after writing, read the file back. Absent is not an error — that is a data directory before
-// its first start. Unreadable is an error rather than an absence, because overwriting it would
-// delete an edit nobody has been told about.
+// It writes every start. The earlier rule read the file first and wrote only when one of three
+// things had moved, and what that bought was a hand-edited number surviving. What it cost was
+// invisible: the comparison that made skipping possible compared only what libris *reports* —
+// which models, where their files are, which device — so a change to anything libris *writes*, a
+// context size or the default number of slots, never reached a machine that had started once
+// already. It could not, because the rule for noticing was that same narrow rule, and the numbers
+// were not in it. Such a machine serves an old server configuration indefinitely, and the only
+// sign is that its answer is slower than the one beside it.
 //
-// Why the configuration is a file at all, and why a hand edit outranks a regeneration, is
-// Preset's comment; this is only the part that decides when to write. Matches is narrow so that
-// the answer to that question is rarely "now".
+// So the file is rewritten, and a hand edit lasts until the next start. Preset's comment holds
+// the other half: why this is a file at all, and what reading it is still good for.
 func refreshPreset(path, device string, models []Model) (*PresetFile, error) {
-	have, err := ReadPreset(path)
-	if err != nil {
-		return nil, err
-	}
-	if have.Matches(device, models) {
-		return have, nil
-	}
 	if err := Preset(path, device, models); err != nil {
 		return nil, err
 	}
 	// Read back rather than trusting what was just built in memory: what the router is about to
 	// serve is what the file says, and this way the two cannot drift.
-	return ReadPreset(path)
+	have, err := ReadPreset(path)
+	if err != nil {
+		return nil, err
+	}
+	if have == nil {
+		return nil, fmt.Errorf("engine: the preset %s was written and is not there to read back", path)
+	}
+	return have, nil
 }

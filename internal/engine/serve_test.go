@@ -144,10 +144,6 @@ func TestReadPresetRoundTripsTheFileItWrote(t *testing.T) {
 			t.Errorf("section %d reads %+v, want %+v", i, got, m)
 		}
 	}
-	if !have.Matches("Vulkan0", want) {
-		t.Error("a file that agrees with the derivation must not be rewritten")
-	}
-
 	// Absent is not an error — it is a data directory before its first start.
 	missing, err := engine.ReadPreset(filepath.Join(dir, "nope.ini"))
 	if err != nil || missing != nil {
@@ -159,9 +155,9 @@ func TestReadPresetRoundTripsTheFileItWrote(t *testing.T) {
 // from what the file says after the refresh, so a model that downloaded while the router was
 // stopped is in the running set without anything telling this call about it.
 //
-// The rule on either side of that join — when the file gets rewritten, and when a hand edit
-// survives — is TestRefreshPreset* in preset_internal_test.go, which says it with a file and a
-// string instead of a spawn, a readiness probe and a port.
+// The rule on the file side of that join — that every start rewrites it, moved or not — is
+// TestRefreshPreset* in preset_internal_test.go, which says it with a file and a string instead
+// of a spawn, a readiness probe and a port.
 func TestStartServesWhatThePresetHoldsAfterAModelAppears(t *testing.T) {
 	sup, opts, _ := serveFixture(t)
 	models := []engine.Model{{Alias: engine.AliasChat, Kind: engine.KindChat, Path: "/m/c.gguf"}}

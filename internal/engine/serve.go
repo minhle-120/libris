@@ -102,10 +102,10 @@ type Serving struct {
 	StartedAt time.Time `json:"started_at,omitempty"`
 	Port      int       `json:"port"`
 	Models    []string  `json:"models,omitempty"`
-	// Device is what the file the router read actually says, which is not always what the
-	// setting asked for: a blank setting means libris picked, and a hand-edited file means the
-	// file picked. The page shows this rather than the setting, because the process is what the
-	// answer came out of.
+	// Device is what the file the router read actually says, read back after the write rather
+	// than repeated from the call: a blank setting means libris picked one, and the file is what
+	// went to the process. The page shows this rather than the setting, because the process is
+	// what the answer came out of.
 	Device string `json:"device,omitempty"`
 
 	// Log is the file the server's own output went to. A model that fails to load says why
@@ -276,8 +276,9 @@ func (s *Supervisor) Start(ctx context.Context, o ServeOptions, models []Model) 
 	if cur := s.Status(); cur.Running {
 		return cur, ErrAlreadyServing
 	}
-	// Whether the preset needs writing is the preset module's question, not this one. The
-	// supervisor asks what the router is about to serve and gets the file's own answer.
+	// The file the router reads is rewritten now, from what libris derives about the models and
+	// the device, and what this reports afterwards is the file's own answer read back — not the
+	// derivation. Why every start writes is refreshPreset's comment.
 	have, err := refreshPreset(o.Preset, o.Device, models)
 	if err != nil {
 		return Serving{}, err
@@ -345,11 +346,11 @@ func (s *Supervisor) startOnce(ctx context.Context, o ServeOptions, port int, lo
 	// remains is the cap that does not need to measure anything: at most ModelsMax instances,
 	// least recently used unloaded first.
 	//
-	// The port is an argument and not a key in that file on purpose: the file is the model
-	// server's configuration and is only rewritten when what libris derives about the models
-	// or the device has moved. A port chosen per start would rewrite it on every
-	// start, and hand edits to a capacity number would be stomped by something that has
-	// nothing to do with them.
+	// The port is an argument and not a key in that file on purpose: what the file holds are
+	// facts about models — which exist, where their files are, what each is given — and a port
+	// is not one of those. A number chosen per start belongs beside the pid and the start time,
+	// which is where the serve record already keeps it, and putting it here would let a socket
+	// collision rewrite what a model is given.
 	args := []string{
 		"--models-preset", o.Preset,
 		"--host", o.Host,

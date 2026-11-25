@@ -1194,7 +1194,7 @@ func TestPresetDeviceHonoursASavedNameOnlyWhileItExists(t *testing.T) {
 		probeErr bool
 	}{
 		{name: "blank takes the first device the build can use", report: twoGPUs, want: "Vulkan0"},
-		{name: "the case a hand-edited preset uses is accepted", saved: "vulkan1", report: twoGPUs, want: "Vulkan1"},
+		{name: "a saved name in the wrong case is matched, not rejected", saved: "vulkan1", report: twoGPUs, want: "Vulkan1"},
 		{
 			name:  "a device that has gone away falls back, and says so",
 			saved: "Vulkan7", report: twoGPUs, want: "Vulkan0", wantWhy: true,
@@ -1248,12 +1248,11 @@ func TestPresetDeviceHonoursASavedNameOnlyWhileItExists(t *testing.T) {
 // configuration lands.
 //
 // It used to live in <data>/bin/presets, beside the llama-server that reads it, which read as
-// tidy until "Remove" was pressed: that button deletes the engine directory, and with it the
-// one file where a person's hand-edited cache-ram or ctx-size existed — and that file *is*
-// the configuration, so deleting it with the binary deletes a fact the app still
-// believes. The app is told the path now, and the engine directory is a sibling of the data
-// directory below — so a regression back to filepath.Join(engine.Dir(), "presets") cannot pass
-// by both happening to sit under one tree.
+// tidy until "Remove" was pressed: that button deletes the engine directory, and with it the file
+// that says what the model server was last told — a file naming <data>/models, and therefore not
+// a fact about the binary being removed. The app is told the path now, and the engine directory
+// is a sibling of the data directory below — so a regression back to
+// filepath.Join(engine.Dir(), "presets") cannot pass by both happening to sit under one tree.
 func TestPresetIsWrittenWhereItWasToldAndNotBesideTheEngine(t *testing.T) {
 	dir := t.TempDir()
 	engDir := filepath.Join(dir, "bin") // where Remove deletes to
