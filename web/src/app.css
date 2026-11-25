@@ -361,6 +361,22 @@ textarea.input {
   resize: none;
 }
 
+/* A number field is typed, not stepped. The spinners are the browser's own control:
+   painted in the browser's colours rather than the theme's — a light box on a dark
+   form — and they sit over the right-hand end of the field, which is where every
+   number here puts its value. Keyboard stepping with the arrows still works. */
+input[type='number'] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+input[type='number']::-webkit-outer-spin-button,
+input[type='number']::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  appearance: none;
+  margin: 0;
+}
+
 .field-quiet {
   background: var(--hover);
   border-color: transparent;
