@@ -27,7 +27,8 @@ import type {
   Notebook,
   Panel,
   Segment,
-  Source
+  Source,
+  ToolsReport
 } from './types';
 
 export type Live = {
@@ -63,6 +64,11 @@ export const app = $state({
 
   sources: [] as Source[],
   loading: true,
+
+  /** What this machine provides to read a file, and whether the download brought it. Null
+   *  until asked, and a row blaming a missing program waits for the answer rather than
+   *  guessing: "install it" and "the folder came with libris" describe two machines. */
+  tools: null as ToolsReport | null,
 
   messages: [] as Message[],
   messagesLoading: false,
@@ -160,6 +166,15 @@ export async function boot() {
   // Loaded before the gate, because the wizard writes a setting too — the device it picks —
   // and it cannot save what it has never read.
   void loadSettings();
+
+  // Which place a program came from, asked once before anything can blame one for being
+  // missing. It is not part of the gate: a machine that cannot read a PDF can still answer
+  // questions about everything else, and the row says so on its own.
+  try {
+    app.tools = await api.getTools();
+  } catch {
+    app.tools = null;
+  }
 
   // The gate is the server's rule, read once at boot and then re-read only while the wizard
   // is on screen. A settings change made inside the app must not tear the app away.

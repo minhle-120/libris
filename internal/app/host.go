@@ -29,6 +29,7 @@ import (
 	"libris/internal/models"
 	"libris/internal/serving"
 	"libris/internal/setup"
+	"libris/internal/tools"
 )
 
 // deviceCacheAge bounds how long a device report stays reusable without asking again. The
@@ -114,10 +115,16 @@ type HostOptions struct {
 	// Probe asks the installed engine what it can run on. It is a field so the caching around it can be tested on a
 	// machine with neither a GPU nor permission to run anything; nil means the real one.
 	Probe func(context.Context, deviceinfo.Options) (deviceinfo.Report, error)
+
+	// Programs resolves the programs libris runs but did not write. It is a resolver rather
+	// than a snapshot so the answer is for now: the folder beside the executable can move,
+	// and the page that says what is missing should not be quoting a boot from days ago.
+	Programs tools.Resolver
 }
 
 type Host struct {
 	engine     EngineManager
+	programs   tools.Resolver
 	settings   Settings
 	devCache   string
 	serve      Server
@@ -157,6 +164,7 @@ func NewHost(opts HostOptions) (*Host, error) {
 
 	return &Host{
 		engine:     opts.Engine,
+		programs:   opts.Programs,
 		settings:   opts.Settings,
 		devCache:   opts.DeviceCache,
 		serve:      opts.Serve,
@@ -167,6 +175,37 @@ func NewHost(opts HostOptions) (*Host, error) {
 		log:        log,
 		now:        func() time.Time { return time.Now().UTC() },
 	}, nil
+}
+
+// ToolsView is what this machine provides to run the files libris accepts, and whether it
+// brought those programs with itself. It is a separate answer from the engine's because the
+// two fail differently: an absent engine is a download button, and an absent pdftotext is
+// either a download button or a folder left behind when somebody moved libris — which of the
+// two it is depends only on whether this install came with a tools folder, and the page cannot
+// tell without being told.
+type ToolsView struct {
+	// Bundled says this install carries its own folder of programs beside the executable.
+	Bundled bool `json:"bundled"`
+	// Dir is that folder, so a sentence about a folder can name the one it means.
+	Dir      string        `json:"dir,omitempty"`
+	Programs []ProgramView `json:"programs"`
+}
+
+// ProgramView is one program: what it is called, whether it was found, and where from.
+type ProgramView struct {
+	Name   string `json:"name"`
+	Origin string `json:"origin"`
+	Path   string `json:"path,omitempty"`
+}
+
+// Tools reads the machine as it is now, not as it was when libris started: a program can be
+// installed, or the folder moved, while the page is open.
+func (h *Host) Tools() *ToolsView {
+	view := &ToolsView{Bundled: h.programs.BundledHere(), Dir: h.programs.Dir()}
+	for _, p := range h.programs.All() {
+		view.Programs = append(view.Programs, ProgramView{Name: p.Name, Origin: string(p.Origin), Path: p.Path})
+	}
+	return view
 }
 
 // EngineView is the page's whole answer about the binaries. It is a view rather than

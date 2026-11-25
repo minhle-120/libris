@@ -10,6 +10,7 @@ import type {
   Segment,
   Serving,
   Source,
+  ToolsReport,
 } from "./types";
 import type { Settings } from "./config.gen";
 
@@ -316,6 +317,13 @@ function dispatch(frame: string, events: AskEvents) {
 /** The engine on this disk, the newest one upstream offers, and where the download is. */
 export function getEngine(check = false): Promise<EngineView> {
   return request<EngineView>(`/api/host/engine${check ? "?check=1" : ""}`);
+}
+
+/** The programs libris runs but did not write — the ones that read a PDF — and whether this
+ *  install brought them. Read when a row needs to say what to do about a missing one, because
+ *  the answer is about the machine rather than the file. */
+export function getTools(): Promise<ToolsReport> {
+  return request<ToolsReport>("/api/host/tools");
 }
 
 /** Starts a download and answers as soon as it is underway — the fetch itself is minutes

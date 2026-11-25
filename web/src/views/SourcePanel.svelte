@@ -24,14 +24,19 @@
 
   /**
    * A finding is a code and a detail (ADR 0008). A missing external tool becomes the action it
-   * implies — install it, then run the file again — because a bare name leaves the reader to
-   * work that out. Anything else says what was lost and stops there: re-running a file that has
-   * no more pages to give gains nothing, so the row must not imply it would.
+   * implies, because a bare name leaves the reader to work that out — and which action that is
+   * depends on the machine rather than the file. A download carries its programs in a folder
+   * beside libris, so there "install it" sends the reader after something that was never theirs
+   * to install: what happened is that the folder got left behind when libris was moved. Anything
+   * else says what was lost and stops there — re-running a file that has no more pages to give
+   * gains nothing, so the row must not imply it would.
    */
   function finding(code: FindingCode, detail: string) {
-    return code === 'tool_missing'
-      ? `${detail} is not installed here. Install it, then run this file again.`
-      : detail;
+    if (code !== 'tool_missing') return detail;
+    if (app.tools?.bundled) {
+      return `${detail} is missing from the tools folder beside libris. If libris was moved on its own, move that folder with it, then run this file again.`;
+    }
+    return `${detail} is not installed here. Install it, then run this file again.`;
   }
 
   /**

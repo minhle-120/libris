@@ -5,11 +5,13 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"libris/internal/domain"
+	"libris/internal/tools"
 )
 
 // ── remaining split/detect/image branches ────────────────────────
@@ -51,12 +53,13 @@ func TestImageMetaMIME(t *testing.T) {
 // ── exec runner (real processes) ─────────────────────────────────
 
 func TestExecRunner(t *testing.T) {
-	if lookPath("sh") == "" {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
 		t.Skip("sh not available")
 	}
 	r := execRunner{}
-
-	out, err := r.Run(context.Background(), "sh", "-c", "printf hello")
+	run := tools.Program{Name: "sh", Path: sh, Origin: tools.OriginPath}
+	out, err := r.Run(context.Background(), run, "-c", "printf hello")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -64,13 +67,23 @@ func TestExecRunner(t *testing.T) {
 		t.Fatalf("out = %q", out)
 	}
 
-	if _, err := r.Run(context.Background(), "sh", "-c", "echo boom >&2; exit 3"); err == nil {
+	// A program copied into the bundle is run with the libraries that were copied with it.
+	// This is the whole reason the answer carries where it came from: the same program run
+	// from the machine's own PATH must not be told where to look.
+	bundled := tools.Program{Name: "sh", Path: sh, Origin: tools.OriginBundled, LibDir: t.TempDir()}
+	if out, err := r.Run(context.Background(), bundled, "-c", "printf %s \"$LD_LIBRARY_PATH\""); err != nil {
+		t.Fatalf("Run with a library folder: %v", err)
+	} else if string(out) == "" {
+		t.Error("a bundled program was run without its libraries on the search path")
+	}
+
+	if _, err := r.Run(context.Background(), run, "-c", "echo boom >&2; exit 3"); err == nil {
 		t.Fatal("expected error")
 	} else if !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("stderr not surfaced: %v", err)
 	}
 
-	if _, err := r.Run(context.Background(), "sh", "-c", "exit 2"); err == nil {
+	if _, err := r.Run(context.Background(), run, "-c", "exit 2"); err == nil {
 		t.Fatal("expected error")
 	}
 }
@@ -83,7 +96,7 @@ func TestPDFDefaultRunner(t *testing.T) {
 
 func TestPDFPageImagesRunError(t *testing.T) {
 	boom := errors.New("boom")
-	pdf := &PDF{RasterBin: "pdftoppm", DPI: 72, Runner: &fakeRunner{fn: func(string, []string) ([]byte, error) {
+	pdf := &PDF{Raster: pathProgram("pdftoppm"), DPI: 72, Runner: &fakeRunner{fn: func(tools.Program, []string) ([]byte, error) {
 		return nil, boom
 	}}}
 	if _, err := pdf.PageImages(context.Background(), "x.pdf", DirSink{Root: t.TempDir()}, "p"); !errors.Is(err, boom) {
@@ -104,7 +117,7 @@ func TestProcessUnreadableFile(t *testing.T) {
 		t.Skip("root can read anything")
 	}
 
-	p, _ := New(testConfig(), DirSink{Root: t.TempDir()})
+	p, _ := New(testConfig(), DirSink{Root: t.TempDir()}, hostPDF(t))
 	if _, err := p.Process(context.Background(), path); err == nil {
 		t.Fatal("expected permission error")
 	}
@@ -112,7 +125,7 @@ func TestProcessUnreadableFile(t *testing.T) {
 
 func TestProcessCorruptImage(t *testing.T) {
 	path := writeTemp(t, "broken.png", "definitely not a png")
-	p, _ := New(testConfig(), DirSink{Root: t.TempDir()})
+	p, _ := New(testConfig(), DirSink{Root: t.TempDir()}, hostPDF(t))
 
 	res, err := p.Process(context.Background(), path)
 	if err != nil {
@@ -146,9 +159,9 @@ func TestPDFPartialFailure(t *testing.T) {
 	}
 
 	boom := errors.New("boom")
-	in := &fakeRunner{fn: func(string, []string) ([]byte, error) { return nil, boom }}
+	in := &fakeRunner{fn: func(tools.Program, []string) ([]byte, error) { return nil, boom }}
 	p := &Processor{cfg: testConfig(), sink: DirSink{Root: t.TempDir()},
-		pdf: &PDF{TextBin: "pdftotext", RasterBin: "pdftoppm", DPI: 72, Runner: in}}
+		pdf: &PDF{Text: pathProgram("pdftotext"), Raster: pathProgram("pdftoppm"), DPI: 72, Runner: in}}
 
 	res, err := p.Process(context.Background(), path)
 	if err != nil {
@@ -185,15 +198,15 @@ func TestPDFSkipsEmptyPages(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	runner := &fakeRunner{fn: func(bin string, args []string) ([]byte, error) {
-		if strings.Contains(bin, "totext") {
+	runner := &fakeRunner{fn: func(prog tools.Program, args []string) ([]byte, error) {
+		if strings.Contains(prog.Name, "totext") {
 			return []byte("first page\f\fthird page\f"), nil
 		}
 		writePNG(t, args[len(args)-1]+"-1.png", 2, 2)
 		return nil, nil
 	}}
 	p := &Processor{cfg: testConfig(), sink: DirSink{Root: t.TempDir()},
-		pdf: &PDF{TextBin: "pdftotext", RasterBin: "pdftoppm", DPI: 72, Runner: runner}}
+		pdf: &PDF{Text: pathProgram("pdftotext"), Raster: pathProgram("pdftoppm"), DPI: 72, Runner: runner}}
 
 	res, err := p.Process(context.Background(), path)
 	if err != nil {

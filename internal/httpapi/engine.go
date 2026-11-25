@@ -42,6 +42,12 @@ type Host interface {
 	EngineServeStop(ctx context.Context) (engine.Serving, error)
 	Devices(ctx context.Context, refresh bool) (deviceinfo.Report, error)
 
+	// Tools reports the programs libris runs but did not write, and whether this install
+	// brought them along. A source row that blames a missing program asks this before it
+	// says what to do about one: "install it" and "the folder came with libris" describe two
+	// different machines.
+	Tools() *app.ToolsView
+
 	// The models the catalogue offers, and the four things a person can do to one. Each of
 	// the answering calls returns the whole view, so a 202 carries the state it just caused
 	// rather than an acknowledgment the client has to go and re-read.
@@ -70,6 +76,7 @@ func (s *Server) addHostRoutes(h Host) {
 	s.mux.HandleFunc("POST /api/host/engine/serve", s.handleEngineServe)
 	s.mux.HandleFunc("DELETE /api/host/engine/serve", s.handleEngineServeStop)
 	s.mux.HandleFunc("GET /api/host/devices", s.handleDevices)
+	s.mux.HandleFunc("GET /api/host/tools", s.handleTools)
 
 	s.mux.HandleFunc("GET /api/host/models", s.handleModels)
 	s.mux.HandleFunc("POST /api/host/models", s.handleModelInstall)
@@ -84,6 +91,13 @@ func (s *Server) addHostRoutes(h Host) {
 // ?check=1 is "Check for updates" — it pays an API call now instead of accepting the cached
 // answer. Every other visit is free, which is the reason there is a cache at all: an
 // unauthenticated GitHub client gets sixty calls an hour per address.
+// handleTools answers what this machine provides to read a PDF. It reads the disk on every
+// visit rather than caching, because the answer changes without libris doing anything: a
+// package installed, a folder moved, a download unpacked somewhere else.
+func (s *Server) handleTools(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, s.host.Tools())
+}
+
 func (s *Server) handleEngine(w http.ResponseWriter, r *http.Request) {
 	view, err := s.host.Engine(r.Context(), r.URL.Query().Get("check") == "1")
 	if err != nil {

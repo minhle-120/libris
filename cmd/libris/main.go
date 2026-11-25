@@ -27,6 +27,7 @@ import (
 	"libris/internal/models"
 	"libris/internal/serving"
 	"libris/internal/store/sqlite"
+	"libris/internal/tools"
 	"libris/web"
 )
 
@@ -137,8 +138,24 @@ func main() {
 	// one on. It reads settings per call, so changing the build selection takes effect on the
 	// next check rather than the next restart — the same discipline as every other cached
 	// thing in this process.
+	// The programs libris runs but did not write. The download carries them beside the
+	// executable; a build from source has the machine's package manager instead. Resolved once
+	// and asked again per job, so a folder moved or a package installed is noticed without a
+	// restart — which "install it, then run this file again" would otherwise quietly require.
+	programs, err := tools.BesideExecutable()
+	if err != nil {
+		log.Warn("could not tell where this executable lives; PDF tools will come from PATH only", "err", err)
+		programs = tools.FromPath()
+	}
+	for _, p := range programs.All() {
+		if p.Found() {
+			log.Info("program resolved", "name", p.Name, "origin", p.Origin, "path", p.Path)
+		}
+	}
+
 	modelsDir := models.Dir(*dataDir)
 	host, err := app.NewHost(app.HostOptions{
+		Programs:    programs,
 		Engine:      engine.Open(filepath.Join(*dataDir, "bin"), log),
 		Serve:       serve,
 		ModelsDir:   modelsDir,
@@ -168,8 +185,10 @@ func main() {
 	service, err := app.New(app.Options{
 		Store:    db,
 		Settings: settings,
+		// The programs are resolved here rather than captured, so the next upload sees this
+		// folder as it is now.
 		Processor: func(cfg config.Config, sink ingest.Sink) (app.Ingestor, error) {
-			return ingest.New(cfg, sink)
+			return ingest.New(cfg, sink, programs.PDF())
 		},
 		// Likewise the embedder: a job embeds against the server configured when
 		// that job ran, not the one that was set when libris booted.

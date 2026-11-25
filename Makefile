@@ -91,5 +91,29 @@ ui-setup: build
 	kill $$pid 2>/dev/null; rm -rf $$dir; \
 	test $$rc -eq 0
 
+# The sentence beside a PDF that no program on this machine could read. Which sentence is right
+# depends on whether this install brought its own folder of programs, so the fixture has to make
+# both true: PATH=/nonexistent is a machine with nothing installed, and the binary is copied into
+# a throwaway directory so the folder beside it can be made to exist or not — the checkout must
+# not grow a tools folder in order to be tested. Both halves run against the same code path, one
+# with the folder and one without.
+ui-tools: build
+	@i=0; for kind in bundle install; do \
+		i=$$((i+1)); port=$$(( $(UI_PORT) + i )); \
+		dir=$$(mktemp -d); \
+		cp libris $$dir/libris; \
+		if test $$kind = bundle; then mkdir -p $$dir/tools; fi; \
+		mkdir -p $$dir/data; \
+		printf '%s' '{"engineMode":"external","chatURL":"http://127.0.0.1:9/none","embedURL":"http://127.0.0.1:9/none","chatModel":"none","embedModel":"none"}' > $$dir/data/settings.json; \
+		PATH=/nonexistent $$dir/libris -open=false -addr 127.0.0.1:$$port \
+			-data $$dir/data >/tmp/libris-tools-$$kind.log 2>&1 & pid=$$!; \
+		sleep 1; \
+		EXPECT=$$kind APP=http://127.0.0.1:$$port/ CDP_PORT=$$((9330 + i)) \
+			node scripts/ui-tools.mjs; rc=$$?; \
+		kill $$pid 2>/dev/null; wait $$pid 2>/dev/null; \
+		rm -rf $$dir; \
+		test $$rc -eq 0 || exit 1; \
+	done
+
 clean:
 	rm -f cover.out

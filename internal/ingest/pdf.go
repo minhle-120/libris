@@ -12,32 +12,40 @@ import (
 	"strings"
 
 	"libris/internal/domain"
+	"libris/internal/tools"
 )
 
+// The programs may be absent in either place they are looked for, and that is reported rather
+// than guessed around: a page with no text and a page with no image are different things from
+// a page that failed.
 var (
-	ErrNoPDFText   = errors.New("ingest: pdftotext not found on PATH")
-	ErrNoPDFRaster = errors.New("ingest: pdftoppm not found on PATH")
+	ErrNoPDFText   = errors.New("ingest: no pdftotext on this machine")
+	ErrNoPDFRaster = errors.New("ingest: no pdftoppm on this machine")
 )
 
-// Runner abstracts process execution so PDF handling is testable without
-// poppler installed.
+// Runner abstracts process execution so PDF handling is testable without poppler installed.
+// It is handed a resolved program rather than a name because where the program came from is
+// what decides whether it needs an environment of its own.
 type Runner interface {
-	Run(ctx context.Context, bin string, args ...string) ([]byte, error)
+	Run(ctx context.Context, prog tools.Program, args ...string) ([]byte, error)
 }
 
 type execRunner struct{}
 
-func (execRunner) Run(ctx context.Context, bin string, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, bin, args...)
+func (execRunner) Run(ctx context.Context, prog tools.Program, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, prog.Path, args...)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
+	if env := prog.Env(os.Environ()); len(env) != 0 {
+		cmd.Env = env
+	}
 
 	out, err := cmd.Output()
 	if err != nil {
 		if msg := strings.TrimSpace(stderr.String()); msg != "" {
-			return nil, fmt.Errorf("%s: %w: %s", bin, err, msg)
+			return nil, fmt.Errorf("%s: %w: %s", prog.Name, err, msg)
 		}
-		return nil, fmt.Errorf("%s: %w", bin, err)
+		return nil, fmt.Errorf("%s: %w", prog.Name, err)
 	}
 	return out, nil
 }
@@ -45,11 +53,15 @@ func (execRunner) Run(ctx context.Context, bin string, args ...string) ([]byte, 
 // PDF turns one PDF into its two derived documents: page text, and page
 // rasters at the configured DPI. Both are produced because a text layer is not
 // reliable — slides, scans and figure-heavy papers need the image.
+//
+// The programs arrive resolved rather than being looked up here: which folder a program came
+// from belongs to the module that knows about folders, and looking it up here would spread
+// that rule across the two places that would then have to agree.
 type PDF struct {
-	TextBin   string // pdftotext
-	RasterBin string // pdftoppm
-	DPI       int
-	Runner    Runner
+	Text   tools.Program
+	Raster tools.Program
+	DPI    int
+	Runner Runner
 }
 
 func (p *PDF) runner() Runner {
@@ -61,11 +73,11 @@ func (p *PDF) runner() Runner {
 
 // Pages extracts text, one string per page, in document order.
 func (p *PDF) Pages(ctx context.Context, path string) ([]string, error) {
-	if p.TextBin == "" {
+	if !p.Text.Found() {
 		return nil, ErrNoPDFText
 	}
 
-	out, err := p.runner().Run(ctx, p.TextBin, "-enc", "UTF-8", path, "-")
+	out, err := p.runner().Run(ctx, p.Text, "-enc", "UTF-8", path, "-")
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +96,7 @@ func (p *PDF) Pages(ctx context.Context, path string) ([]string, error) {
 // PageImages rasterises every page and hands each PNG to the sink under
 // "<prefix>/page-0001.png", preserving document order.
 func (p *PDF) PageImages(ctx context.Context, path string, sink Sink, prefix string) ([]domain.Asset, error) {
-	if p.RasterBin == "" {
+	if !p.Raster.Found() {
 		return nil, ErrNoPDFRaster
 	}
 
@@ -96,7 +108,7 @@ func (p *PDF) PageImages(ctx context.Context, path string, sink Sink, prefix str
 
 	stem := filepath.Join(dir, "page")
 	args := []string{"-png", "-r", strconv.Itoa(p.DPI), path, stem}
-	if _, err := p.runner().Run(ctx, p.RasterBin, args...); err != nil {
+	if _, err := p.runner().Run(ctx, p.Raster, args...); err != nil {
 		return nil, err
 	}
 
@@ -105,7 +117,7 @@ func (p *PDF) PageImages(ctx context.Context, path string, sink Sink, prefix str
 		return nil, err
 	}
 	if len(matches) == 0 {
-		return nil, fmt.Errorf("ingest: %s produced no pages", p.RasterBin)
+		return nil, fmt.Errorf("ingest: %s produced no pages", p.Raster.Name)
 	}
 	sort.Slice(matches, func(i, j int) bool {
 		return pageNumber(matches[i]) < pageNumber(matches[j])
@@ -134,15 +146,4 @@ func pageNumber(path string) int {
 		return 0
 	}
 	return n
-}
-
-func lookPath(bin string) string {
-	if bin == "" {
-		return ""
-	}
-	p, err := exec.LookPath(bin)
-	if err != nil {
-		return ""
-	}
-	return p
 }

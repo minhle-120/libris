@@ -20,6 +20,14 @@ does not have. Two kinds, because two actions exist — install something and ru
 accept what the file gave. A finding never changes the status; it says what to do about it.
 _Avoid_: Warning, note, diagnostic
 
+**Tool folder**:
+The `tools` folder that travels beside the libris executable, holding the programs libris runs but
+ did not write — pdftotext and pdftoppm — with the libraries and fonts those programs need. It is
+ what makes a download enough on its own. A program found there is **bundled**; one found through
+ PATH was installed by the machine's owner. The two are run differently, because only one of them
+ arrived carrying its own dependencies.
+_Avoid_: Dependencies, runtime, vendored binaries
+
 **Segment**:
 One embeddable piece of a source — a chunk of page text, or one page's image. The unit a
 vector is stored against and the unit a citation names.

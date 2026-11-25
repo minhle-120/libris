@@ -880,9 +880,11 @@ sentences explaining internals to someone who only wanted to press a button. Wri
 ## 9. The contract the automated checks hold you to
 
 `make ui` drives a real Chromium against a real binary (harnesses `ui-upload ui-drop ui-ask ui-nav`;
-`make ui-setup` runs the wizard against a fresh data directory and an `EXPECT_STEP`). They are the only
-external evidence that a from-scratch UI still works, so **they are not to be edited to fit whatever you
-happen to build** — not the structure, not the behaviour, not the counts, not the hooks below.
+`make ui-setup` runs the wizard against a fresh data directory and an `EXPECT_STEP`; `make ui-tools`
+uploads a PDF to a machine with no poppler, once with a `tools` folder beside the binary and once
+without, because which of the two it is decides the sentence a missing program turns into). They are
+the only external evidence that a from-scratch UI still works, so **they are not to be edited to fit
+whatever you happen to build** — not the structure, not the behaviour, not the counts, not the hooks below.
 
 **One exception, and it is a rule rather than a loophole: wording.** Where a check matches on words the old
 UI used, it asserts *that the app communicates something here* — never that the old sentence was good. If

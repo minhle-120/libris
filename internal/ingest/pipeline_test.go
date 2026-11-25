@@ -13,24 +13,43 @@ import (
 
 	"libris/internal/config"
 	"libris/internal/domain"
+	"libris/internal/tools"
 )
 
 type fakeCall struct {
-	bin  string
+	prog tools.Program
 	args []string
+}
+
+// hostPDF resolves the programs this machine really has, for the tests that run them.
+func hostPDF(t *testing.T) tools.PDF {
+	t.Helper()
+	return tools.FromPath().PDF()
+}
+
+// missingProgram is what a resolver hands back for a program found in neither place: named,
+// and not found. A PDF struct with no programs in it at all is not a thing that can happen,
+// and writing one hid that a finding's detail is taken from the program's own name.
+func missingProgram(name string) tools.Program {
+	return tools.Program{Name: name, Origin: tools.OriginMissing}
+}
+
+// pathProgram is a program a test does not care about the provenance of.
+func pathProgram(name string) tools.Program {
+	return tools.Program{Name: name, Path: name, Origin: tools.OriginPath}
 }
 
 type fakeRunner struct {
 	calls []fakeCall
-	fn    func(bin string, args []string) ([]byte, error)
+	fn    func(prog tools.Program, args []string) ([]byte, error)
 }
 
-func (f *fakeRunner) Run(_ context.Context, bin string, args ...string) ([]byte, error) {
-	f.calls = append(f.calls, fakeCall{bin, args})
+func (f *fakeRunner) Run(_ context.Context, prog tools.Program, args ...string) ([]byte, error) {
+	f.calls = append(f.calls, fakeCall{prog, args})
 	if f.fn == nil {
 		return nil, nil
 	}
-	return f.fn(bin, args)
+	return f.fn(prog, args)
 }
 
 func writePNG(t *testing.T, path string, w, h int) {
@@ -53,10 +72,10 @@ func testConfig() config.Config {
 // ── PDF ──────────────────────────────────────────────────────────
 
 func TestPDFPages(t *testing.T) {
-	runner := &fakeRunner{fn: func(string, []string) ([]byte, error) {
+	runner := &fakeRunner{fn: func(tools.Program, []string) ([]byte, error) {
 		return []byte("page one text\fpage two text\f"), nil
 	}}
-	pdf := &PDF{TextBin: "pdftotext", DPI: 150, Runner: runner}
+	pdf := &PDF{Text: pathProgram("pdftotext"), DPI: 150, Runner: runner}
 
 	pages, err := pdf.Pages(context.Background(), "/tmp/x.pdf")
 	if err != nil {
@@ -81,7 +100,7 @@ func TestPDFPagesUnavailable(t *testing.T) {
 
 func TestPDFPagesRunnerError(t *testing.T) {
 	boom := errors.New("boom")
-	pdf := &PDF{TextBin: "pdftotext", Runner: &fakeRunner{fn: func(string, []string) ([]byte, error) {
+	pdf := &PDF{Text: pathProgram("pdftotext"), Runner: &fakeRunner{fn: func(tools.Program, []string) ([]byte, error) {
 		return nil, boom
 	}}}
 	if _, err := pdf.Pages(context.Background(), "x.pdf"); !errors.Is(err, boom) {
@@ -90,7 +109,7 @@ func TestPDFPagesRunnerError(t *testing.T) {
 }
 
 func TestPDFPageImages(t *testing.T) {
-	runner := &fakeRunner{fn: func(bin string, args []string) ([]byte, error) {
+	runner := &fakeRunner{fn: func(prog tools.Program, args []string) ([]byte, error) {
 		stem := args[len(args)-1]
 		// pdftoppm numbers pages without zero padding, so 10 sorts before 2.
 		for _, n := range []string{"1", "2", "10"} {
@@ -98,7 +117,7 @@ func TestPDFPageImages(t *testing.T) {
 		}
 		return nil, nil
 	}}
-	pdf := &PDF{RasterBin: "pdftoppm", DPI: 96, Runner: runner}
+	pdf := &PDF{Raster: pathProgram("pdftoppm"), DPI: 96, Runner: runner}
 	sink := DirSink{Root: t.TempDir()}
 
 	assets, err := pdf.PageImages(context.Background(), "/tmp/x.pdf", sink, "src/pages")
@@ -131,7 +150,7 @@ func TestPDFPageImagesUnavailable(t *testing.T) {
 }
 
 func TestPDFPageImagesNoOutput(t *testing.T) {
-	pdf := &PDF{RasterBin: "pdftoppm", DPI: 72, Runner: &fakeRunner{}}
+	pdf := &PDF{Raster: pathProgram("pdftoppm"), DPI: 72, Runner: &fakeRunner{}}
 	_, err := pdf.PageImages(context.Background(), "x.pdf", DirSink{Root: t.TempDir()}, "p")
 	if err == nil || !strings.Contains(err.Error(), "produced no pages") {
 		t.Fatalf("err = %v", err)
@@ -139,11 +158,11 @@ func TestPDFPageImagesNoOutput(t *testing.T) {
 }
 
 func TestPDFPageImagesSinkError(t *testing.T) {
-	runner := &fakeRunner{fn: func(_ string, args []string) ([]byte, error) {
+	runner := &fakeRunner{fn: func(_ tools.Program, args []string) ([]byte, error) {
 		writePNG(t, args[len(args)-1]+"-1.png", 2, 2)
 		return nil, nil
 	}}
-	pdf := &PDF{RasterBin: "pdftoppm", DPI: 72, Runner: runner}
+	pdf := &PDF{Raster: pathProgram("pdftoppm"), DPI: 72, Runner: runner}
 	boom := errors.New("disk full")
 
 	if _, err := pdf.PageImages(context.Background(), "x.pdf", failSink{err: boom}, "p"); !errors.Is(err, boom) {
@@ -157,15 +176,6 @@ func TestPageNumber(t *testing.T) {
 		if got := pageNumber(in); got != want {
 			t.Errorf("pageNumber(%q) = %d, want %d", in, got, want)
 		}
-	}
-}
-
-func TestLookPath(t *testing.T) {
-	if got := lookPath(""); got != "" {
-		t.Errorf("empty = %q", got)
-	}
-	if got := lookPath("definitely-not-a-real-binary-xyz"); got != "" {
-		t.Errorf("missing binary = %q", got)
 	}
 }
 
@@ -283,13 +293,13 @@ func TestMimeByExt(t *testing.T) {
 // ── pipeline ─────────────────────────────────────────────────────
 
 func TestNewValidation(t *testing.T) {
-	if _, err := New(config.Config{}, DirSink{Root: t.TempDir()}); err == nil {
+	if _, err := New(config.Config{}, DirSink{Root: t.TempDir()}, tools.PDF{}); err == nil {
 		t.Fatal("expected validation error")
 	}
-	if _, err := New(testConfig(), nil); err == nil {
+	if _, err := New(testConfig(), nil, tools.PDF{}); err == nil {
 		t.Fatal("expected sink error")
 	}
-	if _, err := New(testConfig(), DirSink{Root: t.TempDir()}); err != nil {
+	if _, err := New(testConfig(), DirSink{Root: t.TempDir()}, hostPDF(t)); err != nil {
 		t.Fatalf("New: %v", err)
 	}
 }
@@ -305,7 +315,7 @@ func writeTemp(t *testing.T, name, content string) string {
 
 func TestProcessText(t *testing.T) {
 	path := writeTemp(t, "notes.md", strings.Repeat("word ", 250))
-	p, err := New(testConfig(), DirSink{Root: t.TempDir()})
+	p, err := New(testConfig(), DirSink{Root: t.TempDir()}, hostPDF(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -338,7 +348,7 @@ func TestProcessText(t *testing.T) {
 
 func TestProcessHTML(t *testing.T) {
 	path := writeTemp(t, "page.html", "<p>Hello <b>world</b></p><script>x</script>")
-	p, _ := New(testConfig(), DirSink{Root: t.TempDir()})
+	p, _ := New(testConfig(), DirSink{Root: t.TempDir()}, hostPDF(t))
 
 	res, err := p.Process(context.Background(), path)
 	if err != nil {
@@ -351,7 +361,7 @@ func TestProcessHTML(t *testing.T) {
 
 func TestProcessEmptyText(t *testing.T) {
 	path := writeTemp(t, "blank.txt", "   \n\n  ")
-	p, _ := New(testConfig(), DirSink{Root: t.TempDir()})
+	p, _ := New(testConfig(), DirSink{Root: t.TempDir()}, hostPDF(t))
 
 	res, err := p.Process(context.Background(), path)
 	if err != nil {
@@ -368,7 +378,7 @@ func TestProcessImage(t *testing.T) {
 	writePNG(t, path, 5, 6)
 
 	sinkRoot := t.TempDir()
-	p, _ := New(testConfig(), DirSink{Root: sinkRoot})
+	p, _ := New(testConfig(), DirSink{Root: sinkRoot}, hostPDF(t))
 
 	res, err := p.Process(context.Background(), path)
 	if err != nil {
@@ -407,7 +417,7 @@ func TestProcessImageStoreFailure(t *testing.T) {
 }
 
 func TestProcessUnsupported(t *testing.T) {
-	p, _ := New(testConfig(), DirSink{Root: t.TempDir()})
+	p, _ := New(testConfig(), DirSink{Root: t.TempDir()}, hostPDF(t))
 
 	// A .zip is sniffed by its magic bytes, not its extension.
 	for name, want := range map[string]string{
@@ -430,7 +440,7 @@ func TestProcessUnsupported(t *testing.T) {
 func TestProcessRejections(t *testing.T) {
 	cfg := testConfig()
 	cfg.MaxFileMB = 1
-	p, _ := New(cfg, DirSink{Root: t.TempDir()})
+	p, _ := New(cfg, DirSink{Root: t.TempDir()}, hostPDF(t))
 
 	big := filepath.Join(t.TempDir(), "big.txt")
 	f, err := os.Create(big)
@@ -459,8 +469,8 @@ func TestProcessPDF(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	runner := &fakeRunner{fn: func(bin string, args []string) ([]byte, error) {
-		if strings.Contains(bin, "totext") {
+	runner := &fakeRunner{fn: func(prog tools.Program, args []string) ([]byte, error) {
+		if strings.Contains(prog.Name, "totext") {
 			return []byte("Alpha page\fBeta page\f"), nil
 		}
 		stem := args[len(args)-1]
@@ -472,7 +482,7 @@ func TestProcessPDF(t *testing.T) {
 	p := &Processor{
 		cfg:  testConfig(),
 		sink: DirSink{Root: t.TempDir()},
-		pdf:  &PDF{TextBin: "pdftotext", RasterBin: "pdftoppm", DPI: 150, Runner: runner},
+		pdf:  &PDF{Text: pathProgram("pdftotext"), Raster: pathProgram("pdftoppm"), DPI: 150, Runner: runner},
 	}
 
 	res, err := p.Process(context.Background(), path)
@@ -523,7 +533,8 @@ func TestProcessPDFWithoutTools(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	p := &Processor{cfg: testConfig(), sink: DirSink{Root: t.TempDir()}, pdf: &PDF{DPI: 150}}
+	p := &Processor{cfg: testConfig(), sink: DirSink{Root: t.TempDir()},
+		pdf: &PDF{Text: missingProgram("pdftotext"), Raster: missingProgram("pdftoppm"), DPI: 150}}
 	res, err := p.Process(context.Background(), path)
 	if err != nil {
 		t.Fatal(err)

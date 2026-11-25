@@ -33,6 +33,7 @@ type fakeHost struct {
 
 	refreshed bool
 	devices   deviceinfo.Report
+	tools     *app.ToolsView
 
 	stopped, discarded int
 
@@ -105,6 +106,18 @@ func (f *fakeHost) EngineServeStop(context.Context) (engine.Serving, error) {
 func (f *fakeHost) Devices(ctx context.Context, refresh bool) (deviceinfo.Report, error) {
 	f.refreshed = refresh
 	return f.devices, nil
+}
+
+func (f *fakeHost) Tools() *app.ToolsView {
+	if f.tools == nil {
+		f.tools = &app.ToolsView{
+			Programs: []app.ProgramView{
+				{Name: "pdftotext", Origin: "path", Path: "/usr/bin/pdftotext"},
+				{Name: "pdftoppm", Origin: "missing"},
+			},
+		}
+	}
+	return f.tools
 }
 
 func (f *fakeHost) ModelCatalog() *app.ModelsView {
@@ -345,6 +358,31 @@ func TestEngineStopAndPartsAreSeparateActions(t *testing.T) {
 	}
 	if h.discarded != 1 {
 		t.Error("discarding the parts did not reach the use case")
+	}
+}
+
+// The one fact a missing program's sentence turns on is whether this install brought its own.
+// A source row cannot see the disk, so the endpoint has to carry it. This is the whole reason
+// the route exists rather than the row wording its finding itself.
+func TestToolsEndpointCarriesTheInstall(t *testing.T) {
+	h := newFakeHost()
+	srv := hostServer(t, h)
+
+	_, body := hostCall(t, srv, http.MethodGet, "/api/host/tools", "")
+	if !strings.Contains(body, `"origin":"missing"`) || !strings.Contains(body, `"pdftoppm"`) {
+		t.Fatalf("a missing program did not reach the client with its name: %s", body)
+	}
+	if !strings.Contains(body, `"bundled":false`) {
+		t.Fatalf("the client was not told whether this install brought its own: %s", body)
+	}
+
+	h.tools = &app.ToolsView{
+		Bundled:  true,
+		Dir:      `C:\libris\tools`,
+		Programs: []app.ProgramView{{Name: "pdftotext", Origin: "bundled", Path: `C:\libris\tools\pdftotext.exe`}},
+	}
+	if _, body := hostCall(t, srv, http.MethodGet, "/api/host/tools", ""); !strings.Contains(body, `"bundled":true`) {
+		t.Fatalf("the second read still said the programs were not bundled: %s", body)
 	}
 }
 

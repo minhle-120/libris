@@ -13,6 +13,7 @@ import (
 
 	"libris/internal/config"
 	"libris/internal/domain"
+	"libris/internal/tools"
 )
 
 // Doc is a derived document. One uploaded file can produce several: a PDF
@@ -46,8 +47,11 @@ type Processor struct {
 	pdf  *PDF
 }
 
-// New validates the config and probes for the external tools poppler supplies.
-func New(cfg config.Config, sink Sink) (*Processor, error) {
+// New validates the config and takes the programs it will run, already resolved. They arrive
+// resolved because resolution is a question about folders and operating systems rather than
+// about this file, and because a Processor is built per job: the answer is asked for when an
+// upload happens rather than remembered from whenever the process started.
+func New(cfg config.Config, sink Sink, progs tools.PDF) (*Processor, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -58,9 +62,9 @@ func New(cfg config.Config, sink Sink) (*Processor, error) {
 		cfg:  cfg,
 		sink: sink,
 		pdf: &PDF{
-			TextBin:   lookPath("pdftotext"),
-			RasterBin: lookPath("pdftoppm"),
-			DPI:       cfg.PDFDPI,
+			Text:   progs.Text,
+			Raster: progs.Raster,
+			DPI:    cfg.PDFDPI,
 		},
 	}, nil
 }
@@ -172,7 +176,7 @@ func (p *Processor) pdfDoc(ctx context.Context, res *Result, path string) {
 	pages, err := p.pdf.Pages(ctx, path)
 	switch {
 	case errors.Is(err, ErrNoPDFText):
-		res.Findings = append(res.Findings, domain.ToolMissing("pdftotext"))
+		res.Findings = append(res.Findings, domain.ToolMissing(p.pdf.Text.Name))
 	case err != nil:
 		res.Findings = append(res.Findings, domain.StageFailed("page text", err))
 	default:
@@ -185,7 +189,7 @@ func (p *Processor) pdfDoc(ctx context.Context, res *Result, path string) {
 	assets, err := p.pdf.PageImages(ctx, path, p.sink, res.Source.ID+"/pages")
 	switch {
 	case errors.Is(err, ErrNoPDFRaster):
-		res.Findings = append(res.Findings, domain.ToolMissing("pdftoppm"))
+		res.Findings = append(res.Findings, domain.ToolMissing(p.pdf.Raster.Name))
 	case err != nil:
 		res.Findings = append(res.Findings, domain.StageFailed("page images", err))
 	default:

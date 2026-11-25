@@ -39,6 +39,25 @@ export type FindingCode = "tool_missing" | "stage_failed";
 
 export type Finding = { code: FindingCode; detail: string };
 
+/** Where a program libris runs but did not write came from. `bundled` is the folder that
+ *  travels with the executable; `path` is one this machine's owner installed; `missing` is
+ *  neither, which is the only one a reader is told about. */
+export type ProgramOrigin = "bundled" | "path" | "missing";
+
+export type Program = { name: string; origin: ProgramOrigin; path?: string };
+
+/**
+ * GET /api/host/tools: what this machine provides to read a file, and whether libris brought
+ * it along. `bundled` is the fact a sentence about a missing program turns on — "install it"
+ * is true advice on a machine that uses a package manager and a dead end on one whose programs
+ * were in the download and got left behind when somebody moved libris.
+ */
+export type ToolsReport = {
+  bundled: boolean;
+  dir?: string;
+  programs: Program[];
+};
+
 export type Source = {
   id: string; // sha256 of the contents
   name: string;
