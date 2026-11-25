@@ -162,7 +162,7 @@ func TestSearchEmbedsTheKeywordsItWasGiven(t *testing.T) {
 
 	_, err := newRetriever(corpus, embed, nil).Search(
 		context.Background(), reg, "nb", "coastal erosion",
-		Options{RecallTopK: 7, FinalTopK: 5})
+		Options{TopK: 7})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,8 +173,8 @@ func TestSearchEmbedsTheKeywordsItWasGiven(t *testing.T) {
 	if embed.gotPrefix != index.QuerySearch {
 		t.Errorf("query prefix = %q, want the search prefix", embed.gotPrefix)
 	}
-	if corpus.gotLimit != 7 {
-		t.Errorf("asked the corpus for %d candidates, want recallTopK 7", corpus.gotLimit)
+	if corpus.gotLimit != 7*recallPool {
+		t.Errorf("asked the corpus for %d candidates, want the pool derived from a budget of 7 (%d)", corpus.gotLimit, 7*recallPool)
 	}
 	// The store must be told which vector space to search, and the only honest
 	// source for that is the embedder that wrote it.
@@ -263,7 +263,7 @@ func TestSearchDoesNotRepeatKnownChunks(t *testing.T) {
 	}
 }
 
-func TestSearchTakesOnlyFinalTopK(t *testing.T) {
+func TestSearchShowsOnlyTheBudget(t *testing.T) {
 	var hits []domain.Hit
 	for i := range 10 {
 		// Unique words: ten chunks reading "chunk" are one chunk to a content key.
@@ -273,12 +273,12 @@ func TestSearchTakesOnlyFinalTopK(t *testing.T) {
 	reg := NewRegistry()
 
 	got, err := newRetriever(corpus, &fakeEmbed{}, nil).Search(
-		context.Background(), reg, "nb", "kw", Options{RecallTopK: 10, FinalTopK: 3})
+		context.Background(), reg, "nb", "kw", Options{TopK: 3})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 3 {
-		t.Fatalf("showed %d chunks, want the setting's 3", len(got))
+		t.Fatalf("showed %d chunks, want the budget's 3", len(got))
 	}
 	// Truncated before registration, so nothing is labelled that the model never
 	// read — and the registry, not a display slice, is what salvage reads later.

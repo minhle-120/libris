@@ -139,8 +139,8 @@ func scanHit(rows *sql.Rows, vector []float32, qn float64) (domain.Hit, error) {
 }
 
 // insertTop keeps out sorted best-first and no longer than limit. The list is at
-// most recallTopK long, so a linear insert is cheaper than a heap and much easier
-// to read.
+// most the caller's recall pool long — a few times the chunk budget — so a linear
+// insert is cheaper than a heap and much easier to read.
 func insertTop(out []domain.Hit, hit domain.Hit, limit int) []domain.Hit {
 	if len(out) == limit && hit.Score <= out[len(out)-1].Score {
 		return out

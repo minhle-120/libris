@@ -27,8 +27,7 @@ type Streamer interface {
 type Config struct {
 	ChatModel     string
 	MaxIterations int
-	RecallTopK    int
-	FinalTopK     int
+	TopK          int // what one search returns, and what the answer turn is shown
 
 	// Thinking decides whether the model is allowed to deliberate before it names a
 	// search. Off is the default because the loop throws that writing away the moment the
@@ -46,7 +45,7 @@ func (c Config) templateKwargs() *llm.ChatTemplateKwargs {
 
 // Options is the retrieval depth this turn searches at.
 func (c Config) retrieval() retrieve.Options {
-	return retrieve.Options{RecallTopK: c.RecallTopK, FinalTopK: c.FinalTopK}
+	return retrieve.Options{TopK: c.TopK}
 }
 
 // Status is how a turn ended. The four are not variations of one outcome: they say
@@ -151,8 +150,8 @@ func (r *Research) Registry() *retrieve.Registry { return r.registry }
 // The transcript is append-only across iterations, which is what gives the model
 // cross-iteration memory: by iteration three it can see that a refined query hit the
 // same page it already has, and drill somewhere else instead. That costs context,
-// roughly maxIterations × (turn + finalTopK × chunk tokens), and the two cheapest
-// levers when the window is tight are finalTopK then maxIterations — not truncating
+// roughly maxIterations × (turn + topK × chunk tokens), and the two cheapest
+// levers when the window is tight are topK then maxIterations — not truncating
 // older tool results, which removes exactly the memory being paid for.
 func (r *Research) Ask(ctx context.Context, notebookID, question, history string) (*Result, error) {
 	if r.serr != nil {

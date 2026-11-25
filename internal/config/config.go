@@ -141,8 +141,15 @@ type Config struct {
 	EmbedDim   string `key:"embedDimensions" group:"models" label:"Embedding dimensions" help:"Probed once at startup and recorded with every segment." readonly:"true"`
 
 	// ── retrieval ────────────────────────────────────────────────
-	RecallTopK    int `key:"recallTopK" group:"retrieval" label:"Recall depth" help:"Candidates pulled from the vector scan, best first." min:"1" max:"100" unit:"candidates"`
-	FinalTopK     int `key:"finalTopK" group:"retrieval" label:"Evidence per search" help:"What the research agent sees in a tool result." min:"1" max:"50" unit:"chunks"`
+	// One budget, counted across every kind of chunk: a search's text, a PDF's page
+	// rasters and a picture all come out of the same number, and the answer turn is
+	// shown the same number of chunks. Two depths sat next to each other here and read
+	// as two knobs for one thing; the deeper one is derived instead — see
+	// retrieve.recallPool, which says why it cannot simply equal this.
+	//
+	// The key stayed "finalTopK" when the second k went away: a saved settings file
+	// holds that name, and renaming it would reset whatever was saved.
+	TopK          int `key:"finalTopK" group:"retrieval" label:"Chunks per search" help:"How many chunks one search returns. Every kind counts: text, page images and pictures share this budget." min:"1" max:"50" unit:"chunks"`
 	MaxIterations int `key:"maxIterations" group:"retrieval" label:"Max iterations" help:"Deeper multi-hop research; diminishing returns past 3." min:"1" max:"10"`
 
 	// The research turn's only output is a tool call, so what a model wrote to itself
@@ -192,8 +199,7 @@ func Default() Config {
 		EmbedModel: "",
 		EmbedDim:   "",
 
-		RecallTopK:    10,
-		FinalTopK:     5,
+		TopK:          10,
 		MaxIterations: 5,
 		// Off, and worth writing down rather than inheriting from the zero value: the
 		// thinking a research turn does is the one thinking nobody sees.

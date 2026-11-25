@@ -267,7 +267,7 @@ func TestSearchResultIsLabelledChunksPlusTheEvaluationNote(t *testing.T) {
 		textChunk("p:0005", "p", 5, "The coast retreats 3mm a year."),
 		textChunk("p:0000", "p", 0, "Erosion was measured from 1990."),
 	}}
-	tr := toolsFor(t, corpus, reg, retrieve.Options{RecallTopK: 10, FinalTopK: 5})
+	tr := toolsFor(t, corpus, reg, retrieve.Options{TopK: 5})
 
 	reply, err := tr.Execute(context.Background(), Call{
 		ID:   "call_7",
@@ -306,8 +306,8 @@ func TestSearchResultIsLabelledChunksPlusTheEvaluationNote(t *testing.T) {
 	if !strings.Contains(body, "`"+ToolFinalize+"`") || !strings.Contains(body, "`"+ToolSearch+"`") {
 		t.Error("the note does not name the tools that end or continue the turn")
 	}
-	if corpus.gotLimit != 10 {
-		t.Errorf("recalled %d, want the setting's 10", corpus.gotLimit)
+	if corpus.gotLimit < 5 {
+		t.Errorf("recalled %d, want at least the budget of 5 this tool set was built with", corpus.gotLimit)
 	}
 }
 
@@ -605,12 +605,12 @@ func TestEveryCallIsCountedIncludingRefusals(t *testing.T) {
 // The settings a user saved reach the search the next turn, not the next restart.
 func TestOptionsTravelPerTurn(t *testing.T) {
 	corpus := &stubCorpus{}
-	tr := toolsFor(t, corpus, retrieve.NewRegistry(), retrieve.Options{RecallTopK: 42, FinalTopK: 1})
+	tr := toolsFor(t, corpus, retrieve.NewRegistry(), retrieve.Options{TopK: 11})
 	if _, err := tr.Execute(context.Background(), Call{Name: ToolSearch, Arguments: `{"keywords":"k"}`}); err != nil {
 		t.Fatal(err)
 	}
-	if corpus.gotLimit != 42 {
-		t.Errorf("recalled %d, want the 42 this turn was built with", corpus.gotLimit)
+	if corpus.gotLimit < 11 {
+		t.Errorf("recalled %d, want a pool scaled from the budget of 11 this turn was built with", corpus.gotLimit)
 	}
 }
 

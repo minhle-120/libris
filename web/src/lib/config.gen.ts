@@ -31,7 +31,6 @@ export type Settings = {
 	chatModel: string;
 	embedModel: string;
 	embedDimensions: string;
-	recallTopK: number;
 	finalTopK: number;
 	maxIterations: number;
 	researchThinking: boolean;
@@ -150,18 +149,9 @@ export const settingGroups: SettingGroup[] = [
 		"help": "Research loop budget. Every extra iteration costs one search round trip.",
 		"fields": [
 			{
-				"key": "recallTopK",
-				"label": "Recall depth",
-				"help": "Candidates pulled from the vector scan, best first.",
-				"kind": "number",
-				"unit": "candidates",
-				"min": 1,
-				"max": 100
-			},
-			{
 				"key": "finalTopK",
-				"label": "Evidence per search",
-				"help": "What the research agent sees in a tool result.",
+				"label": "Chunks per search",
+				"help": "How many chunks one search returns. Every kind counts: text, page images and pictures share this budget.",
 				"kind": "number",
 				"unit": "chunks",
 				"min": 1,
@@ -272,8 +262,7 @@ export function defaultSettings(): Settings {
 		chatModel: "",
 		embedModel: "",
 		embedDimensions: "",
-		recallTopK: 10,
-		finalTopK: 5,
+		finalTopK: 10,
 		maxIterations: 5,
 		researchThinking: false,
 		historyMessages: 8,

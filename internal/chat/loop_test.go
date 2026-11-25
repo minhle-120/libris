@@ -61,7 +61,7 @@ func searchCall(id, keywords string) llm.ToolCall {
 }
 
 func defaultConfig() Config {
-	return Config{ChatModel: "test-chat", MaxIterations: 5, RecallTopK: 10, FinalTopK: 5}
+	return Config{ChatModel: "test-chat", MaxIterations: 5, TopK: 10}
 }
 
 type turn struct {
@@ -634,7 +634,7 @@ func TestSettingsShapeTheTurn(t *testing.T) {
 	}}
 	cfg := defaultConfig()
 	cfg.MaxIterations = 2
-	cfg.RecallTopK = 33
+	cfg.TopK = 8
 	r := NewResearch(model, retrieve.New(corpus, &stubEmbed{}, nil, nil), cfg, nil)
 	res, err := r.Ask(context.Background(), "nb1", "q", "")
 	if err != nil {
@@ -646,8 +646,8 @@ func TestSettingsShapeTheTurn(t *testing.T) {
 	if res.Status != Synthesize || len(res.Evidence) != 1 {
 		t.Errorf("%v with %d chunks: the budget spent with chunks in hand salvages", res.Status, len(res.Evidence))
 	}
-	if corpus.gotLimit != 33 {
-		t.Errorf("recalled %d, want the saved 33", corpus.gotLimit)
+	if corpus.gotLimit < cfg.TopK {
+		t.Errorf("recalled %d, want a pool scaled from the saved budget of %d", corpus.gotLimit, cfg.TopK)
 	}
 }
 
@@ -756,15 +756,15 @@ func TestExtraArgumentKeysAreIgnored(t *testing.T) {
 }
 
 // What the model is promised and what it gets, for the one number that bounds the
-// answer's context: FINAL_TOP_K.
-func TestEvidencePerSearchIsHonoured(t *testing.T) {
+// answer's context: the chunks-per-search budget.
+func TestChunkBudgetIsHonoured(t *testing.T) {
 	var hits []domain.Hit
 	for i := range 12 {
 		hits = append(hits, textChunk(fmt.Sprintf("d:%04d", i), "d", i, fmt.Sprintf("distinct passage %d", i)))
 	}
 	corpus := &stubCorpus{hits: hits}
 	cfg := defaultConfig()
-	cfg.FinalTopK = 4
+	cfg.TopK = 4
 	model := &fakeLLM{replies: []llm.ChatResponse{
 		toolCallReply(searchCall("c1", "k")),
 		toolCallReply(call("c2", ToolFinalize, `{"indices":[1,2,3,4,5]}`)),

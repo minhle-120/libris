@@ -97,9 +97,21 @@ func New(corpus Corpus, embed Embedder, assets Assets, caps *llm.Caps) *Retrieve
 // Options is one search's depth, passed per call rather than read from a snapshot:
 // a saved setting takes effect on the next job, and a search is a job.
 type Options struct {
-	RecallTopK int // candidates pulled from the vector scan
-	FinalTopK  int // what one tool result may show, matching the setting of that name
+	TopK int // the whole budget for what one search returns, every kind of chunk counted
 }
+
+// DefaultTopK is the budget when the caller names none, matching the setting's default.
+const DefaultTopK = 10
+
+// recallPool is how many candidates the vector scan is asked for, as a multiple of
+// the budget. It has to be a multiple rather than the budget itself because dedupe
+// runs after the scan: every chunk this turn already showed is thrown out of what a
+// later search returns, so a pool the size of the budget would return nearly nothing
+// new on the second search and every search after it.
+//
+// It is derived rather than configured because it is a step nobody can see or want to
+// tune — a setting whose effect is invisible is a setting that gets set wrong.
+const recallPool = 4
 
 // Evidence is a chunk the model may cite, with the label it must use.
 type Evidence struct {
@@ -132,11 +144,8 @@ func (r *Retriever) Search(
 	if keywords == "" {
 		return nil, ErrNoKeywords
 	}
-	if opts.RecallTopK <= 0 {
-		opts.RecallTopK = 10
-	}
-	if opts.FinalTopK <= 0 {
-		opts.FinalTopK = 5
+	if opts.TopK <= 0 {
+		opts.TopK = DefaultTopK
 	}
 
 	vector, err := r.embed.EmbedQuery(ctx, index.QuerySearch, keywords)
@@ -144,7 +153,7 @@ func (r *Retriever) Search(
 		return nil, err
 	}
 
-	hits, err := r.corpus.SearchSegments(ctx, notebookID, vector, r.embed.Identity(), opts.RecallTopK)
+	hits, err := r.corpus.SearchSegments(ctx, notebookID, vector, r.embed.Identity(), opts.TopK*recallPool)
 	if err != nil {
 		return nil, err
 	}
@@ -155,9 +164,11 @@ func (r *Retriever) Search(
 	// Truncation happens before registration, so the registry holds exactly the
 	// chunks a model was shown. A label for a passage nobody read would be a
 	// citation the answer could make and no one could check.
+	// The budget is applied to the deduped set, so it is a count of what the model is
+	// actually shown — one number for text and media together, not one per kind.
 	cands := dedupe(hits, reg)
-	if opts.FinalTopK > 0 && len(cands) > opts.FinalTopK {
-		cands = cands[:opts.FinalTopK]
+	if len(cands) > opts.TopK {
+		cands = cands[:opts.TopK]
 	}
 
 	return Order(r.register(reg, cands)), nil
