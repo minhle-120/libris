@@ -44,6 +44,13 @@ const code = await withBrowser(
           /(^|\|)(Vulkan|CUDA)\d/.test(seen.slots),
           seen.slots,
         );
+        // Whatever the probe reported, the step has to be escapable: a screen that renders a
+        // quiet sentence about the CPU and no button is a wall, and it reads as a hang.
+        checks.check(
+          "and the step offers something to click",
+          seen.buttons.length > 0,
+          seen.buttons,
+        );
         if (process.env.CLICK === '1') {
           // Choosing has to let go of the step, or the fix only moved where the wall is.
           await ui.eval(`document.querySelector('.devices button').click(); return true`);

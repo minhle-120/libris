@@ -4,6 +4,7 @@
   import { app } from '../../lib/store.svelte';
   import { settingGroups } from '../../lib/config.gen';
   import { errorMessage, formatDate, formatBytes, formatSince } from '../../lib/format';
+  import { ackForConfirm } from '../../lib/device';
   import type { DeviceReport, EngineView } from '../../lib/types';
   import Badge from '../../lib/ui/Badge.svelte';
   import Button from '../../lib/ui/Button.svelte';
@@ -138,9 +139,19 @@
     }
   }
 
-  function pick(name: string) {
-    app.settings.engineDevice = name;
-    app.settings.engineDeviceAck = engine?.device_ack_now ?? '';
+  /** The name and the key that records it are taken together, and the key comes from the
+   *  endpoint that computes it rather than from whatever the first poll carried — see
+   *  lib/device.ts. A choice recorded against a blank key is a choice the server never heard. */
+  async function pick(name: string) {
+    try {
+      const got = await ackForConfirm(engine);
+      if (!alive) return;
+      engine = got.engine;
+      app.settings.engineDevice = name;
+      app.settings.engineDeviceAck = got.ack;
+    } catch (e) {
+      if (alive) error = errorMessage(e);
+    }
   }
 
   // The label and the help are the generated field's. Nothing here defines a setting, not even

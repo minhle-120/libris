@@ -3,6 +3,7 @@
   import * as api from '../lib/api';
   import { app, saveSettings } from '../lib/store.svelte';
   import { errorMessage, formatBytes } from '../lib/format';
+  import { ackForConfirm } from '../lib/device';
   import type { DeviceReport, EngineView, Fact, ModelsView } from '../lib/types';
   import Button from '../lib/ui/Button.svelte';
   import Icon from '../lib/ui/Icon.svelte';
@@ -27,7 +28,12 @@
 
   const setup = $derived(engine?.setup);
   const steps = ['Engine', 'Inference device', 'Models'] as const;
-  const active = $derived(NAMES[setup?.step ?? 'engine']);
+  // The server names the step for the three facts it cannot fix itself, and leaves it empty
+  // when the one thing missing is the model-server process — which it starts on its own, and
+  // which can still fail to come up. Reading the empty step as "engine" would send that person
+  // back to a step they finished, with nothing left to click, so the blocking list decides
+  // where they are. The fallback name is the first step, not a blank panel.
+  const active = $derived(NAMES[setup?.step ?? setup?.blocking?.[0] ?? 'engine']);
   const stepIndex = $derived(steps.indexOf(active as (typeof steps)[number]));
 
   const entries = $derived(models?.entries ?? []);
@@ -35,8 +41,13 @@
   const missingBytes = $derived(wanted.reduce((n, e) => n + e.bytes - e.partialBytes, 0));
   const downloaded = $derived(!!engine?.installed);
   const modelsOnDisk = $derived(entries.length > 0 && entries.every((e) => e.complete));
-  const serving = $derived(!!engine?.serve?.running);
   const devices = $derived(report?.devices ?? []);
+  /** A download in flight is a fact from the engine view, not a promise held by the button
+   *  that started it: the POST answers as soon as it is underway, so the request is long
+   *  gone while the bytes are still arriving. */
+  const BUSY = new Set(['downloading', 'verifying', 'unpacking']);
+  const downloading = $derived(BUSY.has(engine?.progress?.state ?? ''));
+  const failed = $derived(engine?.progress?.state === 'failed');
 
   const progress = $derived(
     ['downloading', 'verifying', 'unpacking'].includes(engine?.progress?.state ?? '')
@@ -201,11 +212,37 @@
 
   /** Choosing records the pick *and* the acknowledgement the server said it would accept,
    *  sent back unchanged. What "confirmed for this engine on this machine" means is the
-   *  server's rule, and a page that computes it is a second copy of it. */
-  function choose(name: string) {
-    app.settings.engineDevice = name;
-    app.settings.engineDeviceAck = engine?.device_ack_now ?? '';
-    return act(() => saveSettings().then(() => undefined));
+   *  server's rule, and a page that computes it is a second copy of it. The key is asked for
+   *  when the screen does not hold one: the slots render as soon as a device list exists, and
+   *  the engine view can be a poll older than the fingerprint — a click in that window saved a
+   *  blank key, the server accepted it, and the step never moved. */
+  async function choose(name: string) {
+    busy = true;
+    error = '';
+    try {
+      const got = await ackForConfirm(engine);
+      if (alive) engine = got.engine;
+      app.settings.engineDevice = name;
+      app.settings.engineDeviceAck = got.ack;
+      await saveSettings();
+      await load();
+    } catch (e) {
+      if (alive) error = errorMessage(e);
+    } finally {
+      if (alive) busy = false;
+    }
+  }
+
+  /** A device list that failed to arrive once does not arrive again on its own — the poll
+   *  asks for one when the installed build's tag changes, and the tag has not. So the dead
+   *  end carries the asking. */
+  async function askDevices() {
+    try {
+      const got = await api.getDevices(true);
+      if (alive) report = got;
+    } catch (e) {
+      if (alive) error = errorMessage(e);
+    }
   }
 
   function getModels() {
@@ -255,18 +292,42 @@
         <div class="verbs">
           <Button
             variant="primary"
-            disabled={busy || (!downloaded && !engine?.latest)}
+            disabled={busy || downloading || (!downloaded && !engine?.latest)}
             onclick={() =>
               act(() => api.installEngine(engine?.update_available ? engine?.latest?.tag : undefined))}
           >
-            {engine?.update_available ? `Update to ${engine.latest?.tag}` : 'Download llama.cpp'}
+            {downloading
+              ? 'Downloading…'
+              : engine?.update_available
+                ? `Update to ${engine.latest?.tag}`
+                : 'Download llama.cpp'}
           </Button>
-          {#if downloaded}
+          {#if downloading}
+            <Button size="sm" title="Stop the download. The bytes so far are kept, and the next attempt resumes where they stopped."
+              onclick={() => act(api.stopEngine)}>
+              Stop
+            </Button>
+          {:else if downloaded}
             <span class="quiet">Installed · {engine?.installed?.tag}</span>
+          {:else if engine?.checking}
+            <span class="quiet">Checking what the newest build is…</span>
           {:else if engine?.latest}
             <span class="quiet">{formatBytes(engine.asset?.size ?? 0)}</span>
           {/if}
         </div>
+
+        {#if failed}
+          <p class="error" role="alert">
+            {engine?.progress?.error || 'The download failed.'}
+          </p>
+          {#if engine?.dir}
+            <p class="quiet">Nothing was installed. The files go in {engine.dir}.</p>
+          {/if}
+        {:else if engine?.check_error}
+          <p class="quiet">The newest build is not known right now: {engine.check_error}</p>
+        {:else if !downloaded && !engine?.latest && !downloading}
+          <p class="quiet">Asking llama.cpp what its newest build is…</p>
+        {/if}
 
       {:else if active === 'Inference device'}
         <h2>Where does it run?</h2>
@@ -274,12 +335,20 @@
           These are the slots the engine itself reported. Libris picks one when you do not, and
           this can be changed later in Settings.
         </p>
-        {#if !downloaded}
-          <p class="quiet">The engine has reported no accelerator, so the CPU will be used.</p>
-        {:else if !report}
+        {#if !report}
           <p class="quiet">Asking the engine what it can run on…</p>
+          <div class="verbs">
+            <Button size="sm" disabled={busy} onclick={() => act(askDevices)}>Try again</Button>
+          </div>
         {:else if !devices.length}
           <p class="quiet">The engine reported no accelerator, so the CPU will be used.</p>
+          <div class="verbs">
+            <!-- Still the step's one action: a machine with nothing to pick needs its ack
+                 recorded too, or the step has no way out. -->
+            <Button variant="primary" disabled={busy} onclick={() => choose('')}>
+              Let libris choose
+            </Button>
+          </div>
         {:else}
           <div class="devices">
             {#each devices as d (d.name)}
