@@ -133,8 +133,22 @@ jobs:
             magic=1f8b
             tar=tar
           fi
-          "$tar" -a -cf "$out" -C stage .
+          # The folder is what a person unpacks. Packing the staging
+          # directory's contents loose buries whatever they extract
+          # into under the program, its tools and their libraries.
+          dir="libris-$TAG-$OS-$ARCH"
+          mv stage "$dir"
+          "$tar" -a -cf "$out" "$dir"
           test -s "$out"
+          first=$("$tar" -tf "$out" | head -1)
+          case "$first" in
+            "$dir"/ | "$dir"/*) ;;
+            *)
+              echo "$out unpacks to loose files, not a folder" >&2
+              echo "  first entry: $first" >&2
+              exit 1
+              ;;
+          esac
           got=$(head -c 2 "$out" | od -An -t x1 | tr -d ' \n')
           test "$got" = "$magic" || {
             echo "$out is not a $OS archive" >&2
