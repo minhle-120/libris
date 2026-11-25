@@ -83,13 +83,21 @@ func PresetPath(dataDir, id string) string {
 // Per-kind choices are not style: an embedding model needs --embeddings, and an embedder is
 // not a chat model whatever it is asked.
 //
-// Pooling is deliberately absent. --pooling's own help says "use model default if unspecified"
-// (common/arg.cpp, LLAMA_ARG_POOLING), and the default is read out of the GGUF — so naming one
-// here would override the answer that shipped inside the file, and an embedder pooled the wrong
-// way still returns numbers of the right length. That is the quiet kind of retrieval bug:
-// nothing fails, the vectors are just wrong. Measured on the catalogue's own embedder, with and
-// without `pooling = mean`, the vectors are identical (one row of 768, the same twelve hex
-// digits of a digest), which is the answer that let this line stay absent.
+// Pooling is written out, and today it says what the model already says: the GGUF carries
+// gemma-embedding2.pooling_type = 1, which is MEAN (include/llama.h, llama_pooling_type), and
+// --pooling's help is "use model default if unspecified" (common/arg.cpp, LLAMA_ARG_POOLING).
+// So this is inert — measured on this embedder with and without the key, the vector is the same
+// 768 floats — and the reason to write it anyway is that a stored vector's pooling becomes
+// readable in the one file that says what the server was told, instead of a fact buried in a
+// GGUF nobody opens. That the OAI route answers at all is the proof the file's own value is what
+// was in force: llama.cpp refuses /v1/embeddings outright for pooling "none".
+//
+// The obligation that comes with it, for whoever adds the next embedder: this is one key written
+// for every model of kind embed, and libris does not read pooling out of a GGUF. For a model
+// that pools another way, the line stops being a restatement and becomes an override — and an
+// embedder pooled the wrong way still returns numbers of the right length, so nothing fails and
+// retrieval simply gets worse. At that point pooling moves to per-model data or comes back out.
+//
 // The file is what the router is told, in full, every time it starts: libris writes it from what
 // it derives — which models exist, where their files are, which device to offload to, and what
 // each kind is given — and nothing is carried over from the previous file. So a number changed by
@@ -134,7 +142,7 @@ func Preset(path string, device string, models []Model) error {
 		}
 		switch m.Kind {
 		case KindEmbed:
-			fmt.Fprintf(&b, "embeddings = on\nctx-size = %d\ncache-ram = %d\n", embedCtx, smallCacheRAMMiB)
+			fmt.Fprintf(&b, "embeddings = on\npooling = mean\nctx-size = %d\ncache-ram = %d\n", embedCtx, smallCacheRAMMiB)
 		default:
 			fmt.Fprintf(&b, "ctx-size = %d\n", chatCtx)
 			b.WriteString("temp = 0.1\ntop-k = 50\ntop-p = 1.0\nmin-p = 0.0\nrepeat-penalty = 1.1\n")

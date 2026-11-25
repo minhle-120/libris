@@ -16,6 +16,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -104,6 +105,45 @@ func TestRefreshPresetWritesWhetherOrNotAnythingMoved(t *testing.T) {
 				t.Errorf("%s: answered %d models, want %d: %+v", tc.name, len(got.Models), want, got.Models)
 			}
 		})
+	}
+}
+
+// TestRefreshPresetRewritesNumbersTheOldFileStates is the tripwire for the bug that made the
+// skip rule a release blocker rather than a nicety: a machine that had started once under an old
+// preset kept serving it, because nothing in the rule for noticing looked at what libris *writes*
+// — and every key in the file comes from what libris writes.
+//
+// The fixture is such a file, in the format an installed machine was left holding: a slot count
+// stated in the global block, and the embedder's smaller pool. The derivation beside it produces
+// neither. Neither the model list nor the device moved, which is precisely the state the old rule
+// called up to date. Any future rule for skipping has to fail this test, or it is that bug again
+// under a different name.
+func TestRefreshPresetRewritesNumbersTheOldFileStates(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "presets", "libris.ini")
+	const old = "[*]\ndevice = Vulkan0\nparallel = 1\n\n" +
+		"[libris-embed]\nmodel = /m/e.gguf\nembeddings = on\nctx-size = 4096\n"
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(old), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := refreshPreset(path, "Vulkan0", []Model{{Alias: AliasEmbed, Kind: KindEmbed, Path: "/m/e.gguf"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Device != "Vulkan0" {
+		t.Errorf("answered device %q, want what the file now says", got.Device)
+	}
+
+	after := string(readFile(t, path))
+	if strings.Contains(after, "parallel") {
+		t.Errorf("a key the code stopped writing survived:\n%s", after)
+	}
+	if want := "ctx-size = " + strconv.Itoa(embedCtx); !strings.Contains(after, want) {
+		t.Errorf("the embedder's pool is not what the code derives (%s):\n%s", want, after)
 	}
 }
 

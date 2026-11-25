@@ -105,13 +105,15 @@ func TestPresetWritesOneSectionPerModel(t *testing.T) {
 		t.Errorf("a device was named without being asked for:\n%s", got)
 	}
 
-	// And no pooling. --pooling's help says "use model default if unspecified", and the
-	// default comes from inside the GGUF; overriding it here would silently re-pool an
-	// embedder that shipped its own answer, returning vectors of the right length and the
-	// wrong meaning. Measured on the catalogue's own embedder, with and without
-	// `pooling = mean`, the vectors are identical — which is what lets this stay absent.
-	if strings.Contains(got, "pooling") {
-		t.Error("the preset names a pooling mode; the model file knows better than this file does")
+	// Pooling is written out even though it repeats what the model's own GGUF already says
+	// (gemma-embedding2.pooling_type = 1, which is MEAN), so that how a stored vector was pooled
+	// is readable in the file that says what the server was told. What this pins is that it is
+	// written for the embedder only — the chat model is not asked to pool anything — and
+	// preset.go carries the obligation: one key for every embed model, so a model that pools
+	// another way must not arrive before pooling moves to per-model data. Exactly one occurrence
+	// in the whole file is the whole claim: written, and for the embedder only.
+	if strings.Count(got, "pooling") != 1 {
+		t.Errorf("pooling is not written once, for the embedder alone:\n%s", got)
 	}
 }
 
