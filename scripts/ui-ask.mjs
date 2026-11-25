@@ -228,6 +228,19 @@ const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ask-p
     (wire.lastTools ?? []).join(',') === 'query_knowledge_base,finalize_research_response,no_info_found',
     () => `tools=${wire.lastTools}`
   );
+  // Both calls get the page. The researcher is the one that decides what to cite, and it
+  // used to be handed a line saying an image exists somewhere — which is nothing to
+  // decide with, and is no longer what goes out.
+  checks.check(
+    'the research call was shown the page itself, in its tool result',
+    (wire.lastResearchMedia?.tool ?? 0) > 0,
+    () => `media=${JSON.stringify(wire.lastResearchMedia)}`
+  );
+  checks.check(
+    'and so was the call that wrote the answer',
+    (wire.lastAnswerMedia?.user ?? 0) > 0,
+    () => `media=${JSON.stringify(wire.lastAnswerMedia)}`
+  );
   // At least one searched and exactly one did not: the call that writes the answer is
   // never given tools, which is what keeps the research trace out of the prose.
   checks.check(
@@ -324,7 +337,13 @@ const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ask-p
     };
   `);
   checks.check('the answer survived a reload', /4\.2 K/.test(afterReload?.text ?? ''), () => `text=${afterReload?.text}`);
-  checks.check('the citations survived too', afterReload?.chips === 1, () => `chips=${afterReload?.chips}`);
+  // The number the live turn showed, whatever it was: a turn rests on the evidence it
+  // cited, and a reload that lost one of them would quietly rewrite what the answer claims.
+  checks.check(
+    'the citations survived too',
+    afterReload?.chips > 0 && afterReload.chips === answered?.chips?.length,
+    () => `chips=${afterReload?.chips}, live=${answered?.chips?.length}`
+  );
   checks.check(
     'the thread is named after the first question',
     /paper measure/.test(afterReload?.title ?? ''),

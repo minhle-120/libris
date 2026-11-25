@@ -7,6 +7,7 @@ package llm
 
 import (
 	"encoding/json"
+	"fmt"
 )
 
 type Role string
@@ -32,10 +33,37 @@ type Message struct {
 
 // ── multimodal content ────────────────────────────────────────────
 
-// Only the part types libris actually sends. input_audio and input_video were
-// declared and never built by anything: audio stopped being an input modality, and
-// video never was, so a client carrying both was a menu of wire shapes rather than
-// a description of this program's traffic.
+// MediaKind is an input modality libris can show a model. Only image is built by
+// anything today, and the wire types of the others stay undeclared until something
+// sends them: a client carrying audio and video it never builds is a menu of wire
+// shapes rather than a description of this program's traffic, which is why
+// input_audio and input_video were deleted once.
+//
+// What the seam buys is that adding one is mechanical rather than a search: a constant
+// here, its Part constant, one case in MediaPart, one case in Caps.Allows, and one arm
+// of retrieve's mapping from a segment kind.
+//
+// Nothing here is a standing invitation. A modality earns its place by arriving with
+// citable words beside it — which is why recordings were taken out again rather than
+// left as vectors a reader could rank and never quote.
+type MediaKind string
+
+const (
+	MediaImage MediaKind = "image"
+)
+
+// Modality names the thing a serving model must have loaded to take this kind, in
+// the words an error about it is written in.
+func (k MediaKind) Modality() string {
+	switch k {
+	case MediaImage:
+		return "vision"
+	}
+	return string(k)
+}
+
+// Only the part types libris actually sends. See MediaKind for why the others are
+// not here yet.
 const (
 	PartText  = "text"
 	PartImage = "image_url"
@@ -65,19 +93,30 @@ func ImagePart(url string) ContentPart {
 	return ContentPart{Type: PartImage, ImageURL: &ImageURL{URL: url}}
 }
 
-// ImageBase64 inlines an image as a data: URL.
+// MediaPart inlines one media file as the content part a server expects for that
+// modality. It is the only constructor for media parts, so every media byte libris
+// sends goes through the one switch that knows the wire shapes.
 //
-// Verified against llama.cpp's server README: image_url.url accepts a remote
-// URL, a base64 data URI, or a local file — and only the local file needs the
-// server started with --media-path. So inlining is the only form that works
-// against a plain `llama-server --embedding --mmproj …`, which is why the
-// embedding stage sends page rasters this way instead of asking the user for a
-// flag. There is still no auto-detection: choosing to inline is explicit.
-func ImageBase64(mimeType, data string) ContentPart {
-	return ContentPart{
-		Type:     PartImage,
-		ImageURL: &ImageURL{URL: "data:" + mimeType + ";base64," + data},
+// Checked against the pinned clone: tools/server/server-common.cpp's
+// oaicompat_content_load_media reads image_url.url — a remote URL, a base64 data
+// URI, or a file:// path that needs the server started with --media-path — queues
+// the decoded bytes, and replaces the part with a media marker. Bytes and marker are
+// paired by position in the request, not by any id, so the parts a caller builds
+// must stay in the order it wants them read. Inlining is the only form that asks
+// nothing of the server, which is why every media part libris sends is one. That is
+// true of the embedding stage too, which is started with nobody holding a flag.
+//
+// A kind with no case is refused rather than guessed at: shipping a part of a type
+// the server throws on would fail the turn for a mistake made here.
+func MediaPart(kind MediaKind, mimeType, data string) (ContentPart, error) {
+	switch kind {
+	case MediaImage:
+		return ContentPart{
+			Type:     PartImage,
+			ImageURL: &ImageURL{URL: "data:" + mimeType + ";base64," + data},
+		}, nil
 	}
+	return ContentPart{}, fmt.Errorf("llm: no wire shape for media kind %q", kind)
 }
 
 // ── tools ─────────────────────────────────────────────────────────

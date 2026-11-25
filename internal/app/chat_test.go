@@ -215,6 +215,52 @@ func rows(t *testing.T, db *sqlite.DB, chatID string) []domain.Message {
 	return list
 }
 
+// The saved transcript is write-only — store/sqlite/chat.go says trace_json is never
+// selected — so pixels kept here are weight without a reader: the model was already
+// sent them. The label in front of each one stays, because that is what still says a
+// page was shown and which one the answer cites.
+func TestSavedTraceKeepsTheWordsAndDropsThePixels(t *testing.T) {
+	trace := []llm.Message{
+		{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{
+			{ID: "c1", Type: "function", Function: llm.FunctionCall{Name: "query_knowledge_base"}},
+		}},
+		{Role: llm.RoleTool, ToolCallID: "c1", Content: []llm.ContentPart{
+			llm.TextPart("[[Chunk 3]] scan.pdf page 2 — image\n"),
+			mustMedia(t, "image/png", "AAAA"),
+			llm.TextPart("\n\n**Assistant Evaluation Note**: …"),
+		}},
+	}
+
+	raw := traceJSON(trace)
+	if strings.Contains(raw, "data:image") || strings.Contains(raw, "image_url") {
+		t.Errorf("the saved trace carries pixels:\n%s", raw)
+	}
+	if !strings.Contains(raw, "[[Chunk 3]] scan.pdf page 2 — image") {
+		t.Errorf("the saved trace lost which page was shown:\n%s", raw)
+	}
+	if !strings.Contains(raw, "Assistant Evaluation Note") {
+		t.Errorf("the saved trace lost the research turn's prose:\n%s", raw)
+	}
+
+	// Encoding is a read, not a rewrite: the same messages are what went out to the
+	// model, and a caller that reuses them must not find them quietly smaller.
+	parts, ok := trace[1].Content.([]llm.ContentPart)
+	if !ok || len(parts) != 3 {
+		t.Errorf("the caller's transcript was edited by encoding: %v", trace[1].Content)
+	}
+}
+
+// mustMedia builds a media part with the one constructor libris uses, so this test is
+// about what the trace does to a real part rather than about a shape invented here.
+func mustMedia(t *testing.T, mime, data string) llm.ContentPart {
+	t.Helper()
+	part, err := llm.MediaPart(llm.MediaImage, mime, data)
+	if err != nil {
+		t.Fatalf("MediaPart: %v", err)
+	}
+	return part
+}
+
 func traceOf(t *testing.T, db *sqlite.DB, id int64) string {
 	t.Helper()
 	var raw string

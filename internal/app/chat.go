@@ -45,6 +45,12 @@ type Models struct {
 	// searched at all, which is a configuration the user can fix in Settings — so
 	// Ask says so rather than answering from the question alone.
 	Probe retrieve.Embedder
+
+	// Caps is what the serving chat model said it can be shown, read when the question
+	// started. Nil means the server would not say: media then goes out as-is and a
+	// server that cannot take it answers with its own error, which is the honest
+	// alternative to guessing from here. See llm.Caps.
+	Caps *llm.Caps
 }
 
 // ModelsFor builds the model side for one configuration. A factory for the same
@@ -147,7 +153,7 @@ func (s *Service) Ask(ctx context.Context, notebookID, chatID, question string, 
 		return domain.Message{}, err
 	}
 
-	retriever := retrieve.New(s.search, models.Probe, retrieve.FileAssets{})
+	retriever := retrieve.New(s.search, models.Probe, retrieve.FileAssets{}, models.Caps)
 	research := chat.NewResearch(models.Chat, retriever, chatConfig(cfg, models), ev.status)
 
 	res, err := research.Ask(ctx, notebookID, question, chat.ResearchHistory(past, cfg.HistoryMessages))
@@ -456,8 +462,29 @@ func citationsFor(evidence []retrieve.Evidence) []domain.Citation {
 // prompt change without anything being able to mistake the reasoning for knowledge.
 // A transcript that will not encode is reported in the trace field rather than
 // failing an answer the user has already read.
+// traceJSON encodes the research transcript into the assistant's row.
+//
+// Media is dropped on the way in. The pixels did their job — they went to the model —
+// and this column is write-only by design (store/sqlite/chat.go says trace_json is
+// never selected), so keeping a page raster here is a couple of megabytes of base64
+// nobody will ever open. The label part in front of it stays, which is what still
+// tells a reader that a page was shown and which one the answer cites.
 func traceJSON(trace []llm.Message) string {
-	raw, err := json.Marshal(trace)
+	saved := make([]llm.Message, 0, len(trace))
+	for _, m := range trace {
+		if parts, ok := m.Content.([]llm.ContentPart); ok {
+			kept := make([]llm.ContentPart, 0, len(parts))
+			for _, p := range parts {
+				if p.Type == llm.PartText {
+					kept = append(kept, p)
+				}
+			}
+			m.Content = kept
+		}
+		saved = append(saved, m)
+	}
+
+	raw, err := json.Marshal(saved)
 	if err != nil {
 		return `[{"error":"trace could not be encoded"}]`
 	}

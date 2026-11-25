@@ -12,8 +12,62 @@ import (
 	"libris/internal/config"
 	"libris/internal/engine"
 	"libris/internal/index"
+	"libris/internal/llm"
 	"libris/internal/serving"
 )
+
+// ── what the serving model can be shown ──────────────────────────
+
+func capsServer(t *testing.T, status int, body string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		io.WriteString(w, body)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func capsClient(t *testing.T, url string) *llm.Client {
+	t.Helper()
+	c, err := llm.New(llm.Config{ChatURL: url})
+	if err != nil {
+		t.Fatalf("llm.New: %v", err)
+	}
+	return c
+}
+
+// The engine libris runs answers /props, so the question starts knowing whether the
+// page images in its evidence can be shown at all — and a model that can see them keeps
+// them.
+func TestTheServingModelIsAskedWhatItCanBeShown(t *testing.T) {
+	srv := capsServer(t, http.StatusOK,
+		`{"model_alias":"libris-chat","modalities":{"vision":true,"video":false,"audio":false}}`)
+
+	caps := chatCaps(capsClient(t, srv.URL))
+	if caps == nil || !caps.Vision || caps.Model != "libris-chat" {
+		t.Fatalf("caps = %+v", caps)
+	}
+	if caps.Audio || caps.Video {
+		t.Errorf("capabilities the engine denied were carried through: %+v", caps)
+	}
+}
+
+// A server with no /props — one libris does not manage, or an older llama.cpp — is not
+// a question that has gone wrong, and guessing "no vision" from here would withhold
+// every page in the notebook from a model that could read them. nil is the answer that
+// says nobody replied, and retrieve then lets the server speak for itself.
+func TestNothingIsGuessedFromAServerThatDoesNotAnswer(t *testing.T) {
+	for _, srv := range []*httptest.Server{
+		capsServer(t, http.StatusNotFound, `{"error":{"message":"not found"}}`),
+		capsServer(t, http.StatusOK, `<html>not a llama.cpp server</html>`),
+	} {
+		if caps := chatCaps(capsClient(t, srv.URL)); caps != nil {
+			t.Errorf("a server that never answered produced caps: %+v", caps)
+		}
+	}
+}
 
 // fakeRouter is the supervisor as the wiring sees it: a status, on demand.
 type fakeRouter struct{ st engine.Serving }

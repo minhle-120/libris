@@ -71,9 +71,42 @@ func imageChunk(id, docID string, ordinal, page int) domain.Hit {
 	}, SourceName: strings.TrimSuffix(docID, "#pages") + ".pdf"}
 }
 
+// anyAsset answers for whatever path a stub chunk names, so a search that returns a
+// raster really gets its bytes. A reader that failed every read would hide from these
+// tests the one thing they now have to catch: pixels going out to a model that cannot
+// take them, or not going out to one that can.
+type anyAsset struct{}
+
+func (anyAsset) Read(domain.Asset) ([]byte, error) { return []byte("PNGBYTES"), nil }
+
+// spoken is what a tool message says in words. It is a content array now, because a
+// page has to reach the research model as the thing it searched for; most assertions
+// here are about the prose around the media, and the parts themselves are asserted
+// where they belong.
+func spoken(reply Reply) string {
+	var b strings.Builder
+	for _, p := range reply.Content {
+		if p.Type == llm.PartText {
+			b.WriteString(p.Text)
+		}
+	}
+	return b.String()
+}
+
+// mediaParts counts what a tool message shows rather than says.
+func mediaParts(reply Reply) int {
+	n := 0
+	for _, p := range reply.Content {
+		if p.Type != llm.PartText {
+			n++
+		}
+	}
+	return n
+}
+
 func toolsFor(t *testing.T, corpus retrieve.Corpus, reg *retrieve.Registry, opts retrieve.Options) *Tools {
 	t.Helper()
-	r := retrieve.New(corpus, &stubEmbed{}, nil)
+	r := retrieve.New(corpus, &stubEmbed{}, anyAsset{}, nil)
 	return NewTools(r, reg, "nb1", "How fast is the coastline retreating?", opts)
 }
 
@@ -182,8 +215,8 @@ func TestEverythingIsRefusedBeforeTheFirstSearch(t *testing.T) {
 		if reply.Kind != Continue {
 			t.Errorf("%s ended the turn (%v) before any search: an ungrounded answer is the failure this gate exists to stop", name, reply.Kind)
 		}
-		if !strings.Contains(reply.Content, "must call `"+ToolSearch+"` first") {
-			t.Errorf("%s got %q, want the refusal-shaped instruction", name, reply.Content)
+		if !strings.Contains(spoken(reply), "must call `"+ToolSearch+"` first") {
+			t.Errorf("%s got %q, want the refusal-shaped instruction", name, spoken(reply))
 		}
 	}
 	if reg.Len() != 0 {
@@ -249,7 +282,7 @@ func TestSearchResultIsLabelledChunksPlusTheEvaluationNote(t *testing.T) {
 		t.Errorf("a search ended the turn: %v", reply.Kind)
 	}
 
-	body := reply.Content
+	body := spoken(reply)
 	// Registration is by relevance; the ids are what the model cites.
 	if !strings.Contains(body, "[[Chunk 1]]") || !strings.Contains(body, "[[Chunk 3]]") {
 		t.Fatalf("labels missing from:\n%s", body)
@@ -278,9 +311,10 @@ func TestSearchResultIsLabelledChunksPlusTheEvaluationNote(t *testing.T) {
 	}
 }
 
-// A tool message is a string, so a page raster is named rather than shown. Its
-// pixels reach the model that writes the answer, which is the one that cites them.
-func TestAMediaChunkIsNamedNotInlined(t *testing.T) {
+// The research model is the one that decides what to cite, so it gets the page the same
+// way the answer does: labelled, then the file. A line saying an image exists somewhere
+// is not enough to decide with, and it was the whole reason this test used to exist.
+func TestAMediaChunkReachesTheResearchModelAsPixels(t *testing.T) {
 	reg := retrieve.NewRegistry()
 	corpus := &stubCorpus{hits: []domain.Hit{imageChunk("p#pages:0000", "p#pages", 0, 7)}}
 	tr := toolsFor(t, corpus, reg, retrieve.Options{})
@@ -289,11 +323,59 @@ func TestAMediaChunkIsNamedNotInlined(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(reply.Content, "page 7 — image") {
-		t.Fatalf("the raster is not described:\n%s", reply.Content)
+	if !strings.Contains(spoken(reply), "page 7 — image") {
+		t.Fatalf("the raster is not described:\n%s", spoken(reply))
 	}
-	if strings.Contains(reply.Content, "data:image") || strings.Contains(reply.Content, "iVBOR") {
-		t.Error("pixels were inlined into a tool message, which is a string")
+	if mediaParts(reply) != 1 {
+		t.Fatalf("%d media parts, want the page itself: %+v", mediaParts(reply), reply.Content)
+	}
+
+	// The label sits in front of its own pixels, and the evaluation note stays last:
+	// the server pairs a media file with the marker it leaves in the prompt by position,
+	// so a page shown before its label is a page attributed to nothing.
+	labelled, shown := -1, -1
+	for i, p := range reply.Content {
+		if p.Type == llm.PartText && strings.Contains(p.Text, "page 7") && labelled < 0 {
+			labelled = i
+		}
+		if p.Type != llm.PartText {
+			shown = i
+		}
+	}
+	if labelled < 0 || shown != labelled+1 {
+		t.Fatalf("label at %d, image at %d: %+v", labelled, shown, reply.Content)
+	}
+	if last := reply.Content[len(reply.Content)-1]; last.Type != llm.PartText ||
+		!strings.Contains(last.Text, "**Assistant Evaluation Note**") {
+		t.Errorf("the note does not come after the evidence: %+v", last)
+	}
+}
+
+// A model started without the projector for a modality does not skip the media part —
+// it throws on the request. So a search that would hand it one ends the turn in words
+// naming the model and the modality, rather than sending a prompt that comes back as a
+// sentence about somebody's mmproj.
+func TestSearchRefusesToHandMediaToAModelThatCannotSeeIt(t *testing.T) {
+	corpus := &stubCorpus{hits: []domain.Hit{
+		imageChunk("p#pages:0000", "p#pages", 0, 7),
+		imageChunk("p#pages:0001", "p#pages", 1, 8),
+		textChunk("p:0000", "p", 0, "Erosion was measured from 1990."),
+	}}
+	tr := NewTools(
+		retrieve.New(corpus, &stubEmbed{}, anyAsset{}, &llm.Caps{Model: "libris-chat"}),
+		retrieve.NewRegistry(), "nb1", "What does the chart show?", retrieve.Options{})
+
+	_, err := tr.Execute(context.Background(), Call{Name: ToolSearch, Arguments: `{"keywords":"chart"}`})
+
+	var want *llm.MediaUnsupported
+	if !errors.As(err, &want) {
+		t.Fatalf("err = %v, want *llm.MediaUnsupported", err)
+	}
+	if want.Count != 2 {
+		t.Errorf("the refusal counts %d pages, want the two the search found", want.Count)
+	}
+	if !strings.Contains(err.Error(), "vision") {
+		t.Errorf("the refusal does not name the modality: %v", err)
 	}
 }
 
@@ -307,11 +389,11 @@ func TestSearchWithoutKeywordsIsAnsweredInText(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s raised: %v", args, err)
 		}
-		if reply.Kind != Continue || !strings.Contains(reply.Content, "No keywords") {
-			t.Errorf("%s → %q (%v), want a text refusal", args, reply.Content, reply.Kind)
+		if reply.Kind != Continue || !strings.Contains(spoken(reply), "No keywords") {
+			t.Errorf("%s → %q (%v), want a text refusal", args, spoken(reply), reply.Kind)
 		}
-		if !strings.Contains(reply.Content, ToolSearch) {
-			t.Errorf("%s → %q: a refusal that does not name the tool invites the same call again", args, reply.Content)
+		if !strings.Contains(spoken(reply), ToolSearch) {
+			t.Errorf("%s → %q: a refusal that does not name the tool invites the same call again", args, spoken(reply))
 		}
 	}
 	if corpus.calls != 0 {
@@ -334,8 +416,8 @@ func TestAnEmptySearchNudges(t *testing.T) {
 	if reply.Kind != Continue {
 		t.Errorf("an empty result ended the turn: %v", reply.Kind)
 	}
-	if !strings.Contains(reply.Content, "No relevant information") || !strings.Contains(reply.Content, ToolNoInfo) {
-		t.Errorf("got %q, want the nudge toward refining or giving up", reply.Content)
+	if !strings.Contains(spoken(reply), "No relevant information") || !strings.Contains(spoken(reply), ToolNoInfo) {
+		t.Errorf("got %q, want the nudge toward refining or giving up", spoken(reply))
 	}
 }
 
@@ -343,7 +425,7 @@ func TestAnEmptySearchNudges(t *testing.T) {
 // is not running" is the one thing a model cannot recover from by rephrasing.
 func TestInfrastructureFailurePropagates(t *testing.T) {
 	reg := retrieve.NewRegistry()
-	r := retrieve.New(&stubCorpus{}, failingEmbed{}, nil)
+	r := retrieve.New(&stubCorpus{}, failingEmbed{}, nil, nil)
 	tr := NewTools(r, reg, "nb1", "q", retrieve.Options{})
 
 	if _, err := tr.Execute(context.Background(), Call{Name: ToolSearch, Arguments: `{"keywords":"x"}`}); err == nil {
@@ -379,8 +461,8 @@ func TestFinalizeEndsTheTurnWithIndicesOnly(t *testing.T) {
 	if reply.Kind != Finalized {
 		t.Errorf("Kind = %v, want Finalized", reply.Kind)
 	}
-	if reply.Content != "" {
-		t.Errorf("finalize returned content (%q): the answer is written by the synthesiser", reply.Content)
+	if len(reply.Content) != 0 {
+		t.Errorf("finalize returned content (%q): the answer is written by the synthesiser", spoken(reply))
 	}
 	if got := reply.Indices; len(got) != 3 || got[0] != 3 || got[2] != 3 {
 		t.Errorf("indices = %v: they are resolved later, out of band, so they are passed through as written", got)
@@ -460,8 +542,8 @@ func TestNoInfoCarriesTheModelReasonVerbatim(t *testing.T) {
 	if reply.Reason != reason {
 		t.Errorf("reason was rewritten: %q", reply.Reason)
 	}
-	if reply.Content != "" {
-		t.Errorf("no_info_found returned content %q", reply.Content)
+	if len(reply.Content) != 0 {
+		t.Errorf("no_info_found returned content %q", spoken(reply))
 	}
 }
 
@@ -498,11 +580,11 @@ func TestAnUnknownToolKeepsTheTurnGoing(t *testing.T) {
 	if reply.Kind != Continue {
 		t.Errorf("an unknown tool ended the turn: %v", reply.Kind)
 	}
-	if !strings.Contains(reply.Content, "delegate_to_diagram") {
-		t.Errorf("the model is not told which name it got wrong: %q", reply.Content)
+	if !strings.Contains(spoken(reply), "delegate_to_diagram") {
+		t.Errorf("the model is not told which name it got wrong: %q", spoken(reply))
 	}
-	if !strings.Contains(reply.Content, ToolSearch) {
-		t.Errorf("the model is not told what exists instead: %q", reply.Content)
+	if !strings.Contains(spoken(reply), ToolSearch) {
+		t.Errorf("the model is not told what exists instead: %q", spoken(reply))
 	}
 }
 

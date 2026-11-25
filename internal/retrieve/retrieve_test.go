@@ -133,8 +133,20 @@ func partsText(parts []llm.ContentPart) string {
 	return b.String()
 }
 
+// hasMedia reports whether a rendered set actually carries the file, which partsText
+// cannot see by construction: it flattens the words a model is shown, and pixels are
+// not words.
+func hasMedia(parts []llm.ContentPart) bool {
+	for _, p := range parts {
+		if p.Type != "text" {
+			return true
+		}
+	}
+	return false
+}
+
 func newRetriever(c *fakeCorpus, e *fakeEmbed, a Assets) *Retriever {
-	return New(c, e, a)
+	return New(c, e, a, nil)
 }
 
 // ── the probe ────────────────────────────────────────────────────
@@ -391,33 +403,91 @@ func TestRenderNothing(t *testing.T) {
 	}
 }
 
-// A tool result is a string, so media is named; the synthesis prompt is a message
-// with content parts, so there it is shown. Both use one label, so the model cannot
-// see two different names for the same page.
-func TestPlainTextNamesMediaAndKeepsTheSameLabels(t *testing.T) {
+// One renderer for both consumers is the whole design: the research model that decides
+// what to cite is shown the same pixels, under the same label, as the model that writes
+// the answer. A mixed set is the interesting case, because it is where a text chunk, a
+// page, and the blank line between them have to come out in the right order.
+func TestRenderShowsTextAndMediaUnderOneLabelScheme(t *testing.T) {
+	raster := imageHit("doc1#pages", 3, 4)
+	assets := &fakeAssets{files: map[string][]byte{raster.Segment.Asset.Path: []byte("PNG")}}
 	reg := NewRegistry()
 	reg.Register(textHit("doc1", 0, "the coast retreats 3mm a year"))
-	reg.Register(imageHit("doc1#pages", 3, 4))
+	reg.Register(raster)
 
-	body := PlainText(reg.All())
-	if !strings.Contains(body, "[[Chunk 1]]\nthe coast retreats 3mm a year") {
-		t.Errorf("text chunk rendered as:\n%s", body)
-	}
-	if !strings.Contains(body, "[[Chunk 2]] doc1.pdf page 4 — image") {
-		t.Errorf("media chunk not labelled:\n%s", body)
-	}
-	if strings.Contains(body, "data:image") {
-		t.Error("PlainText inlined pixels")
-	}
-
-	// One label per chunk, in both renderings.
-	parts, err := newRetriever(&fakeCorpus{}, &fakeEmbed{}, &fakeAssets{
-		files: map[string][]byte{imageHit("doc1#pages", 3, 4).Segment.Asset.Path: []byte("PNG")},
-	}).Render(reg.All())
+	parts, err := newRetriever(&fakeCorpus{}, &fakeEmbed{}, assets).Render(reg.All())
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	if got := partsText(parts); !strings.Contains(got, "[[Chunk 1]]\nthe coast retreats 3mm a year") {
+		t.Errorf("text chunk rendered as:\n%s", got)
+	}
 	if got := partsText(parts); !strings.Contains(got, "[[Chunk 2]] doc1.pdf page 4 — image") {
-		t.Errorf("Render disagrees with PlainText:\n%s", got)
+		t.Errorf("media chunk not labelled:\n%s", got)
+	}
+	if !hasMedia(parts) {
+		t.Error("a page the reader can see was left out of what the model is shown")
+	}
+
+	// The divider goes between chunks, never between a page and its label.
+	if len(parts) != 4 {
+		t.Fatalf("%d parts, want label, divider, label, image: %+v", len(parts), parts)
+	}
+	if parts[1].Type != "text" || strings.TrimSpace(parts[1].Text) != "" {
+		t.Errorf("part between the chunks = %+v, want the blank line", parts[1])
+	}
+	if parts[2].Type != "text" || !strings.Contains(parts[2].Text, "page 4") ||
+		parts[3].Type != "image_url" {
+		t.Errorf("a page was split from its label: %+v", parts[2:])
+	}
+}
+
+// A model started without the projector for a modality throws on the request, so
+// showing it a page is not a smaller prompt — it is no prompt. The refusal has to name
+// the model and count what it cost, because that is the sentence a person can act on.
+func TestRenderRefusesMediaTheServingModelCannotSee(t *testing.T) {
+	raster := imageHit("doc1#pages", 3, 4)
+	assets := &fakeAssets{files: map[string][]byte{raster.Segment.Asset.Path: []byte("PNG")}}
+	reg := NewRegistry()
+	reg.Register(textHit("doc1", 0, "the coast retreats 3mm a year"))
+	reg.Register(raster)
+
+	_, err := New(&fakeCorpus{}, &fakeEmbed{}, assets, &llm.Caps{Model: "libris-chat"}).Render(reg.All())
+
+	var want *llm.MediaUnsupported
+	if !errors.As(err, &want) {
+		t.Fatalf("err = %v, want *llm.MediaUnsupported", err)
+	}
+	if want.Kind != llm.MediaImage || want.Count != 1 || want.Model != "libris-chat" {
+		t.Errorf("refusal = %+v", want)
+	}
+	if !strings.Contains(err.Error(), "vision") || !strings.Contains(err.Error(), "libris-chat") {
+		t.Errorf("the refusal does not say what to go and change: %v", err)
+	}
+
+	// The text half is still renderable, and a caller that asked for text only should
+	// get it: the refusal is about the media this set holds, not about the set.
+	_, err = New(&fakeCorpus{}, &fakeEmbed{}, assets, &llm.Caps{Model: "libris-chat", Vision: true}).
+		Render(reg.All())
+	if err != nil {
+		t.Errorf("a model that can see was refused: %v", err)
+	}
+}
+
+// Not asking is not the same as knowing the answer is no. A server with no /props — one
+// libris does not manage — gets the media and answers for itself, rather than having
+// its pages withheld by a guess made here.
+func TestRenderSendsMediaWhenTheModelNeverSaid(t *testing.T) {
+	raster := imageHit("doc1#pages", 0, 1)
+	assets := &fakeAssets{files: map[string][]byte{raster.Segment.Asset.Path: []byte("PNG")}}
+	reg := NewRegistry()
+	reg.Register(raster)
+
+	parts, err := New(&fakeCorpus{}, &fakeEmbed{}, assets, nil).Render(reg.All())
+	if err != nil {
+		t.Fatalf("a server that never answered for itself withheld the page: %v", err)
+	}
+	if !hasMedia(parts) {
+		t.Errorf("no pixels in %+v", parts)
 	}
 }

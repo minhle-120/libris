@@ -34,7 +34,7 @@ function researchReply(body) {
   const searched = body.messages.some((m) => m.role === 'tool');
   const tool = searched ? 'finalize_research_response' : 'query_knowledge_base';
   const args = searched
-    ? { indices: [1] }
+    ? { indices: citedChunks(body) }
     : // Keywords taken from the question rather than invented, so the vector the fake
       // embeds is about something in the corpus at all.
         { keywords: keywordsFrom(body), query: questionFrom(body) };
@@ -56,6 +56,21 @@ function researchReply(body) {
       }
     ]
   };
+}
+
+/**
+ * Every chunk label the search actually put in front of the model, cited back. "What I
+ * used" is the whole point of the field, and a fake that always cites chunk 1 makes the
+ * evidence set the answer is written from a constant — which hides exactly the thing a
+ * media check needs to see: the page the researcher found is the page the writer is given.
+ */
+function citedChunks(body) {
+  const seen = new Set();
+  for (const m of body.messages ?? []) {
+    const text = typeof m.content === 'string' ? m.content : (m.content ?? []).map((p) => p?.text ?? '').join('');
+    for (const label of text.matchAll(/\[\[Chunk (\d+)\]\]/g)) seen.add(Number(label[1]));
+  }
+  return [...seen].sort((a, b) => a - b);
 }
 
 function questionFrom(body) {
@@ -152,6 +167,7 @@ export class EmbedServer {
             researchCalls: this.chatRequests.filter((r) => r.tools?.length).length,
             lastTools: this.chatRequests.filter((r) => r.tools?.length).at(-1)?.tools?.map((t) => t.function?.name) ?? null,
             lastStream: this.chatRequests.at(-1)?.stream ?? null,
+            ...this.mediaSeen(),
             ...this.thinkingSeen()
           }));
           return;
@@ -206,6 +222,31 @@ export class EmbedServer {
       lastResearchKwargs: last(true)?.chat_template_kwargs ?? null,
       lastAnswerKwargs: last(false)?.chat_template_kwargs ?? null
     };
+  }
+
+  /**
+   * How many media parts each of the last two calls was sent, by message role.
+   *
+   * This is the shape the evidence path promises: a page raster reaches the model that
+   * decides what to cite as the file, not as a line of prose about a file, and reaches
+   * the model that writes the answer the same way. Reading the roles apart is the point
+   * — a check that only looked at the answer call would pass while the researcher was
+   * still being told an image exists somewhere.
+   */
+  mediaSeen() {
+    const scan = (request) => {
+      if (!request) return null;
+      const byRole = {};
+      for (const m of request.messages ?? []) {
+        if (!Array.isArray(m.content)) continue;
+        const n = m.content.filter((p) => p?.type === 'image_url').length;
+        if (n) byRole[m.role] = (byRole[m.role] ?? 0) + n;
+      }
+      return byRole;
+    };
+    const last = (withTools) =>
+      this.chatRequests.filter((r) => Boolean(r.tools?.length) === withTools).at(-1);
+    return { lastResearchMedia: scan(last(true)), lastAnswerMedia: scan(last(false)) };
   }
 
   /**

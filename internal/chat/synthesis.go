@@ -124,19 +124,14 @@ func (s *Synthesizer) knowledge(evidence []retrieve.Evidence, question string) (
 		// is a truer answer than anything this code could invent.
 		parts = append(parts, llm.TextPart("(no chunks were retrieved)"))
 	} else {
-		// Rendered one chunk at a time so the blank line goes between chunks. A
-		// raster is two parts — its label then its pixels — and a separator inserted
-		// between them would leave a page's label detached from its image.
-		for i := range evidence {
-			if i > 0 {
-				parts = append(parts, llm.TextPart("\n\n"))
-			}
-			rendered, err := s.retrieve.Render(evidence[i : i+1])
-			if err != nil {
-				return nil, fmt.Errorf("chat: inline evidence: %w", err)
-			}
-			parts = append(parts, rendered...)
+		// One call with the whole set: the labels, the order and the blank lines between
+		// chunks are retrieve's to decide, and it is the same call the research tools
+		// make — so the answer is written from what the researcher was shown.
+		rendered, err := s.retrieve.Render(evidence)
+		if err != nil {
+			return nil, fmt.Errorf("chat: inline evidence: %w", err)
 		}
+		parts = append(parts, rendered...)
 	}
 
 	parts = append(parts, llm.TextPart("\n\n### User Query:\n"+question))

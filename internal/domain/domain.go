@@ -20,6 +20,21 @@ const (
 	KindImage Kind = "image"
 )
 
+// Media reports whether a segment carries a file to show a model rather than text to
+// paste at one. It is the axis that decides how evidence reaches a prompt, so the two
+// consumers of evidence share the answer instead of each asking about kinds.
+//
+// Kinds are named rather than inferred from "not text": a kind this switch does not
+// know is not silently treated as media. A new input modality lands here, in
+// retrieve's mapping from a kind to a wire kind, and in llm's MediaPart and Caps.Allows.
+func (k Kind) Media() bool {
+	switch k {
+	case KindImage:
+		return true
+	}
+	return false
+}
+
 // SourceKind is the original file's type, independent of how it is segmented.
 type SourceKind string
 

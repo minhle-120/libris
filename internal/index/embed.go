@@ -243,7 +243,11 @@ func (e *Embedder) inputFor(title string, seg domain.Segment) (llm.EmbedInput, e
 		if mime == "" {
 			mime = "image/png"
 		}
-		parts = append(parts, llm.ImageBase64(mime, encoded))
+		media, err := llm.MediaPart(llm.MediaImage, mime, encoded)
+		if err != nil {
+			return llm.EmbedInput{}, err
+		}
+		parts = append(parts, media)
 		// A rendition travels with the media it describes, in the same content
 		// object, so one vector covers both — and it stays unprefixed. The card's
 		// prefixes are for text inputs; "pass images, video, and audio without any

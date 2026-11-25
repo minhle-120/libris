@@ -238,7 +238,7 @@ func (r *Research) Ask(ctx context.Context, notebookID, question, history string
 				// this reply: they were written against evidence the model has since
 				// decided is enough, and running them would mint labels for chunks
 				// nothing reads.
-				messages = append(messages, toolMessage(call, ""))
+				messages = append(messages, toolMessage(call, nil))
 				return r.finish(toolReply, messages[traceFrom:], iterations), nil
 			}
 
@@ -300,10 +300,20 @@ func (r *Research) report(text string) {
 	}
 }
 
-// toolMessage closes one tool call. Every call in the transcript gets one, including
-// the terminal tools whose content is empty — see CloseTrace.
-func toolMessage(call Call, content string) llm.Message {
-	return llm.Message{Role: llm.RoleTool, Content: content, ToolCallID: call.ID, Name: call.Name}
+// toolMessage closes one call. Every call in the transcript gets one, including the
+// terminal tools whose content is empty — see CloseTrace. A call with nothing to return
+// still has to be closed —
+// a transcript with a tool call and no matching tool message is not a transcript
+// anything can replay — and it is closed with an empty string rather than with an
+// array holding one empty text part, because the pinned clone reads part["text"] on
+// every part it is handed (tools/server/server-common.cpp) and throws on the one that
+// omits the key, where the bare string parses.
+func toolMessage(call Call, content []llm.ContentPart) llm.Message {
+	var body any = content
+	if len(content) == 0 {
+		body = ""
+	}
+	return llm.Message{Role: llm.RoleTool, Content: body, ToolCallID: call.ID, Name: call.Name}
 }
 
 // CloseTrace turns the trailing tool message into the answer, which is how a
@@ -322,11 +332,31 @@ func CloseTrace(trace []llm.Message, answer string) []llm.Message {
 	if last.Role != llm.RoleTool {
 		return trace
 	}
-	if text, ok := last.Content.(string); ok && text != "" {
+	if toolText(last) != "" {
 		return trace
 	}
 	trace[len(trace)-1].Content = answer
 	return trace
+}
+
+// toolText is what a tool message actually says in words, which is the test CloseTrace
+// needs now that a tool message may be an array of parts. Media is not text and does
+// not count: a message whose only content is a page image has said nothing, and
+// closing it with the answer is still the right thing to do.
+func toolText(m llm.Message) string {
+	switch content := m.Content.(type) {
+	case string:
+		return content
+	case []llm.ContentPart:
+		var b strings.Builder
+		for _, p := range content {
+			if p.Type == llm.PartText {
+				b.WriteString(p.Text)
+			}
+		}
+		return b.String()
+	}
+	return ""
 }
 
 func cloneMessages(m []llm.Message) []llm.Message { return slices.Clone(m) }

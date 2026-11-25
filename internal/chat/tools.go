@@ -63,12 +63,13 @@ type Call struct {
 
 // Reply is what the transcript gains and what the caller does next.
 //
-// Content is the body of the tool message. It is empty for both terminal tools,
-// which have no content to return — the caller still closes the call, because a
-// transcript with a tool call and no matching tool message is not a transcript
-// anything can replay.
+// Content is the body of the tool message, in content parts rather than a string so
+// a page raster reaches the research model as the pixels it searched for and not as a
+// note that pixels exist somewhere. Empty for both terminal tools, which have nothing
+// to return — the caller still closes the call, because a transcript with a tool call
+// and no matching tool message is not a transcript anything can replay.
 type Reply struct {
-	Content string
+	Content []llm.ContentPart
 	Kind    Kind
 
 	// Indices are the chunk labels the model chose, as it wrote them. They are
@@ -186,7 +187,7 @@ func (t *Tools) Execute(ctx context.Context, call Call) (Reply, error) {
 	// iteration, which is the intended price of not trusting a small model to start
 	// correctly.
 	if !t.searched && call.Name != ToolSearch {
-		return Reply{Content: gateRefusal}, nil
+		return Reply{Content: textContent(gateRefusal)}, nil
 	}
 
 	switch call.Name {
@@ -225,19 +226,25 @@ func (t *Tools) Execute(ctx context.Context, call Call) (Reply, error) {
 
 	// An unknown tool is a model-shaped problem: report it, keep the turn. This is
 	// also where a tool this build does not have would arrive.
-	return Reply{Content: "Error: Unknown tool " + call.Name + ". The available tools are `" +
-		ToolSearch + "`, `" + ToolFinalize + "` and `" + ToolNoInfo + "`."}, nil
+	return Reply{Content: textContent("Error: Unknown tool " + call.Name + ". The available tools are `" +
+		ToolSearch + "`, `" + ToolFinalize + "` and `" + ToolNoInfo + "`.")}, nil
 }
 
+// textContent is a tool message that says prose: the refusals, the corrections and the
+// evaluation note. A one-part array is what llama.cpp renders for a plain string once
+// the evidence path has made the tool message a content array anyway, so nothing here
+// needs a second shape for text.
+func textContent(s string) []llm.ContentPart { return llm.Parts(llm.TextPart(s)) }
+
 // search is recall → registration, then the tool message the model reads.
-func (t *Tools) search(ctx context.Context, rawArgs string) (body string, running string, err error) {
+func (t *Tools) search(ctx context.Context, rawArgs string) (body []llm.ContentPart, running string, err error) {
 	var a searchArgs
 	toolArguments(rawArgs, &a)
 
 	if strings.TrimSpace(a.Keywords) == "" {
 		// The reference returns a bare "No keywords provided."; the nudge is
 		// attached because the model otherwise tends to repeat the call unchanged.
-		return noKeywords, "", nil
+		return textContent(noKeywords), "", nil
 	}
 	// Echoed back to the user, so it says which words are being looked for rather
 	// than that something is happening.
@@ -246,21 +253,31 @@ func (t *Tools) search(ctx context.Context, rawArgs string) (body string, runnin
 	evidence, err := t.retrieve.Search(ctx, t.registry, t.notebookID, a.Keywords, t.opts)
 	if err != nil {
 		if errors.Is(err, retrieve.ErrNoKeywords) {
-			return noKeywords, running, nil
+			return textContent(noKeywords), running, nil
 		}
-		return "", running, err
+		return nil, running, err
 	}
 	if len(evidence) == 0 {
-		return nothingFound, running, nil
+		return textContent(nothingFound), running, nil
 	}
 
+	// The evidence is rendered by the same call that fills the answer's prompt, so
+	// what this model reads to decide what to cite is what the answer is written from.
 	// Registration order is relevance; the body is in document order, which is what
 	// retrieve.Search already did — the model reads a passage, and the ids still
 	// record what the search thought was most useful.
-	return retrieve.PlainText(evidence) + "\n\n" + evaluationNote(t.question), running, nil
+	body, err = t.retrieve.Render(evidence)
+	if err != nil {
+		return nil, running, err
+	}
+	return append(body, llm.TextPart(retrieve.ChunkSeparator+evaluationNote(t.question))), running, nil
 }
 
 // ── the text half of the contract ────────────────────────────────
+//
+// chunkSeparator is the blank line retrieve puts between two chunks of one rendered
+// set; the evaluation note is appended with it so the note does not sit against the
+// last chunk's text.
 //
 // These strings are behaviour, not prose. The evaluation note in particular is the
 // loop's engine: nothing in the code forces a second iteration, this nudge does. It

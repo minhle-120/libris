@@ -86,7 +86,7 @@ func run(t *testing.T, corpus *stubCorpus, replies ...llm.ChatResponse) *turn {
 	t.Helper()
 	model := &fakeLLM{replies: replies}
 	var status []string
-	ret := retrieve.New(corpus, &stubEmbed{}, nil)
+	ret := retrieve.New(corpus, &stubEmbed{}, nil, nil)
 	r := NewResearch(model, ret, defaultConfig(), func(s string) { status = append(status, s) })
 	res, err := r.Ask(context.Background(), "nb1", "How fast is the coastline retreating?", "")
 	if err != nil {
@@ -232,7 +232,7 @@ func TestCanceledBeforeTheFirstCall(t *testing.T) {
 	cancel()
 
 	model := &fakeLLM{replies: []llm.ChatResponse{toolCallReply(searchCall("c1", "x"))}}
-	r := NewResearch(model, retrieve.New(&stubCorpus{}, &stubEmbed{}, nil), defaultConfig(), nil)
+	r := NewResearch(model, retrieve.New(&stubCorpus{}, &stubEmbed{}, nil, nil), defaultConfig(), nil)
 	res, err := r.Ask(ctx, "nb1", "q", "")
 	if err != nil {
 		t.Fatalf("cancellation raised: %v", err)
@@ -250,7 +250,7 @@ func TestCanceledBeforeTheFirstCall(t *testing.T) {
 func TestCanceledDuringAModelCall(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	model := &cancelOnSecondCall{cancel: cancel}
-	r := NewResearch(model, retrieve.New(&stubCorpus{}, &stubEmbed{}, nil), defaultConfig(), nil)
+	r := NewResearch(model, retrieve.New(&stubCorpus{}, &stubEmbed{}, nil, nil), defaultConfig(), nil)
 	res, err := r.Ask(ctx, "nb1", "q", "")
 	if err != nil {
 		t.Fatalf("cancellation raised: %v", err)
@@ -442,7 +442,7 @@ func TestIdsRestartEachTurn(t *testing.T) {
 		toolCallReply(searchCall("c", "two")),
 		toolCallReply(call("d", ToolFinalize, `{"indices":[1]}`)),
 	}}
-	r := NewResearch(model, retrieve.New(corpus, &stubEmbed{}, nil), defaultConfig(), nil)
+	r := NewResearch(model, retrieve.New(corpus, &stubEmbed{}, nil, nil), defaultConfig(), nil)
 	if _, err := r.Ask(context.Background(), "nb1", "q1", ""); err != nil {
 		t.Fatal(err)
 	}
@@ -635,7 +635,7 @@ func TestSettingsShapeTheTurn(t *testing.T) {
 	cfg := defaultConfig()
 	cfg.MaxIterations = 2
 	cfg.RecallTopK = 33
-	r := NewResearch(model, retrieve.New(corpus, &stubEmbed{}, nil), cfg, nil)
+	r := NewResearch(model, retrieve.New(corpus, &stubEmbed{}, nil, nil), cfg, nil)
 	res, err := r.Ask(context.Background(), "nb1", "q", "")
 	if err != nil {
 		t.Fatal(err)
@@ -655,7 +655,7 @@ func TestSettingsShapeTheTurn(t *testing.T) {
 // chat server is not something the model can rephrase its way out of.
 func TestModelFailurePropagates(t *testing.T) {
 	model := &fakeLLM{err: errors.New("connection refused")}
-	r := NewResearch(model, retrieve.New(&stubCorpus{}, &stubEmbed{}, nil), defaultConfig(), nil)
+	r := NewResearch(model, retrieve.New(&stubCorpus{}, &stubEmbed{}, nil, nil), defaultConfig(), nil)
 	if _, err := r.Ask(context.Background(), "nb1", "q", ""); err == nil {
 		t.Fatal("a dead chat server was swallowed")
 	} else if !strings.Contains(err.Error(), "iteration 1") {
@@ -666,7 +666,7 @@ func TestModelFailurePropagates(t *testing.T) {
 // An empty reply is a server problem described as one, not a panic on Choices[0].
 func TestServerReturningNothingIsAnError(t *testing.T) {
 	model := &fakeLLM{replies: []llm.ChatResponse{{}}}
-	r := NewResearch(model, retrieve.New(&stubCorpus{}, &stubEmbed{}, nil), defaultConfig(), nil)
+	r := NewResearch(model, retrieve.New(&stubCorpus{}, &stubEmbed{}, nil, nil), defaultConfig(), nil)
 	if _, err := r.Ask(context.Background(), "nb1", "q", ""); err == nil {
 		t.Fatal("an empty completion was accepted")
 	}
@@ -674,7 +674,7 @@ func TestServerReturningNothingIsAnError(t *testing.T) {
 
 // A turn needs a question. Not a blank one, and not a nil panic later.
 func TestAskingNothing(t *testing.T) {
-	r := NewResearch(&fakeLLM{}, retrieve.New(&stubCorpus{}, &stubEmbed{}, nil), defaultConfig(), nil)
+	r := NewResearch(&fakeLLM{}, retrieve.New(&stubCorpus{}, &stubEmbed{}, nil, nil), defaultConfig(), nil)
 	if _, err := r.Ask(context.Background(), "nb1", "   ", ""); err == nil {
 		t.Fatal("an empty question was researched")
 	}
@@ -703,7 +703,7 @@ func runWithHistory(t *testing.T, history string, replies ...llm.ChatResponse) *
 	corpus := &stubCorpus{hits: []domain.Hit{textChunk("d:0000", "d", 0, "x")}}
 	model := &fakeLLM{replies: replies}
 	var status []string
-	r := NewResearch(model, retrieve.New(corpus, &stubEmbed{}, nil), defaultConfig(), func(s string) { status = append(status, s) })
+	r := NewResearch(model, retrieve.New(corpus, &stubEmbed{}, nil, nil), defaultConfig(), func(s string) { status = append(status, s) })
 	res, err := r.Ask(context.Background(), "nb1", "How fast is the coastline retreating?", history)
 	return &turn{res: res, err: err, status: status, llm: model, corpus: corpus, research: r}
 }
@@ -769,7 +769,7 @@ func TestEvidencePerSearchIsHonoured(t *testing.T) {
 		toolCallReply(searchCall("c1", "k")),
 		toolCallReply(call("c2", ToolFinalize, `{"indices":[1,2,3,4,5]}`)),
 	}}
-	r := NewResearch(model, retrieve.New(corpus, &stubEmbed{}, nil), cfg, nil)
+	r := NewResearch(model, retrieve.New(corpus, &stubEmbed{}, nil, nil), cfg, nil)
 	res, err := r.Ask(context.Background(), "nb1", "q", "")
 	if err != nil {
 		t.Fatal(err)
@@ -822,7 +822,7 @@ func TestThinkingSwitchTravelsOnEveryResearchRequest(t *testing.T) {
 		cfg := defaultConfig()
 		cfg.Thinking = thinking
 		model := &fakeLLM{replies: []llm.ChatResponse{textReply("answering from memory")}}
-		r := NewResearch(model, retrieve.New(&stubCorpus{}, &stubEmbed{}, nil), cfg, nil)
+		r := NewResearch(model, retrieve.New(&stubCorpus{}, &stubEmbed{}, nil, nil), cfg, nil)
 		if _, err := r.Ask(context.Background(), "nb1", "How fast is the coastline retreating?", ""); err != nil {
 			t.Fatalf("Thinking=%v: the turn raised: %v", thinking, err)
 		}

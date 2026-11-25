@@ -35,10 +35,16 @@ func TestFirstLine(t *testing.T) {
 
 func TestMediaParts(t *testing.T) {
 	raw := strings.Repeat("QUJD", 100)
-	if p := ImageBase64("image/png", raw); p.ImageURL == nil ||
+	if p, err := MediaPart(MediaImage, "image/png", raw); err != nil || p.ImageURL == nil ||
 		!strings.HasPrefix(p.ImageURL.URL, "data:image/png;base64,") ||
 		!strings.HasSuffix(p.ImageURL.URL, raw) {
-		t.Errorf("ImageBase64 = %+v", p.ImageURL)
+		t.Errorf("MediaPart(image) = %+v, %v", p, err)
+	}
+	// A modality with no wire shape is refused rather than sent under a guessed type:
+	// a part of a type the server throws on would fail a whole turn for a mistake made
+	// here, which is the one thing this switch exists to prevent.
+	if p, err := MediaPart(MediaKind("hologram"), "application/x-hologram", raw); err == nil {
+		t.Errorf("an unknown media kind was accepted: %+v", p)
 	}
 	// A path made only of letters and slashes must never be mistaken for data:
 	// the two constructors are separate precisely so the choice is explicit.

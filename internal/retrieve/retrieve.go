@@ -80,10 +80,18 @@ type Retriever struct {
 	corpus Corpus
 	embed  Embedder
 	assets Assets // may be nil, which means media is described rather than shown
+	caps   *llm.Caps
 }
 
-func New(corpus Corpus, embed Embedder, assets Assets) *Retriever {
-	return &Retriever{corpus: corpus, embed: embed, assets: assets}
+// New wires a retriever. Two of the four arguments may be nil, and each nil means
+// something different:
+//
+//   - assets nil: the derived files cannot be read here, so a media chunk is
+//     labelled and described instead of shown.
+//   - caps nil: nobody asked the serving model what it takes, so media is sent and a
+//     server that cannot take it answers with its own error. See llm.Caps.
+func New(corpus Corpus, embed Embedder, assets Assets, caps *llm.Caps) *Retriever {
+	return &Retriever{corpus: corpus, embed: embed, assets: assets, caps: caps}
 }
 
 // Options is one search's depth, passed per call rather than read from a snapshot:
@@ -203,49 +211,127 @@ func Order(evidence []Evidence) []Evidence {
 	return evidence
 }
 
-// Render turns evidence into the content of a tool result.
+// ChunkSeparator sits between two chunks of one rendered set, so a search result
+// reads as separate passages rather than one run-on page. It is exported because the
+// research tools append their own note after a rendered set and the note wants the
+// same gap the chunks have from each other.
+const ChunkSeparator = "\n\n"
+
+// Render turns evidence into the content a model is shown. Both consumers are built
+// here — the research turn's tool result and the answer's knowledge block — and that
+// is the point: the model deciding what to cite sees what the model writing the
+// answer will see, pixels included.
 //
-// A text chunk becomes "[[Chunk N]]" over its text. A page raster becomes a label
-// naming the page and the source, then the image itself, because the model can read
-// a raster and a description of one is not the same thing.
+// A text chunk becomes "[[Chunk N]]" over its text. A media chunk becomes a label
+// naming the page and the source, then the file itself, because the model can read a
+// raster and a description of one is not the same thing.
 //
-// The parts come back in evidence order and must stay there: llama.cpp pairs each
-// image with the media marker in the rendered prompt by position, so reordering
-// parts would attach a page's pixels to another page's label.
+// Two properties are this function's to keep, which is why the callers do not do
+// either for themselves:
+//
+//   - Order. The parts come back in evidence order and must stay there: the server
+//     pairs each media file with the marker it leaves in the rendered prompt by
+//     position (see llm.MediaPart), so reordering would attach one page's pixels to
+//     another page's label.
+//   - Separation. Chunks are divided here rather than by the caller, because a raster
+//     is two parts — its label, then its pixels — and a divider added between them
+//     would leave a page's label detached from its image.
+//
+// Evidence holding media the serving model was never started to take is an error
+// rather than a silently smaller prompt: see canShow.
 func (r *Retriever) Render(evidence []Evidence) ([]llm.ContentPart, error) {
 	if len(evidence) == 0 {
 		return nil, nil
 	}
+	if err := r.canShow(evidence); err != nil {
+		return nil, err
+	}
 
-	parts := make([]llm.ContentPart, 0, len(evidence))
-	for _, e := range evidence {
-		if e.Segment.Kind == domain.KindText || e.Segment.Asset == nil {
+	parts := make([]llm.ContentPart, 0, 2*len(evidence))
+	for i, e := range evidence {
+		if i > 0 {
+			parts = append(parts, llm.TextPart(ChunkSeparator))
+		}
+		switch {
+		case e.Segment.Kind == domain.KindText || e.Segment.Asset == nil:
 			parts = append(parts, llm.TextPart(label(e)+"\n"+e.Segment.Text))
-			continue
+		default:
+			if r.assets == nil {
+				parts = append(parts, llm.TextPart(label(e)+
+					"\n("+string(e.Segment.Kind)+" itself is not available to this model)"))
+				continue
+			}
+			kind, ok := wireKind(e.Segment.Kind)
+			if !ok {
+				return nil, fmt.Errorf("retrieve: no wire shape for segment kind %q", e.Segment.Kind)
+			}
+			raw, err := r.assets.Read(*e.Segment.Asset)
+			if err != nil {
+				return nil, err
+			}
+			mime := e.Segment.Asset.MIME
+			if mime == "" {
+				mime = "image/png" // what a page raster renders to; see ingest's PDF stage
+			}
+			media, err := llm.MediaPart(kind, mime, base64.StdEncoding.EncodeToString(raw))
+			if err != nil {
+				return nil, err
+			}
+			parts = append(parts, llm.TextPart(label(e)+"\n"), media)
 		}
-		if r.assets == nil {
-			parts = append(parts, llm.TextPart(label(e)+"\n(the image itself is not available to this model)"))
-			continue
-		}
-		raw, err := r.assets.Read(*e.Segment.Asset)
-		if err != nil {
-			return nil, err
-		}
-		mime := e.Segment.Asset.MIME
-		if mime == "" {
-			mime = "image/png"
-		}
-		parts = append(parts,
-			llm.TextPart(label(e)+"\n"),
-			llm.ImageBase64(mime, base64.StdEncoding.EncodeToString(raw)),
-		)
 	}
 	return parts, nil
 }
 
-// label is the citation handle plus, for media, what it is: a bare [[Chunk N]] over
-// an image gives the model nothing to reason about when it decides whether this
-// evidence answers the question.
+// canShow refuses an evidence set holding media the serving model cannot be given.
+//
+// Stopping here rather than sending it is the whole reason: a model started without
+// the projector for a modality throws on the request, and the account of that failure
+// is a sentence from C++ about somebody's mmproj — arriving where a person expected an
+// answer. This says which model, which modality, and how many pieces of evidence it
+// cost.
+//
+// The count is over the whole set because Render is handed the whole set: one refusal
+// per turn, naming every page the model would have missed. A nil Caps is allowed
+// through on purpose — not asking is not the same as knowing the answer is no.
+func (r *Retriever) canShow(evidence []Evidence) error {
+	if r.assets == nil {
+		return nil // nothing here would have carried pixels anyway
+	}
+	for _, e := range evidence {
+		kind, ok := wireKind(e.Segment.Kind)
+		if !ok || r.caps.Allows(kind) {
+			continue
+		}
+		n := 0
+		for _, o := range evidence {
+			if k, ok := wireKind(o.Segment.Kind); ok && k == kind && o.Segment.Asset != nil {
+				n++
+			}
+		}
+		return &llm.MediaUnsupported{Kind: kind, Model: r.caps.Model, Count: n}
+	}
+	return nil
+}
+
+// wireKind maps a segment's modality onto the one the wire speaks. A kind domain knows
+// that llm has no part type for is refused where it would be rendered, never turned
+// into pixels under a guessed type.
+func wireKind(k domain.Kind) (llm.MediaKind, bool) {
+	if !k.Media() {
+		return "", false
+	}
+	switch k {
+	case domain.KindImage:
+		return llm.MediaImage, true
+	}
+	return "", false
+}
+
+// label is the citation handle plus, for media, what it is: a bare [[Chunk N]] over an
+// image gives the model nothing to reason about when it decides whether this evidence
+// answers the question — the pixels are the content, and the only thing a label can
+// point at is where they came from.
 func label(e Evidence) string {
 	if e.Segment.Kind == domain.KindText {
 		return fmt.Sprintf("[[Chunk %d]]", e.Index)
@@ -254,35 +340,5 @@ func label(e Evidence) string {
 	if e.Segment.Span.Page > 0 {
 		page = fmt.Sprintf(" page %d", e.Segment.Span.Page)
 	}
-	return fmt.Sprintf("[[Chunk %d]] %s%s — image", e.Index, e.SourceName, page)
-}
-
-// PlainText is what a *tool result* looks like: the same labels and the same text,
-// with media named instead of shown.
-//
-// The split exists because a tool message is a string. A page raster can be handed
-// to the model that writes the answer, because that prompt is a user message with
-// content parts, but not inside a tool result — so the research model reads a line
-// saying which page is an image, and cites it on that. Passing pixels through a
-// tool message would either drop them silently or make the transcript unparseable,
-// and the trace has to stay a valid OpenAI transcript.
-func PlainText(evidence []Evidence) string {
-	if len(evidence) == 0 {
-		return ""
-	}
-	var b strings.Builder
-	for i, e := range evidence {
-		if i > 0 {
-			b.WriteString("\n\n")
-		}
-		if e.Segment.Kind == domain.KindText || e.Segment.Asset == nil {
-			b.WriteString(label(e))
-			b.WriteString("\n")
-			b.WriteString(e.Segment.Text)
-			continue
-		}
-		b.WriteString(label(e))
-		b.WriteString("\n(the image itself is not shown in search results; the model that writes the answer will see it)")
-	}
-	return b.String()
+	return fmt.Sprintf("[[Chunk %d]] %s%s — %s", e.Index, e.SourceName, page, e.Segment.Kind)
 }

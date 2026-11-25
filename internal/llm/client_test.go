@@ -384,10 +384,15 @@ func TestEmbedMultimodalInputs(t *testing.T) {
 	srv, rec := server(t, 200, `{"data":[{"index":0,"embedding":[0.5]}]}`, nil)
 	c := newClient(t, llm.Config{ChatURL: "http://unused", EmbedURL: srv.URL})
 
-	_, err := c.Embed(context.Background(), llm.EmbedRequest{
+	inlined, err := llm.MediaPart(llm.MediaImage, "image/png", "cG5n")
+	if err != nil {
+		t.Fatalf("MediaPart: %v", err)
+	}
+
+	_, err = c.Embed(context.Background(), llm.EmbedRequest{
 		Input: []llm.EmbedInput{
 			llm.PartsInput(llm.ImagePart("/tmp/page-1.png")),
-			llm.PartsInput(llm.ImageBase64("image/png", "cG5n")),
+			llm.PartsInput(inlined),
 		},
 	})
 	if err != nil {
