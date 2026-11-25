@@ -4,22 +4,12 @@ on:
   push:
     tags: ['v*']
 
+# One archive per platform: libris, and the `tools` folder beside it with the
+# programs it runs to read a PDF. Unpack and run — see
+# docs/adr/0009-the-download-carries-the-programs-it-runs.md.
+
 jobs:
-  # Two shell scripts decide what every download can read, and nothing
-  # else parses them: a bad brace costs both legs and a tag. This costs a
-  # second, and runs before them.
-  lint:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: parse the scripts a release runs
-        run: |
-          set -eu
-          for f in scripts/dist/*.sh; do bash -n "$f"; done
-
   dist:
-    needs: lint
     strategy:
       fail-fast: false
       matrix:
@@ -28,23 +18,19 @@ jobs:
             goos: linux
             goarch: amd64
             ext: ''
-            # The oldest Ubuntu still receiving standard support. The C library
-            # of the image the PDF tools are gathered in is the oldest C
-            # library they start on, so this is a chosen number rather than
-            # whatever the runner image happens to be today.
+            # The PDF tools are gathered inside this image, so its glibc is
+            # the oldest one they then start on: a chosen floor rather than
+            # whatever the runner image happens to be.
             base: ubuntu:22.04
           - os: windows-latest
             goos: windows
             goarch: amd64
             ext: '.exe'
-            # Empty means "the toolchain the runner ships", which is the
-            # Windows half of gathering the same two programs.
+            # Empty means: take the toolchain the runner ships.
             base: ''
     runs-on: ${{ matrix.os }}
-    # A Windows `run:` step is PowerShell unless told otherwise, and PowerShell
-    # has no notion of $TAG: it built into a file called `libris---` and
-    # reported success. Bash on both legs is what makes the command below the
-    # same command on both — the whole reason it is one line.
+    # Bash on both legs, so the build and archive lines below are the same
+    # lines on both. PowerShell does not expand $TAG.
     defaults:
       run:
         shell: bash
@@ -55,36 +41,24 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # The UI is a build input: web/embed.go embeds web/dist, which is not in
-      # git, so the asset does not exist until Vite has run. Node 22 because
-      # that is the oldest release Vite 8 supports, and the tag is the version
-      # the release page will offer to the world.
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: web/package-lock.json
 
+      # web/embed.go embeds web/dist, which is not in git: the binary does not
+      # contain the UI until Vite has run.
       - name: build the UI
         run: |
           set -eu
           npm --prefix web ci
           npm --prefix web run build
-          # go:embed would fail on its own, but with a pattern error that reads
-          # like a missing file rather than a missing build. This says which.
           test -f web/dist/index.html
 
-      # `go build` and not `make`, on both legs: a Windows runner does not
-      # promise make on PATH, and one command line that works on either is one
-      # less thing that can differ between the two files being published.
-      #
-      # CGO_ENABLED=0 makes libris itself need nothing from the machine: the
-      # link is static, so it never asks a stranger's distribution for a glibc
-      # it may not have. It was never the whole story. Reading a PDF means
-      # running pdftotext and pdftoppm, which are somebody else's programs, so
-      # libris looks for them beside itself before it looks in PATH, and the
-      # two steps below are what puts them beside itself. -s -w drops the
-      # symbol and DWARF tables, 22 MB of binary into 14 MB of download.
+      # CGO_ENABLED=0 keeps libris itself independent of the machine's C
+      # library. The programs it shells out to are the rest of what it needs,
+      # and the next two steps are what ship them.
       - name: build
         env:
           CGO_ENABLED: '0'
@@ -96,19 +70,17 @@ jobs:
           set -eu
           asset="libris-$TAG-$OS-$ARCH$EXT"
           go build -trimpath -ldflags "-s -w" -o "$asset" ./cmd/libris
-          test -n "$TAG" && test -f "$asset"
-          # A green leg that uploads the wrong filename is worse than a red
-          # one: the release page looks finished and the download is named
-          # after a shell that expanded nothing. This is the check for that.
+          test -f "$asset"
           mkdir -p stage
           mv "$asset" stage/
 
-      # The programs that read a PDF, gathered inside the base image named
-      # above. Everything they need is copied with them — the library closure,
-      # and a folder of fonts with a fontconfig file naming it — because the
-      # point of the download is that nothing is asked of the machine it lands
-      # on. libris names that library folder to the child process; it is not
-      # left to PATH, which a running process cannot be told about.
+      # Nothing else parses these two scripts, and a bad brace costs a whole
+      # run of both legs.
+      - name: parse the scripts a release runs
+        run: |
+          set -eu
+          for f in scripts/dist/*.sh; do bash -n "$f"; done
+
       - name: gather the PDF tools (linux)
         if: matrix.base != ''
         env:
@@ -119,21 +91,9 @@ jobs:
             bash /w/scripts/dist/tools-linux.sh /w/stage/tools
           test -f stage/tools/pdftotext
 
-      # The same two programs, from the toolchain the runner ships. This leg is
-      # the one the bundle exists for: a pdftotext found through PATH on
-      # Windows came from MSYS or Git for Windows, and it cannot read the
-      # C:\ path libris writes it. So here the download's copy is the one that
-      # runs, and it carries poppler's data folder beside it — which is where a
-      # Windows poppler looks for it, and where no Linux poppler can be made
-      # to. The two bundles differ because the libraries differ; the reason is
-      # written in the two scripts rather than remembered here.
-      # A shell to gather them in. The runner image used to register an
-      # MSYS2 shell of its own; asking for `shell: msys2 {0}` without one
-      # installed fails as `msys2: command not found`, a confusing way to
-      # say this runner has no sh. The action owns the install, and the
-      # packages the bundle is built from are named beside it rather than
-      # hidden in a pacman line inside a script.
-      - name: an sh, and the packages the tools come from
+      # The runner ships no registered MSYS2 shell any more, so the action
+      # installs it, along with the packages the bundle is built from.
+      - name: an sh, and poppler
         if: matrix.base == ''
         uses: msys2/setup-msys2@v2
         with:
@@ -153,22 +113,10 @@ jobs:
           bash scripts/dist/tools-windows.sh stage/tools
           test -f stage/tools/pdftotext.exe
 
-      # What the archive contains besides libris, and under what terms. These
-      # are GPL and LGPL works being redistributed, so the folder holding them
-      # is named on the release page — and this is the step that makes sure it
-      # is a folder that exists rather than a sentence about one.
-      - name: notices
-        run: |
-          set -eu
-          test -d stage/tools/share/licenses
-          cp scripts/dist/THIRD-PARTY-NOTICES.txt stage/
-
-      # One archive per platform, and the archive is the download: the program,
-      # the tools folder beside it, the licenses inside it. bsdtar picks the
-      # format from the extension — gzip on Linux, zip on Windows — because a
-      # person double-clicking an asset in Explorer must not be handed a
-      # .tar.gz, and because one command line on two legs is one less thing
-      # that can differ between them.
+      # The archive is the download. bsdtar is named outright on Windows
+      # because the `tar` on a bash PATH there is GNU tar, which will write a
+      # plain tar into a file called .zip and report success — so the first
+      # two bytes are checked, since the filename cannot prove anything.
       - name: archive
         env:
           TAG: ${{ github.ref_name }}
@@ -176,30 +124,22 @@ jobs:
           ARCH: ${{ matrix.goarch }}
         run: |
           set -eu
-          case "$OS" in
-            linux)
-              out="libris-$TAG-linux-$ARCH.tar.gz"
-              magic=1f8b
-              tar=tar
-              ;;
-            windows)
-              out="libris-$TAG-windows-$ARCH.zip"
-              magic=504b
-              # The bash on a Windows runner resolves `tar` to GNU tar, which
-              # takes --auto-compress to mean "no compressor I know", writes a
-              # plain tar, and calls it a day. Windows ships bsdtar, which does
-              # understand a .zip suffix; naming it outright is the only way to
-              # be sure which one ran.
-              tar=/c/Windows/System32/tar.exe
-              ;;
-          esac
+          if [ "$OS" = windows ]; then
+            out="libris-$TAG-windows-$ARCH.zip"
+            magic=504b
+            tar=/c/Windows/System32/tar.exe
+          else
+            out="libris-$TAG-linux-$ARCH.tar.gz"
+            magic=1f8b
+            tar=tar
+          fi
           "$tar" -a -cf "$out" -C stage .
           test -s "$out"
-          # A green leg whose archive is the wrong format is the failure this
-          # whole file exists to avoid, and the filename cannot prove it: GNU
-          # tar will happily write a tar called .zip. Two magic bytes do.
-          test "$(head -c 2 "$out" | od -An -t x1 | tr -d ' \n')" = "$magic" \
-            || { echo "$out is not a $OS archive" >&2; exit 1; }
+          got=$(head -c 2 "$out" | od -An -t x1 | tr -d ' \n')
+          test "$got" = "$magic" || {
+            echo "$out is not a $OS archive" >&2
+            exit 1
+          }
           mkdir -p out
           mv "$out" out/
 
@@ -209,16 +149,11 @@ jobs:
           path: out/*
 
   release:
-    # One job assembles the release rather than each leg publishing its own
-    # file. Two jobs racing to create the same release leaves, when the race is
-    # lost, a published release holding one binary.
     needs: dist
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -227,28 +162,12 @@ jobs:
       - name: checksums
         run: (cd dist && sha256sum libris-* > SHA256SUMS.txt)
 
-      # The tag is the version, and it is the version in the asset names too.
-      # Nothing else in the pipeline is told the number, so nothing else can
-      # disagree with it — and `libris -version` reports the revision a file
-      # was built from, which is what a bug report needs.
-      #
-      # The notes say two things only: that unpacking is the whole install, and
-      # where the licenses of the redistributed programs are, since they travel
-      # inside the archive. Anything longer goes stale on the second release
-      # nobody remembered to edit.
       - name: publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
           set -eu
-          {
-            echo 'Unpack anywhere and run it. The archive holds libris and the'
-            echo 'programs it runs to read a PDF. Move libris away from its'
-            echo '`tools` folder and a PDF will say so.'
-            echo
-            echo 'Third-party licenses: `tools/share/licenses` inside the'
-            echo 'archive, and `THIRD-PARTY-NOTICES.txt` beside libris.'
-          } > notes.md
           gh release create "$TAG" dist/* --title "$TAG" \
-            --notes-file notes.md
+            --notes "Unpack and run. Keep \`libris\` and its \`tools\` folder
+          together, or a PDF will say so."

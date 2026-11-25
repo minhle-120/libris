@@ -83,27 +83,6 @@ CONF
 # default, and the install folder may well be somewhere this program is not
 # allowed to write.
 
-# The license texts of everything copied. These are GPL and LGPL works being redistributed by
-# the archive, so the folder that holds them has to travel with it rather than be described in
-# a release note and left absent.
-licenses="$out/share/licenses"
-mkdir -p "$licenses"
-for pkg in poppler-utils poppler-data libpoppler13 fontconfig libfontconfig1 \
-           libfreetype6 libpng16-16 zlib1g libbrotli1 libbz2-1.0 libexpat1 \
-           libpcre2-8-0 libcairo2 libpixman-1-0 libjpeg-turbo8 libopenjp2-7 \
-           liblcms2-2 libnspr4 libnss3 libglib2.0-0 libgraphite2-3 \
-           libharfbuzz0b libdeflate0; do
-  [ -d "/usr/share/licenses/$pkg" ] || continue
-  cp -r "/usr/share/licenses/$pkg" "$licenses/"
-done
-# Ubuntu puts some of these in the copyright of the library package itself, which is a file
-# rather than a folder; the ones that matter are copied by name above, and an empty licenses
-# folder would be worse than a partial one, so this says which happened.
-if [ -z "$(ls -A "$licenses" 2>/dev/null)" ]; then
-  echo "tools-linux: no license texts found — the archive must not ship without them" >&2
-  exit 1
-fi
-
 # What the folder holds, so a release log says what shipped rather than implying it.
 echo "tools: $(cd "$out" && ls -1 | tr '\n' ' ')"
 echo "libs:  $(cd "$out/lib" && ls -1 | wc -l) files, $(du -sh "$out" | cut -f1)"

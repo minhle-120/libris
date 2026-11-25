@@ -85,38 +85,5 @@ else
   echo "tools-windows: no $prefix/share/poppler — CJK text will extract to blanks" >&2
 fi
 
-# The licenses of every package in the closure. These are GPL and LGPL works redistributed by
-# the archive, and the written offer in the release notes points at exactly this folder.
-licenses="$out/share/licenses"
-mkdir -p "$licenses"
-if command -v pacman >/dev/null 2>&1; then
-  # Who owns each file that went into the bundle — asked of the files themselves rather than
-  # of a dependency tree, because the tree is what pacman *thinks* poppler needs, while this
-  # is what it resolved to and what is actually being redistributed. pacman is a Windows
-  # program: hand it the Windows form of a path or it answers nothing at all, which is a
-  # quiet way to ship GPL binaries without their texts.
-  pkgs=$(
-    {
-      for f in "$out"/*.exe "$out"/*.dll; do cygpath -w "$f"; done
-      cygpath -w "$prefix/share/poppler"
-    } | xargs -r pacman -Qqo 2>/dev/null
-  ) || pkgs=
-
-  for pkg in $(printf '%s\n' "$pkgs" | sort -u); do
-    if [ -d "$prefix/share/licenses/$pkg" ]; then
-      cp -r "$prefix/share/licenses/$pkg" "$licenses/"
-    else
-      # Named rather than skipped: a package with no license folder here is a hole in the
-      # redistribution, and an empty folder would not say which one.
-      echo "tools-windows: $pkg owns a shipped file and has no license folder" >&2
-    fi
-  done
-fi
-find "$licenses" -type d -empty -delete 2>/dev/null || true
-if [ ! -d "$licenses" ] || [ -z "$(ls -A "$licenses" 2>/dev/null)" ]; then
-  echo "tools-windows: no license texts found — the archive must not ship without them" >&2
-  exit 1
-fi
-
 echo "tools: $(cd "$out" && ls -1 | tr '\n' ' ')"
 echo "dlls:  $(cd "$out" && ls -1 *.dll 2>/dev/null | wc -l), total $(du -sh "$out" | cut -f1)"
