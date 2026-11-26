@@ -33,6 +33,16 @@ var ErrNotFound = domain.ErrNotFound
 // cross-process locking beyond SQLite's own busy timeout.
 type DB struct {
 	sql *sql.DB
+
+	// shards is how many goroutines one vector scan may split across, which is
+	// also what the connection pool in Open is sized for. Derived from the
+	// machine once, at Open; see searchShards.
+	shards int
+
+	// rowsPerShard is the corpus size a shard needs to be worth its cost, from
+	// scanRowsPerShard. It lives on the DB beside shards so a test can ask for a
+	// fan-out on a corpus far smaller than 4096 rows.
+	rowsPerShard int
 }
 
 // Open opens (creating if needed) the database at path and applies any pending
@@ -55,9 +65,17 @@ func Open(path string) (*DB, error) {
 	}
 	// One writer at a time keeps SQLITE_BUSY off the table for the writes we
 	// actually make; readers still run concurrently under WAL.
-	raw.SetMaxOpenConns(4)
+	//
+	// The pool is sized from the machine rather than fixed because a sharded scan
+	// holds one connection per shard: a pool smaller than the fan-out makes the
+	// shards queue for a connection, which is goroutines bought for nothing. Two
+	// connections above the fan-out are left for the ingest worker and the UI's
+	// polling to run against while a search is in flight, and the floor is what a
+	// single-core machine had before the scan could shard at all.
+	shards := searchShards()
+	raw.SetMaxOpenConns(max(shards+2, 4))
 
-	db := &DB{sql: raw}
+	db := &DB{sql: raw, shards: shards, rowsPerShard: scanRowsPerShard}
 	if err := db.migrate(context.Background()); err != nil {
 		raw.Close()
 		return nil, err
