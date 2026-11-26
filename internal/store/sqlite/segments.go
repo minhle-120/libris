@@ -167,6 +167,63 @@ func (db *DB) ListSegments(ctx context.Context, sourceID string) ([]domain.Segme
 	return scanSegments(rows)
 }
 
+// ListSegmentsPage returns one window of a source's chunks in the same reading order as
+// ListSegments, and how many chunks the source holds of each kind.
+//
+// The window is here because the chunk viewer asks for a source's chunks in order to show
+// them, and a long PDF holds eighteen thousand of them: no screen shows more than a screen,
+// so making it wait for every chunk — the text of them through SQLite, through Go, through
+// JSON, and then the browser parsing and building all eighteen thousand — is what turns
+// opening a viewer into waiting for one.
+//
+// The per-kind count travels with the window because the viewer's heading describes the
+// file, not the fetch: "18 489 text, 1 459 page images" has to stay true while only the
+// first four hundred chunks are on the page, or the reader is told a 900-page PDF has no
+// pictures in it. It is one grouped scan of the same index the window reads.
+//
+// The offset is a row count rather than an ordinal because a source can hold more than one
+// derived document, so the reading order is (document, ordinal) and no single column of it
+// is contiguous. Walking past the skipped rows costs nothing at the size of one person's
+// library, which is what keeps a row count good enough here.
+func (db *DB) ListSegmentsPage(ctx context.Context, sourceID string, offset, limit int) ([]domain.Segment, map[domain.Kind]int, error) {
+	kinds := map[domain.Kind]int{}
+	counts, err := db.sql.QueryContext(ctx,
+		`SELECT kind, count(*) FROM segments WHERE source_id = ? GROUP BY kind`, sourceID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("store: count segments: %w", err)
+	}
+	for counts.Next() {
+		var (
+			kind string
+			n    int
+		)
+		if err := counts.Scan(&kind, &n); err != nil {
+			counts.Close()
+			return nil, nil, fmt.Errorf("store: count segments: %w", err)
+		}
+		kinds[domain.Kind(kind)] = n
+	}
+	if err := counts.Err(); err != nil {
+		counts.Close()
+		return nil, nil, fmt.Errorf("store: count segments: %w", err)
+	}
+	counts.Close()
+
+	rows, err := db.sql.QueryContext(ctx, segmentSelect+
+		` WHERE g.source_id = ?
+		  ORDER BY g.doc_id, g.ordinal
+		  LIMIT ? OFFSET ?`, sourceID, limit, offset)
+	if err != nil {
+		return nil, nil, fmt.Errorf("store: list segments: %w", err)
+	}
+	defer rows.Close()
+	segments, err := scanSegments(rows)
+	if err != nil {
+		return nil, nil, err
+	}
+	return segments, kinds, nil
+}
+
 // SegmentsWithoutEmbeddings returns a source's chunks that have no vector yet, in
 // reading order — the work a resumed run has left to do.
 //

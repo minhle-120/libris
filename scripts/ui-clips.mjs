@@ -64,29 +64,50 @@ const code = await withBrowser(
       `
       const li = document.querySelector('.clips .clip');
       if (!li) return null;
-      const audio = li.querySelector('audio');
       return {
         when: [...(li.querySelectorAll('.prov span') ?? [])].map((n) => n.textContent.trim()).filter(Boolean),
-        src: audio?.getAttribute('src'),
-        preload: audio?.getAttribute('preload'),
-        controls: audio?.hasAttribute('controls') ?? false,
+        players: document.querySelectorAll('.viewer audio').length,
+        inRow: !!li.querySelector('audio'),
+      };
+    `,
+      60,
+      100,
+    );
+    // A source is a hundred and fifty of these. Each used to carry its own <audio>, and
+    // building a hundred and fifty media elements to draw a table of contents is what made
+    // opening a recording slow. The rows are rows now, and one player serves them.
+    checks.check(
+      'the clip list is rows, not a media element each',
+      clip?.players === 1 && !clip?.inRow,
+      JSON.stringify(clip)
+    );
+
+    // Pressing a row is the only thing that fetches a clip, and the sound arrives in the one
+    // player — aimed at the file of the clip that was pressed.
+    await ui.eval(`document.querySelector('.clips .clip .play')?.click(); return true;`);
+    const played = await ui.until(
+      `
+      const el = document.querySelector('.viewer audio');
+      if (!el || el.preload !== 'none') return null;
+      return {
+        src: el.src || el.currentSrc || '',
+        paused: el.paused,
+        bar: !!document.querySelector('.player.shown'),
+        label: document.querySelector('.player .small')?.textContent.replace(/\s+/g, ' ').trim(),
       };
     `,
       60,
       100,
     );
     checks.check(
-      'the viewer shows the clip with a player pointed at its file',
-      !!clip?.controls && (clip?.src ?? '').startsWith('/api/assets/'),
-      JSON.stringify(clip)
+      'the player waits for the reader, then plays the clip pressed',
+      (played?.src ?? '').includes('/api/assets/') && played?.paused === false,
+      JSON.stringify(played)
     );
-
-    // A source is a hundred and fifty of these. Fetching every one to draw a list of play
-    // buttons would read the whole recording off the disk to show its table of contents.
     checks.check(
-      'the player waits for the reader to press play',
-      clip?.preload === 'none',
-      `preload=${clip?.preload}`
+      'the player says which clip it is playing',
+      !!played?.bar && /clip\s+\d/.test(played?.label ?? ''),
+      JSON.stringify(played)
     );
 
     // The label is how a reader finds the sentence they remember hearing. It has to be the

@@ -769,12 +769,15 @@ func TestAddUploadStoresThenProcesses(t *testing.T) {
 		t.Errorf("processor read %q, want the stored original", proc.path)
 	}
 
-	segments, err := svc.ListSegments(context.Background(), src.ID)
+	segments, kinds, err := svc.ListSegmentsPage(context.Background(), src.ID, 0, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(segments) != 1 || segments[0].Text != "hello" {
 		t.Errorf("segments = %+v", segments)
+	}
+	if kinds[domain.KindText] != 1 {
+		t.Errorf("kinds = %v, want the whole source counted regardless of the window", kinds)
 	}
 }
 

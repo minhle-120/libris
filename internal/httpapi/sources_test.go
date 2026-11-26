@@ -105,8 +105,21 @@ func (f *fakeAPI) ListSources(context.Context, string) ([]domain.Source, error) 
 	return f.sources, f.err
 }
 
-func (f *fakeAPI) ListSegments(context.Context, string) ([]domain.Segment, error) {
-	return f.segments, f.err
+// ListSegmentsPage answers the way the store does: a window, and what the whole holds of each
+// kind. A limit the handler ignored would show up here as a window longer than the caller
+// asked for.
+func (f *fakeAPI) ListSegmentsPage(_ context.Context, _ string, offset, limit int) ([]domain.Segment, map[domain.Kind]int, error) {
+	kinds := map[domain.Kind]int{}
+	for _, s := range f.segments {
+		kinds[s.Kind]++
+	}
+	if len(kinds) == 0 {
+		kinds[domain.KindText] = len(f.segments)
+	}
+	if offset > len(f.segments) {
+		offset = len(f.segments)
+	}
+	return f.segments[offset:min(offset+limit, len(f.segments))], kinds, f.err
 }
 
 // StopSource answers the way the use case does: the row as it was read, which is
@@ -430,6 +443,71 @@ func TestUploadWithoutMultipartIsRejected(t *testing.T) {
 	resp := request(t, srv, "POST", "/api/notebooks/nb1/sources", strings.NewReader("just text"))
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400: %s", resp.StatusCode, readAll(t, resp))
+	}
+}
+
+// A long source's chunks are asked for a window at a time, because the viewer can show a
+// screen and the file holds thousands. What this pins is that the query is obeyed rather
+// than merely echoed: a server that answered every request with the whole list would still
+// carry a plausible "total" in its body, and a test that only looked for a number would
+// pass it.
+func TestSegmentWindow(t *testing.T) {
+	api := &fakeAPI{segments: []domain.Segment{
+		{ID: "s:0000", Kind: domain.KindText, Ordinal: 0, Text: "first chunk"},
+		{ID: "s:0001", Kind: domain.KindText, Ordinal: 1, Text: "second chunk"},
+		{ID: "s:0002", Kind: domain.KindText, Ordinal: 2, Text: "third chunk"},
+	}}
+	srv := newAppServer(t, api)
+
+	for _, tc := range []struct {
+		name  string
+		query string
+		want  []string
+		deny  []string
+	}{
+		{"no query is the server's own window", "", []string{`"first chunk"`, `"third chunk"`, `"text":3`}, nil},
+		{"a limit stops there", "limit=2", []string{`"first chunk"`, `"second chunk"`, `"text":3`}, []string{`"third chunk"`}},
+		{"an offset starts past the chunks already shown", "offset=2&limit=2", []string{`"third chunk"`, `"text":3`}, []string{`"first chunk"`}},
+		// The empty window still carries the file's count: a viewer that stopped saying how
+		// many chunks there are would read as the end of a shorter document.
+		{"past the end is empty, not the whole list", "offset=9&limit=2", []string{`"segments":[]`, `"text":3`}, []string{`"first chunk"`}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := "/api/sources/sha1/segments"
+			if tc.query != "" {
+				path += "?" + tc.query
+			}
+			resp := request(t, srv, "GET", path, nil)
+			got := readAll(t, resp)
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("GET %s = %d: %s", path, resp.StatusCode, got)
+			}
+			for _, w := range tc.want {
+				if !strings.Contains(got, w) {
+					t.Errorf("GET %s body = %s, want %q", path, got, w)
+				}
+			}
+			for _, d := range tc.deny {
+				if strings.Contains(got, d) {
+					t.Errorf("GET %s body carries %q, which the window excluded:\n%s", path, d, got)
+				}
+			}
+		})
+	}
+
+	// A window nobody asked for is not a window. These are the requests a caller makes by
+	// forgetting a limit, and the answer is an error rather than the whole file.
+	for _, q := range []string{"limit=0", "limit=-1", "limit=all", "offset=-1", "offset=x"} {
+		resp := request(t, srv, "GET", "/api/sources/sha1/segments?"+q, nil)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("GET ?%s = %d, want 400: %s", q, resp.StatusCode, readAll(t, resp))
+		}
+	}
+	// And a request for more than the server will carry in one answer is refused rather than
+	// obeyed, so "no limit" cannot become "everything" by way of a big number.
+	resp := request(t, srv, "GET", "/api/sources/sha1/segments?limit=999999", nil)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("a window past the ceiling = %d, want 400: %s", resp.StatusCode, readAll(t, resp))
 	}
 }
 

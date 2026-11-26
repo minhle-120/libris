@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { app, closeViewer } from '../lib/store.svelte';
+  import { app, chunkLoaded, closeViewer, loadMoreViewerChunks } from '../lib/store.svelte';
   import { chunksOf, repeatOf } from '../lib/chunks';
   import { formatBytes, formatSpan } from '../lib/format';
-  import { assetURL } from '../lib/api';
+  import { assetURL, SEGMENT_JUMP } from '../lib/api';
   import type { Segment } from '../lib/types';
   import Button from '../lib/ui/Button.svelte';
   import Icon from '../lib/ui/Icon.svelte';
@@ -62,23 +62,110 @@
     return `${a}\u2013${s.span?.char_end ?? a}`;
   };
 
-  /** The repeat is found per pair, in reading order, and only for text. */
+  /** The repeat is found per pair, in reading order, and only for text.
+   *
+   *  A long source's chunks arrive a window at a time, and the pairs are found once rather
+   *  than over the whole file on every arrival: a chunk's text never changes, and neither
+   *  does the chunk before it, because the windows extend the list without disturbing it. */
+  let reps = new Map<string, string>();
+  let repOfSource = '';
+  let repFrom = 0;
   const marked = $derived.by(() => {
-    const out = new Map<string, string>();
-    for (let i = 1; i < texts.length; i++) {
-      const rep = repeatOf(texts[i - 1].text ?? '', texts[i].text ?? '');
-      if (rep) out.set(texts[i].id, rep);
+    const list = texts;
+    if (repOfSource !== (app.viewer ?? '')) {
+      repOfSource = app.viewer ?? '';
+      reps = new Map();
+      repFrom = 0;
     }
-    return out;
+    for (let i = repFrom; i < list.length; i++) {
+      const rep = i ? repeatOf(list[i - 1].text ?? '', list[i].text ?? '') : '';
+      if (rep) reps.set(list[i].id, rep);
+    }
+    repFrom = list.length;
+    // A fresh wrapper around the cache, every time. The pairs live in one Map that is
+    // extended in place, and a derived that hands back the same object tells Svelte nothing
+    // changed — the shading, and the sentence about it, would be written from a half-filled
+    // cache and never corrected.
+    return { reps, checked: list.length };
   });
 
+  /** What the file holds, as the server counted it, rather than what has reached the page. A
+   *  heading that counted the fetch would tell a reader halfway down a nine-hundred-page PDF
+   *  that the file contains no pictures. */
+  const fileCount = (kind?: string) =>
+    kind
+      ? (app.viewerKinds[kind] ?? 0)
+      : Object.values(app.viewerKinds).reduce((n, k) => n + k, 0);
+
   const legend = $derived(
-    marked.size
+    marked.reps.size
       ? 'The shaded text repeats the tail of the chunk before it, so a sentence is never cut in half where the search reads it.'
       : 'One chunk, or none of them overlaps: no chunk repeats any other.'
   );
 
   let list = $state<HTMLElement>();
+
+  /** The next window is asked for as the reader runs out of page, and not before. Four
+   *  screens of clearance is about the distance a fast flick covers while a fetch is in the
+   *  air, so the list arrives under the scroll instead of stopping short of it. */
+  const NEAR = 4000;
+  function onScroll() {
+    if (!list) return;
+    if (list.scrollHeight - list.scrollTop - list.clientHeight >= NEAR) return;
+    // A citation still being chased gets the largest window the server will send: a reader
+    // who clicked one is owed the chunk it points at, and walking there a screen at a time
+    // is a dozen round trips they would feel.
+    void loadMoreViewerChunks(app.viewerSeg && !foundCited() ? SEGMENT_JUMP : undefined);
+  }
+
+  const foundCited = () =>
+    !app.viewerSeg || !!list?.querySelector(`[data-seg="${CSS.escape(app.viewerSeg)}"]`);
+
+  /** One player for the whole clip list.
+   *
+   *  A clip is thirty seconds of a recording, so a long one holds hundreds, and each used to
+   *  carry its own media element — which is what made opening a recording slow. A media
+   *  element costs far more to create than the row around it, and the reader hears one of
+   *  them at a time. The row keeps its number and its window in the recording, and asks the
+   *  player below for the sound. */
+  let playerEl = $state<HTMLAudioElement>();
+  let clip = $state<Segment | null>(null);
+  let playingId = $state('');
+
+  async function playClip(s: Segment) {
+    const el = playerEl;
+    if (!el || !s.asset) return;
+    if (playingId === s.id && !el.paused) {
+      el.pause();
+      return;
+    }
+    if (clip?.id !== s.id) {
+      clip = s;
+      el.src = assetURL(s.asset);
+    }
+    try {
+      await el.play();
+    } catch {
+      // A file the server cannot open any more. The list is still the list, and a reader
+      // who moves on needs no message about it.
+      clip = null;
+      playingId = '';
+    }
+  }
+
+  /** A recording keeps sounding when the reader opens a different source in the same viewer,
+   *  because the player outlives the change. It is stopped when its file is no longer the
+   *  one on screen. */
+  let listeningTo = '';
+  $effect(() => {
+    const id = app.viewer ?? '';
+    if (listeningTo && listeningTo !== id) {
+      playerEl?.pause();
+      clip = null;
+      playingId = '';
+    }
+    listeningTo = id;
+  });
 
   /** The citation that opened this view is brought into sight, and ringed, rather than left
    *  somewhere below the fold. */
@@ -87,9 +174,17 @@
     const n = all.length;
     void n;
     if (!want || !list) return;
+    const node = list.querySelector(`[data-seg="${CSS.escape(want)}"]`);
+    if (!node) {
+      // Chunks arrive a window at a time, so a citation can point below what has been read
+      // in. Each answer extends the list and this runs again, so the file is walked until the
+      // cited chunk turns up rather than leaving the reader at its top.
+      void loadMoreViewerChunks(SEGMENT_JUMP);
+      return;
+    }
     // The middle, not the top edge: the reader came to read this chunk, and a chunk pinned
     // under the viewer's own header is half out of reach.
-    list.querySelector(`[data-seg="${CSS.escape(want)}"]`)?.scrollIntoView({ block: 'center' });
+    node.scrollIntoView({ block: 'center' });
   });
 </script>
 
@@ -114,9 +209,9 @@
       {#if app.viewerError}
         {app.viewerError}
       {:else}
-        {all.length} {all.length === 1 ? 'chunk' : 'chunks'}
-        · {texts.length} text
-        · {images.length} {images.length === 1 ? 'image' : 'images'}
+        {fileCount()} {fileCount() === 1 ? 'chunk' : 'chunks'}
+        · {fileCount('text')} text
+        · {fileCount('image')} {fileCount('image') === 1 ? 'image' : 'images'}
         {#if source}
           · {source.kind}
           · {formatBytes(source.bytes)}
@@ -125,7 +220,7 @@
     </p>
   </header>
 
-  <div class="body" bind:this={list}>
+  <div class="body" bind:this={list} onscroll={onScroll}>
     {#if !all.length && !app.viewerError}
       <p class="center">Nothing was stored from this file.</p>
     {/if}
@@ -133,12 +228,12 @@
     {#if texts.length}
       <div class="doc-head">
         <h3>{textTitle}</h3>
-        <span class="small">{texts.length}</span>
+        <span class="small">{fileCount('text')}</span>
       </div>
       <ol class="chunks">
         {#each texts as s (s.id)}
           {@const full = s.text ?? ''}
-          {@const rep = marked.get(s.id) ?? ''}
+          {@const rep = marked.reps.get(s.id) ?? ''}
           {@const shown = openSet[s.id] || full.length <= CAP}
           <li class="chunk" class:highlighted={s.id === app.viewerSeg} data-seg={s.id}>
             <div class="cmeta">
@@ -169,7 +264,7 @@
     {#if clips.length}
       <div class="doc-head">
         <h3>clips</h3>
-        <span class="small">{clips.length}</span>
+        <span class="small">{fileCount('audio')}</span>
       </div>
       <ul class="clips">
         {#each clips as s (s.id)}
@@ -182,10 +277,12 @@
               </span>
             </div>
             {#if s.asset}
-              <!-- preload="none": a source can hold hundreds of these, and a viewer that
-                   fetched every one to draw a play button would read the whole recording off
-                   the disk to show its list. -->
-              <audio controls preload="none" src={assetURL(s.asset)}></audio>
+              <!-- One player serves the whole list, so a hundred clips are a hundred rows
+                   rather than a hundred media elements. Nothing is fetched until the reader
+                   presses this. -->
+              <button class="play" type="button" onclick={() => playClip(s)}>
+                {playingId === s.id ? 'Pause' : 'Play'}
+              </button>
             {:else}
               <p class="center">No clip stored for this chunk.</p>
             {/if}
@@ -197,7 +294,7 @@
     {#if images.length}
       <div class="doc-head">
         <h3>page rasters</h3>
-        <span class="small">{images.length}</span>
+        <span class="small">{fileCount('image')}</span>
       </div>
       <ul class="tiles">
         {#each images as s (s.id)}
@@ -209,6 +306,8 @@
                 title="Open page {s.span?.page ?? s.ordinal + 1} at full size">
                 <img
                   src={assetURL(s.asset)}
+                  loading="lazy"
+                  decoding="async"
                   alt="Page {s.span?.page ?? s.ordinal + 1}"
                   onload={(e) => {
                     const img = e.currentTarget as HTMLImageElement;
@@ -230,7 +329,34 @@
 
   <footer>
     <p class="small">{legend}</p>
+    {#if !app.viewerError && fileCount() > chunkLoaded()}
+      <p class="small">
+        {#if app.viewerLoading}
+          fetching more chunks…
+        {:else}
+          {chunkLoaded()} of {fileCount()} chunks · keep scrolling for the rest
+        {/if}
+      </p>
+    {/if}
   </footer>
+
+  <!-- The sound of whichever clip the reader pressed. Kept in the tree while empty so the
+       element is here to be aimed at, and hidden rather than unmounted so a player cannot
+       vanish mid-sentence with no way back to where it stopped. -->
+  <div class="player" class:shown={!!clip}>
+    {#if clip}
+      <span class="small truncate">
+        clip {ord(clip)} · {when(clip)}
+      </span>
+    {/if}
+    <audio
+      bind:this={playerEl}
+      controls
+      preload="none"
+      onplay={() => (playingId = clip?.id ?? '')}
+      onpause={() => (playingId = '')}
+    ></audio>
+  </div>
 </section>
 
 <style>
@@ -382,9 +508,42 @@
     gap: var(--sp-2);
   }
 
-  /* The player is the content of a clip, so it gets the full width of the column. */
-  .clip audio {
+  /* Asking for the sound is the content of a clip row, so it gets the full width of the
+     column — and it is a row of the list rather than a widget, so it is styled as one. */
+  .clip .play {
     width: 100%;
+    font: inherit;
+    font-size: var(--fs-xs);
+    color: var(--ink);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--r-2);
+    padding: var(--sp-2);
+    cursor: pointer;
+  }
+
+  .clip .play:hover {
+    border-color: var(--border);
+    background: var(--surface-2);
+  }
+
+  .player {
+    display: none;
+    flex: none;
+    align-items: center;
+    gap: var(--sp-2);
+    padding: 6px 10px;
+    border-top: 1px solid var(--border-soft);
+    background: var(--surface);
+  }
+
+  .player.shown {
+    display: flex;
+  }
+
+  .player audio {
+    flex: 1;
+    min-width: 0;
     height: 32px;
   }
 

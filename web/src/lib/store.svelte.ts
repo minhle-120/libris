@@ -88,6 +88,17 @@ export const app = $state({
   /** The chunks of the source the viewer has open. They arrive a fetch after the viewer does,
    *  so the heading renders from `sources` and the list fills in behind it. */
   viewerSegments: [] as Segment[],
+  /** What the file holds of each kind, as the server counted it. A long source's chunks reach
+   *  the page a window at a time, and a heading that counted the window would tell a reader
+   *  halfway down a nine-hundred-page PDF that the file contains no pictures. */
+  viewerKinds: {} as Record<string, number>,
+  /** A later window is on its way. The scroll handler runs on every tick of the wheel, and
+   *  one answer in flight is all the source needs. */
+  viewerLoading: false,
+  /** The server answered with nothing new. Its count said there was more — a source being
+   *  indexed answers with a number that was true a moment ago — and asking again would ask
+   *  forever, so the end of the chunks is believed when it is seen. */
+  viewerEnd: false,
 
   sidebarW: 0,
   sidebarOpen: true,
@@ -590,21 +601,68 @@ export async function openViewer(sourceId: string, segmentId = '') {
   // Opening a citation forces the panel open even if it was shut.
   if (!app.sideOpen) setOpen(SIDE, true);
   app.viewerSegments = [];
+  app.viewerKinds = {};
+  app.viewerLoading = false;
+  app.viewerEnd = false;
   try {
-    const list = await api.listSegments(sourceId);
+    const first = await api.listSegments(sourceId);
     if (seq !== viewerSeq) return;
-    app.viewerSegments = list;
+    app.viewerSegments = first.segments;
+    app.viewerKinds = first.kinds;
   } catch (e) {
     if (seq !== viewerSeq) return;
     app.viewerError = errorMessage(e);
   }
 }
 
+/** The next window of the chunks of whatever source the viewer has open, appended behind what
+ *  the reader has already scrolled past. Called by the scroll of the list and by nothing else:
+ *  the reader's own speed is the only clock this needs, which is why there is no timer.
+ *
+ *  It asks for nothing when the file is already here, and asks twice never — a scroll gesture
+ *  is a hundred events, and the answer to the first of them is still in the air. */
+export async function loadMoreViewerChunks(limit?: number) {
+  const id = app.viewer;
+  if (!id || app.viewerLoading) return;
+  const offset = app.viewerSegments.length;
+  if (app.viewerEnd || offset >= chunkTotal()) return;
+  app.viewerLoading = true;
+  const seq = viewerSeq;
+  try {
+    const page = await api.listSegments(id, offset, limit);
+    // A viewer that was closed, or turned to another source, while this was in the air gets
+    // no answer — its chunks belong to a file nobody is reading.
+    if (seq !== viewerSeq || app.viewer !== id) return;
+    // A source being indexed grows while it is read, so the count in the answer is the one
+    // to believe going forward.
+    app.viewerKinds = page.kinds;
+    app.viewerSegments = [...app.viewerSegments, ...page.segments];
+    if (!page.segments.length) app.viewerEnd = true;
+  } catch (e) {
+    if (seq === viewerSeq) app.viewerError = errorMessage(e);
+  } finally {
+    if (seq === viewerSeq) app.viewerLoading = false;
+  }
+}
+
+/** How many chunks the open file holds, summed from the per-kind counts the server sent —
+ *  rather than from what happens to be on the page. */
+function chunkTotal() {
+  return Object.values(app.viewerKinds).reduce((n, k) => n + k, 0);
+}
+
+/** How many of them have reached the page. */
+export function chunkLoaded() {
+  return app.viewerSegments.length;
+}
+
+
 export function closeViewer() {
   viewerSeq++;
   app.viewer = null;
   app.viewerSeg = '';
   app.viewerError = '';
+  app.viewerLoading = false;
 }
 
 /**

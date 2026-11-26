@@ -30,7 +30,7 @@ type API interface {
 	DetachSource(context.Context, string, string) error
 	GetSource(context.Context, string) (domain.Source, error)
 	ListSources(context.Context, string) ([]domain.Source, error)
-	ListSegments(context.Context, string) ([]domain.Segment, error)
+	ListSegmentsPage(context.Context, string, int, int) ([]domain.Segment, map[domain.Kind]int, error)
 	ReingestSource(context.Context, string) (domain.Source, error)
 	StopSource(context.Context, string) (domain.Source, error)
 	ResumeSource(context.Context, string) (domain.Source, error)
@@ -240,13 +240,59 @@ func (s *Server) handleReingestSource(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, source)
 }
 
+// The chunk viewer's window. 400 chunks is several screens of columns, which is what a
+// reader can scroll to before the next fetch would land anyway, and small enough that the
+// first paint of a 900-page source does not wait for eighteen thousand of them. The ceiling
+// is not politeness: without it a caller that forgets to pass a limit asks for everything.
+const (
+	segmentsWindow    = 400
+	segmentsWindowMax = 2000
+)
+
+// segmentsPage is what the viewer is answered with: a window of the source's chunks, and what
+// the file holds of each kind. The counts are on the wire because the viewer's heading
+// describes the file rather than the fetch — a reader halfway down a 900-page source is still
+// being told it has 1 459 page images in it — and because a list that stops without saying why
+// reads as the file ending.
+type segmentsPage struct {
+	Segments []domain.Segment    `json:"segments"`
+	Kinds    map[domain.Kind]int `json:"kinds"`
+}
+
 func (s *Server) handleListSegments(w http.ResponseWriter, r *http.Request) {
-	segments, err := s.app.ListSegments(r.Context(), r.PathValue("id"))
+	q := r.URL.Query()
+	// An absent key and an empty one mean the same thing here: the caller did not say, so
+	// the server decides.
+	window := func(key, def string) (int, bool) {
+		v := q.Get(key)
+		if v == "" {
+			v = def
+		}
+		n, err := strconv.Atoi(v)
+		return n, err == nil
+	}
+	offset, ok := window("offset", "0")
+	if !ok || offset < 0 {
+		writeError(w, http.StatusBadRequest, "offset must be a row count")
+		return
+	}
+	limit, ok := window("limit", strconv.Itoa(segmentsWindow))
+	if !ok || limit < 1 || limit > segmentsWindowMax {
+		writeError(w, http.StatusBadRequest, "limit must be between 1 and the window the server allows")
+		return
+	}
+	segments, kinds, err := s.app.ListSegmentsPage(r.Context(), r.PathValue("id"), offset, limit)
 	if err != nil {
 		s.fail(w, "list segments", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, segments)
+	if segments == nil {
+		segments = []domain.Segment{}
+	}
+	if kinds == nil {
+		kinds = map[domain.Kind]int{}
+	}
+	writeJSON(w, http.StatusOK, segmentsPage{Segments: segments, Kinds: kinds})
 }
 
 // ── stored files ─────────────────────────────────────────────────

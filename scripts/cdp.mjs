@@ -65,6 +65,11 @@ export async function withBrowser({ port, app, profile }, body) {
     '--no-default-browser-check',
     `--user-data-dir=${profile}`,
     '--disable-gpu',
+    // A click from Runtime.evaluate is not a trusted gesture, and Chrome's autoplay policy
+    // would refuse to start the clip the viewer harness presses play on. The flag makes that
+    // one check possible — that pressing play really starts sound — rather than turning it
+    // into an assertion about the browser's policy.
+    '--autoplay-policy=no-user-gesture-required',
     'about:blank'
   ], { stdio: 'ignore' });
 

@@ -103,6 +103,12 @@ writeFileSync(
 
 const port = 8123;
 const base = `http://127.0.0.1:${port}`;
+
+/** One window of a source's stored chunks. The endpoint answers with a window plus what the
+ *  file holds of each kind — a viewer asks for a screen of a source that may hold thousands —
+ *  and these assertions want every chunk, so they ask for the largest window there is. */
+const storedChunks = async (id) =>
+  ((await (await fetch(`${base}/api/sources/${id}/segments?limit=2000`)).json())?.segments) ?? [];
 const log = openSync('/tmp/libris-e2e.log', 'w');
 // -open=false: this is a server under test, not a user who wants to see the UI.
 const app = spawn(BIN, ['-open=false', '-addr', `127.0.0.1:${port}`, '-data', dataDir], {
@@ -172,7 +178,7 @@ try {
   );
   checks.check('media inputs are sent without any prefix', mediaUnprefixed);
 
-  const stored = (await (await fetch(`${base}/api/sources/${first.id}/segments`)).json()) ?? [];
+  const stored = await storedChunks(first.id);
   checks.check(
     'the prompt never reaches the stored text a citation quotes',
     stored.length > 0 && stored.every((s) => !s.text.startsWith('title: ')),
@@ -204,7 +210,7 @@ try {
     `status=${sliced.status} detail=${sliced.detail ?? ''}`
   );
 
-  const windows = (await (await fetch(`${base}/api/sources/${recording.id}/segments`)).json()) ?? [];
+  const windows = await storedChunks(recording.id);
   checks.check('and was cut into clips rather than read as text', windows.length > 0, `${windows.length} segments`);
   checks.check(
     'every clip is audio, with a window and a file',
@@ -260,7 +266,7 @@ try {
   // Chunks survive, so the source is still readable and the inspector still works.
   // An empty list serialises as null rather than [], which the UI's own reader
   // tolerates; the assertion has to as well.
-  const segs = (await (await fetch(`${base}/api/sources/${second.id}/segments`)).json()) ?? [];
+  const segs = await storedChunks(second.id);
   checks.check('the chunks survive an embedding failure', segs.length > 0, `${segs.length} segments`);
 
   // ── running the file again ────────────────────────────────────

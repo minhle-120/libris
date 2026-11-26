@@ -162,10 +162,35 @@ export function resumeSource(sourceId: string): Promise<Source> {
   return request<Source>(`/api/sources/${sourceId}/resume`, { method: "POST" });
 }
 
-export async function listSegments(sourceId: string): Promise<Segment[]> {
-  return list(
-    await request<Segment[] | null>(`/api/sources/${sourceId}/segments`),
-  );
+/** How many of a source's chunks the server answers with at a time. The viewer scrolls a
+ *  window at a time and asks for the next one as the reader nears the end, because a long
+ *  source holds thousands of chunks and no screen shows more than a screen: fetching all of
+ *  them to paint the first is what turns opening a viewer into waiting for one. */
+export const SEGMENT_WINDOW = 400;
+
+/** The largest window the server will send, and what the viewer asks for while it is walking
+ *  to a cited chunk: a dozen screens' worth of round trips is what a slow window costs a
+ *  reader who clicked a citation deep in a long file. */
+export const SEGMENT_JUMP = 2000;
+
+/** One window of a source's chunks, and what the file holds of each kind. */
+export interface SegmentWindow {
+  segments: Segment[];
+  /** Chunks per kind for the whole file, not for this window — so a heading can describe a
+   *  source whose chunks are only partly on the page. */
+  kinds: Record<string, number>;
+}
+
+export async function listSegments(
+  sourceId: string,
+  offset = 0,
+  limit = SEGMENT_WINDOW,
+): Promise<SegmentWindow> {
+  const page = await request<{
+    segments?: Segment[] | null;
+    kinds?: Record<string, number> | null;
+  }>(`/api/sources/${sourceId}/segments?offset=${offset}&limit=${limit}`);
+  return { segments: list(page.segments ?? null), kinds: page.kinds ?? {} };
 }
 
 // ── stored files ─────────────────────────────────────────────────

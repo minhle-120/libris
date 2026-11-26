@@ -3,8 +3,10 @@ package sqlite
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"libris/internal/domain"
@@ -462,6 +464,83 @@ func pdfSegments(sourceID string) []domain.Segment {
 			Asset:   &domain.Asset{ID: sourceID + "/pages/page-0001.png", Path: "/data/assets/" + sourceID + "/pages/page-0001.png", MIME: "image/png", Bytes: 24000},
 			Span:    domain.Provenance{Page: 1},
 		},
+	}
+}
+
+// The chunk viewer reads a long source a window at a time. What this pins is that the windows
+// tile the source: consecutive pages are the whole list in reading order with nothing
+// duplicated or dropped between them, and the count is the size of the source rather than the
+// size of the answer — the viewer says "600 of 18 489" out of that number.
+// The chunk viewer reads a long source a window at a time. What this pins is that the windows
+// tile the source — consecutive pages are the whole list in reading order, nothing duplicated
+// or dropped between them — and that the per-kind count is the size of the file rather than
+// the size of the answer, which is what lets a heading describe an eighteen-thousand-chunk
+// document while four hundred of them are on the page.
+func TestListSegmentsPage(t *testing.T) {
+	ctx := context.Background()
+	db := openDB(t)
+	a := notebook(t, db, "A")
+	db.AddSource(ctx, a, source("sha1", "long.pdf"))
+	db.SetSourceStatus(ctx, "sha1", domain.StatusReady, "", nil)
+
+	const rows = 5
+	var segs []domain.Segment
+	for i := range rows {
+		segs = append(segs, domain.Segment{
+			ID: fmt.Sprintf("sha1:%04d", i), SourceID: "sha1", DocID: "sha1",
+			Kind: domain.KindText, Ordinal: i, Text: fmt.Sprintf("chunk %d", i),
+			Span: domain.Provenance{CharStart: i * 10, CharEnd: i*10 + 9},
+		})
+	}
+	segs = append(segs, domain.Segment{
+		ID: "sha1#pages:0000", SourceID: "sha1", DocID: "sha1#pages",
+		Kind: domain.KindImage, Ordinal: 0, Span: domain.Provenance{Page: 1},
+	})
+	if err := db.PutSegments(ctx, "sha1", segs); err != nil {
+		t.Fatal(err)
+	}
+
+	var (
+		got   []string
+		kinds map[domain.Kind]int
+	)
+	for offset := 0; ; offset += 2 {
+		page, k, err := db.ListSegmentsPage(ctx, "sha1", offset, 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if k[domain.KindText] != rows || k[domain.KindImage] != 1 {
+			t.Fatalf("kinds = %v at offset %d, want the whole source counted", k, offset)
+		}
+		kinds = k
+		for _, s := range page {
+			got = append(got, s.Text)
+		}
+		if len(page) < 2 {
+			break
+		}
+	}
+	// The raster document sorts after the text one, so the tiled windows read the file in the
+	// order the inspector shows it.
+	want := []string{"chunk 0", "chunk 1", "chunk 2", "chunk 3", "chunk 4", ""}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("the windows tiled %v, want the source in reading order: %v", got, want)
+	}
+	if kinds[domain.KindText] != rows {
+		t.Errorf("kinds = %v, want %d text chunks", kinds, rows)
+	}
+
+	// Past the end there is nothing to show, and the count still says what the file holds —
+	// otherwise an empty window reads as the end of a shorter file.
+	page, k, err := db.ListSegmentsPage(ctx, "sha1", 99, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page) != 0 {
+		t.Errorf("a window past the end returned %d rows", len(page))
+	}
+	if k[domain.KindText] != rows {
+		t.Errorf("kinds = %v, want the whole source counted", k)
 	}
 }
 

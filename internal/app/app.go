@@ -44,6 +44,7 @@ type Store interface {
 	PutSegments(context.Context, string, []domain.Segment) error
 	PutEmbeddings(context.Context, []domain.Embedding) error
 	ListSegments(context.Context, string) ([]domain.Segment, error)
+	ListSegmentsPage(context.Context, string, int, int) ([]domain.Segment, map[domain.Kind]int, error)
 	SegmentsWithoutEmbeddings(context.Context, string) ([]domain.Segment, error)
 	GetAsset(context.Context, string) (domain.Asset, error)
 
@@ -615,8 +616,10 @@ func (s *Service) ListSources(ctx context.Context, notebookID string) ([]domain.
 	return s.store.ListSources(ctx, notebookID)
 }
 
-func (s *Service) ListSegments(ctx context.Context, sourceID string) ([]domain.Segment, error) {
-	return s.store.ListSegments(ctx, sourceID)
+// ListSegmentsPage is the chunk viewer's read: the window it can show, and what the whole
+// file holds.
+func (s *Service) ListSegmentsPage(ctx context.Context, sourceID string, offset, limit int) ([]domain.Segment, map[domain.Kind]int, error) {
+	return s.store.ListSegmentsPage(ctx, sourceID, offset, limit)
 }
 
 // GetAsset resolves an asset name for serving. The path comes from the database

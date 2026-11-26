@@ -204,9 +204,13 @@ func (c *capture) neverCompleted() int {
 
 // hungUpUntil waits for the embedder to be seen abandoning requests, because the
 // server notices that a little after the client decides to.
+// Polls against a clock rather than a fixed number of ticks. The wait is patience, not a
+// claim about how fast cancellation reaches a socket, and a suite run package-parallel under
+// -race can share a machine enough that four hundred milliseconds is not an answer.
 func (c *capture) hungUpUntil(t *testing.T, want int) int {
 	t.Helper()
-	for range 40 {
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
 		if got := c.hungUp(); got >= want {
 			return got
 		}
