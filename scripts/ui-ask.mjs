@@ -40,7 +40,7 @@ const searched = (query) => ({
             type: 'function',
             function: {
               name: 'query_knowledge_base',
-              arguments: JSON.stringify({ keywords: query.split(/\s+/).slice(0, 4).join(' '), query })
+              arguments: JSON.stringify({ query })
             }
           }
         ]

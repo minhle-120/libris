@@ -139,7 +139,7 @@ func TestChatRequestAndResponse(t *testing.T) {
 
 func TestChatToolCalls(t *testing.T) {
 	srv, _ := server(t, 200, `{"choices":[{"message":{"role":"assistant","tool_calls":[
-		{"id":"call_1","type":"function","function":{"name":"query_knowledge_base","arguments":"{\"keywords\":\"x\"}"}}]}}]}`, nil)
+		{"id":"call_1","type":"function","function":{"name":"query_knowledge_base","arguments":"{\"query\":\"x\"}"}}]}}]}`, nil)
 
 	c := newClient(t, llm.Config{ChatURL: srv.URL})
 	res, err := c.Chat(context.Background(), llm.ChatRequest{})
@@ -151,7 +151,7 @@ func TestChatToolCalls(t *testing.T) {
 		t.Fatalf("tool calls = %+v", calls)
 	}
 	// Arguments must stay a raw string: parsing is the caller's problem.
-	if calls[0].Function.Arguments != `{"keywords":"x"}` {
+	if calls[0].Function.Arguments != `{"query":"x"}` {
 		t.Fatalf("arguments = %q", calls[0].Function.Arguments)
 	}
 }

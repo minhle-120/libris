@@ -172,24 +172,24 @@ func newRetriever(c *fakeCorpus, e *fakeEmbed, a Assets) *Retriever {
 
 // ── the probe ────────────────────────────────────────────────────
 
-// keywords is the embedding probe, and it is the only thing a search can be probed
-// with. A full question embedded against term-like chunks retrieves the average of
-// everything the sentence mentions — a recall loss nothing else in the path can see,
-// so the probe's exact text is asserted here rather than trusted.
-func TestSearchEmbedsTheKeywordsItWasGiven(t *testing.T) {
+// The query is the embedding probe, and it is the only thing a search can be probed
+// with — the whole request, sentence and all, since the embedding model is given
+// nothing else. A probe silently rewritten on the way down is a recall loss nothing
+// else in the path can see, so the text handed to the model is asserted here.
+func TestSearchEmbedsTheQueryItWasGiven(t *testing.T) {
 	corpus := &fakeCorpus{hits: []domain.Hit{textHit("doc", 0, "coastal erosion rates")}}
 	embed := &fakeEmbed{}
 	reg := NewRegistry()
 
 	_, err := newRetriever(corpus, embed, nil).Search(
-		context.Background(), reg, "nb", "coastal erosion",
+		context.Background(), reg, "nb", "How fast is coastal erosion on the cliffs?",
 		Options{TopK: 7})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if embed.gotText != "coastal erosion" {
-		t.Errorf("embedded %q, want the keywords", embed.gotText)
+	if embed.gotText != "How fast is coastal erosion on the cliffs?" {
+		t.Errorf("embedded %q, want the query as it was given", embed.gotText)
 	}
 	if embed.gotPrefix != index.QuerySearch {
 		t.Errorf("query prefix = %q, want the search prefix", embed.gotPrefix)
@@ -313,14 +313,14 @@ func TestSearchShowsOnlyTheBudget(t *testing.T) {
 
 // ── refusing, not guessing ───────────────────────────────────────
 
-func TestSearchRefusesWithoutKeywords(t *testing.T) {
+func TestSearchRefusesWithoutQuery(t *testing.T) {
 	corpus := &fakeCorpus{hits: []domain.Hit{textHit("doc", 0, "x")}}
 	reg := NewRegistry()
 
 	_, err := newRetriever(corpus, &fakeEmbed{}, nil).Search(
 		context.Background(), reg, "nb", "   ", Options{})
-	if !errors.Is(err, ErrNoKeywords) {
-		t.Errorf("err = %v, want ErrNoKeywords", err)
+	if !errors.Is(err, ErrNoQuery) {
+		t.Errorf("err = %v, want ErrNoQuery", err)
 	}
 	if corpus.calls != 0 || reg.Len() != 0 {
 		t.Errorf("searched anyway: %d corpus calls, %d registered", corpus.calls, reg.Len())

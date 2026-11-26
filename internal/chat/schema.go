@@ -115,7 +115,7 @@ func isInt(t reflect.Type) bool {
 // A failure to parse is not an error to return: the reference treats malformed
 // arguments as an empty object and tells the model through the tool result, because
 // a turn lost to a stray brace is a turn the user waited for. The caller therefore
-// gets the zero value and decides what the missing fields mean — no keywords, no
+// gets the zero value and decides what the missing fields mean — no query, no
 // indices — which is a thing a model can fix on the next iteration.
 func toolArguments(raw string, args any) {
 	if strings.TrimSpace(raw) == "" {

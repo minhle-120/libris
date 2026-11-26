@@ -123,8 +123,12 @@ func (t *Tools) Searched() bool { return t.searched }
 
 // ── schemas ──────────────────────────────────────────────────────
 
+// Query is the whole request, phrased as a sentence. It is not a list of terms, and
+// the reason is what the embedding model is given: this one string, with none of the
+// conversation around it. A subject left to context is a subject retrieval never
+// sees, so the request has to stand alone.
 type searchArgs struct {
-	Keywords string `json:"keywords" desc:"Words naming what to look for, for the initial vector retrieval. Two to six terms, not a sentence: a full question embedded as a probe retrieves the average of everything it mentions. Example: coastal erosion rate"`
+	Query string `json:"query" desc:"A complete question or request, as a sentence, naming the subject in full — the retrieval model is given this string and nothing else. Not a list of two or three terms. Example: How fast is coastal erosion on the Holderness cliffs?"`
 }
 
 type finalizeArgs struct {
@@ -144,7 +148,7 @@ func Schemas() ([]llm.Tool, error) {
 		args       any
 	}{
 		{ToolSearch,
-			"Search the library for relevant information using a few keywords. Always start by calling this tool first.",
+			"Search the library for the chunks that answer a question. Always start by calling this tool first.",
 			searchArgs{}},
 		{ToolFinalize,
 			"Call this when you have finished your research and want to provide the final textual answer. Use this ONLY for summaries and analysis.",
@@ -241,19 +245,19 @@ func (t *Tools) search(ctx context.Context, rawArgs string) (body []llm.ContentP
 	var a searchArgs
 	toolArguments(rawArgs, &a)
 
-	if strings.TrimSpace(a.Keywords) == "" {
-		// The reference returns a bare "No keywords provided."; the nudge is
-		// attached because the model otherwise tends to repeat the call unchanged.
-		return textContent(noKeywords), "", nil
+	if strings.TrimSpace(a.Query) == "" {
+		// A bare refusal teaches the model nothing; the nudge names the argument,
+		// because otherwise it tends to repeat the call unchanged.
+		return textContent(noQuery), "", nil
 	}
-	// Echoed back to the user, so it says which words are being looked for rather
-	// than that something is happening.
-	running = fmt.Sprintf("Searching library for %q…", a.Keywords)
+	// Echoed back to the user, so it says what is being asked rather than that
+	// something is happening.
+	running = fmt.Sprintf("Searching library for %q…", a.Query)
 
-	evidence, err := t.retrieve.Search(ctx, t.registry, t.notebookID, a.Keywords, t.opts)
+	evidence, err := t.retrieve.Search(ctx, t.registry, t.notebookID, a.Query, t.opts)
 	if err != nil {
-		if errors.Is(err, retrieve.ErrNoKeywords) {
-			return textContent(noKeywords), running, nil
+		if errors.Is(err, retrieve.ErrNoQuery) {
+			return textContent(noQuery), running, nil
 		}
 		return nil, running, err
 	}
@@ -290,7 +294,7 @@ func evaluationNote(question string) string {
 		"1. Is this sufficient to answer the user query (\"" + question + "\") fully? " +
 		"If yes, call `" + ToolFinalize + "` with the indices of the chunks you used. " +
 		"2. Do you need more specific details, numbers, or dates that might be in other parts of the library? " +
-		"If yes, call `" + ToolSearch + "` again with refined keywords."
+		"If yes, call `" + ToolSearch + "` again with a sharper query."
 }
 
 const (
@@ -298,11 +302,10 @@ const (
 		"the library before using other tools. Please call `" + ToolSearch + "` now."
 
 	nothingFound = "No relevant information found in the library. " +
-		"Try `" + ToolSearch + "` again with different, more specific keywords, " +
+		"Try `" + ToolSearch + "` again with a different query — wider, or naming the section, the year, or the term the library itself would use — " +
 		"or call `" + ToolNoInfo + "` if the library is unlikely to contain the answer."
 
-	noKeywords = "No keywords provided. Call `" + ToolSearch + "` with two to six " +
-		"words in keywords."
+	noQuery = "No query provided. Call `" + ToolSearch + "` with the whole question in query."
 
 	noInfoFallback = "I searched the library and did not find information to answer that."
 )

@@ -35,9 +35,9 @@ function researchReply(body) {
   const tool = searched ? 'finalize_research_response' : 'query_knowledge_base';
   const args = searched
     ? { indices: citedChunks(body) }
-    : // Keywords taken from the question rather than invented, so the vector the fake
-      // embeds is about something in the corpus at all.
-        { keywords: keywordsFrom(body), query: questionFrom(body) };
+    : // The question itself, taken from the turn rather than invented, so the vector
+      // the real search embeds is about something in the corpus at all.
+        { query: questionFrom(body) };
   return {
     choices: [
       {
@@ -105,18 +105,6 @@ function questionFrom(body) {
   const user = [...body.messages].reverse().find((m) => m.role === 'user');
   const text = typeof user?.content === 'string' ? user.content : (user?.content?.[0]?.text ?? '');
   return text.replace(/^### User Query:\s*/m, '').trim() || 'the question';
-}
-
-function keywordsFrom(body) {
-  return (
-    questionFrom(body)
-      .toLowerCase()
-      .replace(/[^a-z0-9 ]/g, ' ')
-      .split(/\s+/)
-      .filter((w) => w.length > 3)
-      .slice(0, 4)
-      .join(' ') || 'the source'
-  );
 }
 
 export const DIM = 768; // EmbeddingGemma 2's length; the number the probe must discover

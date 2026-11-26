@@ -289,7 +289,7 @@ func excluded(t *testing.T, db *sqlite.DB, id int64) bool {
 // machine, and it is legitimately still there; it is simply not what to ask this one for.
 func TestBothCallsNameTheServedModel(t *testing.T) {
 	svc, db, model := askWiring(t,
-		toolReply("c1", "query_knowledge_base", `{"keywords":"smith measurement","query":"what did smith measure"}`),
+		toolReply("c1", "query_knowledge_base", `{"query":"what did smith measure"}`),
 		toolReply("c2", "finalize_research_response", `{"indices":[1]}`),
 	)
 
@@ -324,7 +324,7 @@ func TestBothCallsNameTheServedModel(t *testing.T) {
 // and the synthesiser's citations must be the chunks the research turn chose.
 func TestAskAnswersFromEvidence(t *testing.T) {
 	svc, db, model := askWiring(t,
-		toolReply("c1", "query_knowledge_base", `{"keywords":"smith measurement","query":"what did smith measure"}`),
+		toolReply("c1", "query_knowledge_base", `{"query":"what did smith measure"}`),
 		toolReply("c2", "finalize_research_response", `{"indices":[1]}`),
 	)
 	nb := notebookID(t, svc)
@@ -412,9 +412,9 @@ func TestAskAnswersFromEvidence(t *testing.T) {
 // repeated it would be repeating a conclusion it never checked.
 func TestAskStoresTheThinkingWithTheAnswer(t *testing.T) {
 	svc, db, model := askWiring(t,
-		toolReply("c1", "query_knowledge_base", `{"keywords":"smith","query":"what did smith measure"}`),
+		toolReply("c1", "query_knowledge_base", `{"query":"what did smith measure"}`),
 		toolReply("c2", "finalize_research_response", `{"indices":[1]}`),
-		toolReply("c3", "query_knowledge_base", `{"keywords":"unit","query":"what unit was the figure in"}`),
+		toolReply("c3", "query_knowledge_base", `{"query":"what unit was the figure in"}`),
 		toolReply("c4", "finalize_research_response", `{"indices":[1]}`),
 	)
 	nb := notebookID(t, svc)
@@ -478,7 +478,7 @@ func TestAskStoresTheThinkingWithTheAnswer(t *testing.T) {
 // the database with the half of the answer the user read.
 func TestAskWritesCitationsBeforeTheAnswerStreams(t *testing.T) {
 	svc, db, model := askWiring(t,
-		toolReply("c1", "query_knowledge_base", `{"keywords":"smith","query":"what did smith measure"}`),
+		toolReply("c1", "query_knowledge_base", `{"query":"what did smith measure"}`),
 		toolReply("c2", "finalize_research_response", `{"indices":[1]}`),
 	)
 	nb := notebookID(t, svc)
@@ -520,7 +520,7 @@ func TestAskWritesCitationsBeforeTheAnswerStreams(t *testing.T) {
 // evidence that X is absent from the world rather than from this corpus.
 func TestAskExcludesANoInfoTurnFromHistory(t *testing.T) {
 	svc, db, model := askWiring(t,
-		toolReply("s1", "query_knowledge_base", `{"keywords":"2031","query":"projections for 2031"}`),
+		toolReply("s1", "query_knowledge_base", `{"query":"projections for 2031"}`),
 		toolReply("s2", "no_info_found", `{"reason":"Nothing in the corpus covers 2031."}`),
 	)
 	nb := notebookID(t, svc)
@@ -543,7 +543,7 @@ func TestAskExcludesANoInfoTurnFromHistory(t *testing.T) {
 	// A second question in the same chat: neither model may see the dead end.
 	seedReady(t, db, nb, "sha-ni2", "Smith measured 4.2 K.")
 	model.replies = append(model.replies,
-		toolReply("s3", "query_knowledge_base", `{"keywords":"smith","query":"what did smith measure"}`),
+		toolReply("s3", "query_knowledge_base", `{"query":"what did smith measure"}`),
 		toolReply("s4", "finalize_research_response", `{"indices":[1]}`),
 	)
 
@@ -574,7 +574,7 @@ func TestAskExcludesANoInfoTurnFromHistory(t *testing.T) {
 // synthesiser so a pronoun resolves.
 func TestAskCarriesHistoryIntoBothCalls(t *testing.T) {
 	svc, db, model := askWiring(t,
-		toolReply("h1", "query_knowledge_base", `{"keywords":"smith","query":"what did smith measure"}`),
+		toolReply("h1", "query_knowledge_base", `{"query":"what did smith measure"}`),
 		toolReply("h2", "finalize_research_response", `{"indices":[1]}`),
 	)
 	nb := notebookID(t, svc)
@@ -585,7 +585,7 @@ func TestAskCarriesHistoryIntoBothCalls(t *testing.T) {
 	researchReqs := len(model.chatReqs)
 	synthReqs := len(model.synthReqs)
 	model.replies = append(model.replies,
-		toolReply("h3", "query_knowledge_base", `{"keywords":"his follow-up","query":"what followed from it"}`),
+		toolReply("h3", "query_knowledge_base", `{"query":"what followed from it"}`),
 		toolReply("h4", "finalize_research_response", `{"indices":[1]}`),
 	)
 
@@ -656,7 +656,7 @@ func TestAskReportsAUngroundedAnswer(t *testing.T) {
 
 func TestCanceledAskKeepsWhatArrived(t *testing.T) {
 	svc, db, model := askWiring(t,
-		toolReply("x1", "query_knowledge_base", `{"keywords":"smith","query":"what did smith measure"}`),
+		toolReply("x1", "query_knowledge_base", `{"query":"what did smith measure"}`),
 		toolReply("x2", "finalize_research_response", `{"indices":[1]}`),
 	)
 	nb := notebookID(t, svc)
@@ -688,7 +688,7 @@ func TestCanceledAskKeepsWhatArrived(t *testing.T) {
 // still reaches the transport, because the turn genuinely failed.
 func TestFailedStreamKeepsThePartialAnswer(t *testing.T) {
 	svc, db, model := askWiring(t,
-		toolReply("f1", "query_knowledge_base", `{"keywords":"smith","query":"what did smith measure"}`),
+		toolReply("f1", "query_knowledge_base", `{"query":"what did smith measure"}`),
 		toolReply("f2", "finalize_research_response", `{"indices":[1]}`),
 	)
 	nb := notebookID(t, svc)
@@ -753,7 +753,7 @@ func TestAskRefusesWhatItCannotAnswer(t *testing.T) {
 // the question, because that is what the user will remember it by.
 func TestAskCreatesAChatNamedAfterTheQuestion(t *testing.T) {
 	svc, db, _ := askWiring(t,
-		toolReply("t1", "query_knowledge_base", `{"keywords":"x","query":"why does the long tail fall"}`),
+		toolReply("t1", "query_knowledge_base", `{"query":"why does the long tail fall"}`),
 		toolReply("t2", "finalize_research_response", `{"indices":[1]}`),
 	)
 	nb := notebookID(t, svc)

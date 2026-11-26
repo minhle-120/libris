@@ -26,11 +26,11 @@ import (
 	"libris/internal/llm"
 )
 
-// ErrNoKeywords means the caller asked for a search with nothing to search on. It
+// ErrNoQuery means the caller asked for a search with nothing to search on. It
 // is distinct from an empty result because the two need different answers: one is
 // a model that forgot to fill in the arguments, the other is a library that has
 // nothing on the subject.
-var ErrNoKeywords = errors.New("retrieve: no keywords provided")
+var ErrNoQuery = errors.New("retrieve: no query provided")
 
 // Corpus is the store surface recall needs, declared by the consumer.
 type Corpus interface {
@@ -40,7 +40,7 @@ type Corpus interface {
 	SearchSegments(ctx context.Context, notebookID string, vector []float32, model string, limit int) ([]domain.Hit, error)
 }
 
-// Embedder vectors the keyword probe. Only the query side of the pair is embedded
+// Embedder vectors the query. Only the query side of the pair is embedded
 // here; the document side was embedded at ingest.
 type Embedder interface {
 	EmbedQuery(ctx context.Context, prefix, text string) ([]float32, error)
@@ -124,9 +124,10 @@ type Evidence struct {
 // Search runs recall and registration, and returns what it added to the registry,
 // in document order.
 //
-// keywords is the embedding probe: short, term-like, better vector hits than the
-// whole question would give. A full sentence embedded against term-like chunks is
-// the trade a reranker would have bought back, and there is no reranker.
+// query is the embedding probe, and it is the whole request rather than a list of
+// terms, because it is the only thing the embedding model is given: no history, and
+// no rest of the conversation. A subject that lives in that conversation is a subject
+// retrieval never receives, so the request travels to the search as a sentence.
 //
 // An already-registered chunk does not re-enter the returned list: it keeps its
 // first id and the model sees it once. That is what keeps a turn that searched four
@@ -134,21 +135,21 @@ type Evidence struct {
 func (r *Retriever) Search(
 	ctx context.Context,
 	reg *Registry,
-	notebookID, keywords string,
+	notebookID, query string,
 	opts Options,
 ) ([]Evidence, error) {
 	if reg == nil {
 		return nil, errors.New("retrieve: search without a registry")
 	}
-	keywords = strings.TrimSpace(keywords)
-	if keywords == "" {
-		return nil, ErrNoKeywords
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil, ErrNoQuery
 	}
 	if opts.TopK <= 0 {
 		opts.TopK = DefaultTopK
 	}
 
-	vector, err := r.embed.EmbedQuery(ctx, index.QuerySearch, keywords)
+	vector, err := r.embed.EmbedQuery(ctx, index.QuerySearch, query)
 	if err != nil {
 		return nil, err
 	}

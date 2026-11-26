@@ -41,7 +41,7 @@ type Models struct {
 	// Chat completes the research turn and streams the answer.
 	Chat Model
 
-	// Probe vectors the keyword half of a search. Without it a notebook cannot be
+	// Probe vectors the query side of a search. Without it a notebook cannot be
 	// searched at all, which is a configuration the user can fix in Settings — so
 	// Ask says so rather than answering from the question alone.
 	Probe retrieve.Embedder

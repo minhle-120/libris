@@ -56,8 +56,8 @@ func call(id, name, args string) llm.ToolCall {
 	return llm.ToolCall{ID: id, Type: "function", Function: llm.FunctionCall{Name: name, Arguments: args}}
 }
 
-func searchCall(id, keywords string) llm.ToolCall {
-	return call(id, ToolSearch, `{"keywords":"`+keywords+`","query":"why?"}`)
+func searchCall(id, query string) llm.ToolCall {
+	return call(id, ToolSearch, `{"query":"`+query+`"}`)
 }
 
 func defaultConfig() Config {
@@ -387,12 +387,12 @@ func TestMalformedArgumentsAreNotFatal(t *testing.T) {
 	}
 	// A search with garbage arguments is refused in text rather than run empty.
 	tr2 := run(t, corpus,
-		toolCallReply(call("c1", ToolSearch, `{"keywords"`)),
+		toolCallReply(call("c1", ToolSearch, `{"query"`)),
 		toolCallReply(call("c2", ToolFinalize, `{"indices":[]}`)))
 	if corpus.calls != 1 {
 		t.Errorf("%d searches ran on malformed arguments, want 0", corpus.calls)
 	}
-	if !strings.Contains(toolContents(tr2.llm), "No keywords") {
+	if !strings.Contains(toolContents(tr2.llm), "No query") {
 		t.Errorf("malformed search arguments produced %q", toolContents(tr2.llm))
 	}
 }
@@ -744,7 +744,7 @@ func TestContentPartsFromTheModel(t *testing.T) {
 func TestExtraArgumentKeysAreIgnored(t *testing.T) {
 	corpus := &stubCorpus{hits: []domain.Hit{textChunk("d:0000", "d", 0, "x")}}
 	tr := run(t, corpus,
-		toolCallReply(call("c1", ToolSearch, `{"keywords":"erosion","query":"q","confidence":0.9,"thinking":"let me see"}`)),
+		toolCallReply(call("c1", ToolSearch, `{"query":"how fast is coastal erosion","confidence":0.9,"thinking":"let me see"}`)),
 		toolCallReply(call("c2", ToolFinalize, `{"indices":[1],"summary":"3mm a year"}`)))
 	res := mustResult(t, tr)
 	if res.Status != Synthesize || len(res.Evidence) != 1 {

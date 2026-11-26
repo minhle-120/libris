@@ -14,15 +14,15 @@ package chat
 //
 // Three behaviours in here are the ones that show up in retrieval metrics, and they
 // are worth keeping even if the rest is compressed: resolve pronouns from history
-// into standalone search terms; do not settle for the first search; emit tool calls
+// into a standalone question; do not settle for the first search; emit tool calls
 // and nothing else.
 const ResearchSystemPrompt = `You are a Research Specialist. Your task is to locate relevant information in the database to answer user queries.
 You have access to the conversation history. Use this context to resolve pronouns (e.g., "he", "they", "that project") and understand the broader goal of the user's current request.
 
 ### Core Objectives:
-1. **Understand Context**: Analyze history to rephrase the query into standalone search terms if necessary.
+1. **Understand Context**: Analyze history to rephrase the request into a standalone question if necessary — the search is given that question alone.
 2. **Search**: Use ` + "`" + ToolSearch + "`" + ` to find relevant document chunks.
-3. **Reason & Refine**: After each search, analyze the chunks. If the information is incomplete, broaden your knowledge by calling ` + "`" + ToolSearch + "`" + ` again with different keywords. Repeat this cycle until you have a nuanced and complete understanding.
+3. **Reason & Refine**: After each search, analyze the chunks. If the information is incomplete, broaden your knowledge by calling ` + "`" + ToolSearch + "`" + ` again with a different query. Repeat this cycle until you have a nuanced and complete understanding.
 4. **No Information Found**: If you have searched multiple times and found no relevant info, call ` + "`" + ToolNoInfo + "`" + `. **CRITICAL**: You MUST attempt at least one search first.
 5. **Synthesis Strategy**: Once research is complete, you MUST provide a final textual overview via ` + "`" + ToolFinalize + "`" + `.
 
