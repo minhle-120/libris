@@ -10,8 +10,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"libris/internal/domain"
 	"libris/internal/llm"
@@ -19,14 +22,40 @@ import (
 
 // capture is an embedding server that records every request body and replies
 // with vectors whose length is dim, in the shape llama.cpp uses.
+//
+// It is written by however many requests the embedder dares to have in flight, so
+// every field is behind a mutex, and it can hold a request open — which is the only
+// way to see concurrency from the outside rather than trusting the code's own word.
 type capture struct {
 	srv       *httptest.Server
+	mu        sync.Mutex
 	bodies    []map[string]any
 	calls     int
 	dim       int
 	mismatch  bool
 	wrongLen  bool
 	skipIndex bool
+
+	// now/peak count requests being served at once.
+	now, peak int
+	// block holds every arriving request until `block` of them are being served at
+	// once, then answers them together. `arrived` counts the current cohort.
+	block   int
+	release chan struct{}
+	arrived int
+	// abandoned counts cohorts that were never completed — fewer than `block` ever
+	// arrived together, which is the answer a queue of one gives.
+	abandoned int
+	// echo, when set, becomes the first element of every vector, and delayFor how
+	// long a request is held before it is answered: the way to make answers arrive
+	// out of the order they were sent.
+	echo     func(first string) float32
+	delayFor func(first string) time.Duration
+	// failFor answers with a 500 instead of vectors when a request's first input
+	// contains this string.
+	failFor string
+	// cancelled counts requests whose client hung up before the answer was sent.
+	cancelled int
 }
 
 func newCapture(t *testing.T) *capture {
@@ -41,13 +70,73 @@ func newCapture(t *testing.T) *capture {
 		if err := json.Unmarshal(raw, &body); err != nil {
 			t.Errorf("request body is not JSON: %v", err)
 		}
+
+		c.mu.Lock()
 		c.bodies = append(c.bodies, body)
 		c.calls++
+		c.now++
+		if c.now > c.peak {
+			c.peak = c.now
+		}
+		block, failFor := c.block, c.failFor
+		c.mu.Unlock()
+
+		defer func() {
+			c.mu.Lock()
+			c.now--
+			c.mu.Unlock()
+		}()
 
 		inputs, _ := body["input"].([]any)
+		first, _ := inputs[0].(string)
+		if failFor != "" && strings.Contains(first, failFor) {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"message": "boom"}})
+			return
+		}
+
+		// Held here until the requested number of requests are being served together,
+		// so a test asking for four at once is answered by four arriving at once — or
+		// answered by the timeout, which is the same answer to a queue of one.
+		if block > 0 {
+			c.mu.Lock()
+			c.arrived++
+			release := c.release
+			if c.arrived == block {
+				c.arrived = 0
+				close(release)
+				c.release = make(chan struct{})
+			}
+			c.mu.Unlock()
+
+			select {
+			case <-release:
+			case <-r.Context().Done():
+				c.mu.Lock()
+				c.cancelled++
+				c.mu.Unlock()
+				return
+			case <-time.After(5 * time.Second):
+				c.mu.Lock()
+				c.abandoned++
+				c.mu.Unlock()
+				return
+			}
+		}
+
+		if c.delayFor != nil {
+			if delay := c.delayFor(first); delay > 0 {
+				time.Sleep(delay)
+			}
+		}
+
 		data := make([]map[string]any, 0, len(inputs))
 		for i := range inputs {
-			row := map[string]any{"embedding": vec(c.dim)}
+			v := vec(c.dim)
+			if c.echo != nil {
+				v[0] = c.echo(first)
+			}
+			row := map[string]any{"embedding": v}
 			if !c.skipIndex {
 				row["index"] = i
 			}
@@ -62,6 +151,111 @@ func newCapture(t *testing.T) *capture {
 	t.Cleanup(c.srv.Close)
 	return c
 }
+
+// callCount is how many requests arrived.
+func (c *capture) callCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.calls
+}
+
+// inputCounts is how many inputs each request carried, in arrival order.
+func (c *capture) inputCounts() []int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]int, 0, len(c.bodies))
+	for _, b := range c.bodies {
+		in, _ := b["input"].([]any)
+		out = append(out, len(in))
+	}
+	return out
+}
+
+// peakInFlight is the most requests this server was ever serving at the same time.
+func (c *capture) peakInFlight() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.peak
+}
+
+// hungUp is how many requests the embedder abandoned mid-flight.
+func (c *capture) hungUp() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.cancelled
+}
+
+// holdRequests is what makes concurrency visible from outside the code that claims
+// it: a request is not answered until n of them are being served together.
+func (c *capture) holdRequests(n int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.block = n
+	c.arrived = 0
+	c.release = make(chan struct{})
+}
+
+// neverCompleted is whether a hold was abandoned because the cohort never assembled.
+func (c *capture) neverCompleted() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.abandoned
+}
+
+// hungUpUntil waits for the embedder to be seen abandoning requests, because the
+// server notices that a little after the client decides to.
+func (c *capture) hungUpUntil(t *testing.T, want int) int {
+	t.Helper()
+	for range 40 {
+		if got := c.hungUp(); got >= want {
+			return got
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return c.hungUp()
+}
+
+// clips is n segments that each demand a request of their own — a clip is never
+// batched with another, which is what makes a line of them a line of requests.
+func clips(t *testing.T, n int) []domain.Segment {
+	t.Helper()
+	out := make([]domain.Segment, 0, n)
+	for i := range n {
+		path := writeWAV(t, i)
+		out = append(out, domain.Segment{
+			ID:   fmt.Sprintf("clip:%04d", i),
+			Kind: domain.KindAudio,
+			Asset: &domain.Asset{
+				ID:   fmt.Sprintf("clip:%d", i),
+				MIME: "audio/wav",
+				Path: path,
+			},
+		})
+	}
+	return out
+}
+
+// writeWAV puts a tiny valid WAV on disk for a clip to be read off.
+func writeWAV(t *testing.T, n int) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), fmt.Sprintf("clip-%d.wav", n))
+	pcm := make([]byte, 320)
+	for i := range pcm {
+		pcm[i] = byte(n + i)
+	}
+	if err := os.WriteFile(path, append([]byte(wavHeader(len(pcm))), pcm...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func wavHeader(body int) string {
+	return fmt.Sprintf("RIFF%sWAVEfmt %sdata%s",
+		string(le32(36+body)), string(le32(16))+"\x01\x00\x01\x00"+string(le32(16000))+string(le32(32000))+string(le32(2))+"\x10\x00",
+		string(le32(body)))
+}
+
+func le32(n int) []byte { return []byte{byte(n), byte(n >> 8), byte(n >> 16), byte(n >> 24)} }
 
 func (c *capture) embedder(t *testing.T, wantDim int) *Embedder {
 	t.Helper()
@@ -195,13 +389,15 @@ func TestBatchesSegments(t *testing.T) {
 	if len(got) != 20 {
 		t.Fatalf("got %d embeddings, want 20", len(got))
 	}
-	if c.calls != 3 {
-		t.Errorf("made %d requests, want 3 (8+8+4)", c.calls)
+	// What is cut into a request is the contract; which one arrives first is not a
+	// thing this code promises, so the sizes are compared as a set.
+	if got := c.callCount(); got != 3 {
+		t.Errorf("made %d requests, want 3 (8+8+4)", got)
 	}
-	for want, call := range []int{8, 8, 4} {
-		if n := len(c.inputs(t, want)); n != call {
-			t.Errorf("request %d sent %d inputs, want %d", want, n, call)
-		}
+	sizes := c.inputCounts()
+	slices.Sort(sizes)
+	if !slices.Equal(sizes, []int{4, 8, 8}) {
+		t.Errorf("requests carried %v inputs, want [4 8 8]", sizes)
 	}
 	// Order is the citation contract: vector i must belong to segment i.
 	for i, e := range got {
@@ -584,5 +780,114 @@ func TestModelIdentityRecordsThePromptScheme(t *testing.T) {
 	}
 	if ModelIdentity("") == "" {
 		t.Error("a blank model name erased the scheme too; nothing would identify the vectors")
+	}
+}
+
+// Four requests at the server at once is the whole point of the fan-out, and it is
+// not visible from the vectors: they come out correct either way. It is visible from
+// the server, which holds every request until four of them are being served together.
+// A queue of one would sit in the handler until the timeout and answer nothing.
+func TestEmbedRunsFourRequestsAtTheServerAtOnce(t *testing.T) {
+	c := newCapture(t)
+	// Four, written out rather than read from the constant: the constant is the thing
+	// under test, and a test that asks the server for whatever the code decided would
+	// pass on a queue of one.
+	c.holdRequests(4)
+
+	got, err := c.embedder(t, 4).Embed(context.Background(), "", clips(t, 8))
+
+	// Asked before the error: a cohort that never assembled is the failure, and the
+	// EOF the client then reads is only how it feels from here.
+	if c.neverCompleted() > 0 {
+		t.Fatalf("the server never saw 4 requests at once; the most was %d", c.peakInFlight())
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 8 {
+		t.Fatalf("%d embeddings, want 8", len(got))
+	}
+	// Exactly four: fewer is a queue, more is this process owning a queue the server
+	// would have run anyway, and holding half-built page-raster bodies of its own.
+	if peak := c.peakInFlight(); peak != 4 {
+		t.Fatalf("%d requests in flight at the peak, want exactly 4", peak)
+	}
+}
+
+// The server's own words on why one batch died are the detail a user reads, so the
+// first failure in request order is the one kept — and the requests still in flight
+// are stopped rather than finishing vectors that will never be stored.
+func TestEmbedStopsTheOtherRequestsWhenOneFails(t *testing.T) {
+	c := newCapture(t)
+	c.failFor = "#broken"
+	c.holdRequests(inFlight)
+
+	segs := []domain.Segment{{ID: "bad", Kind: domain.KindText, Text: "passage #broken"}}
+	segs = append(segs, clips(t, 2*inFlight)...)
+
+	_, err := c.embedder(t, 4).Embed(context.Background(), "", segs)
+	if err == nil {
+		t.Fatal("a failing batch was accepted")
+	}
+	if !strings.Contains(err.Error(), "embedding 1-1 of") {
+		t.Errorf("err = %v; want it to name the failing batch", err)
+	}
+	if hung := c.hungUpUntil(t, 1); hung == 0 {
+		t.Error("the requests still in flight were left to finish")
+	}
+}
+
+// Two batches, answered in the opposite order to the one they were sent in, and the
+// vectors still belong to the segments they came from: order is the citation
+// contract, and the answer's arrival order is not part of it.
+func TestVectorsBelongToTheirSegmentsWhateverOrderTheyArriveIn(t *testing.T) {
+	c := newCapture(t)
+	// Each batch's vectors carry that batch's marker, so a mix-up is visible rather
+	// than a vector that happens to look like any other.
+	c.echo = func(first string) float32 {
+		var n int
+		fmt.Sscanf(first[strings.LastIndex(first, "#")+1:], "%d", &n)
+		return float32(n)
+	}
+	c.delayFor = func(first string) time.Duration {
+		var n int
+		fmt.Sscanf(first[strings.LastIndex(first, "#")+1:], "%d", &n)
+		if n == 0 {
+			return 150 * time.Millisecond // the first batch answers last
+		}
+		return 0
+	}
+
+	segs := make([]domain.Segment, 0, 12)
+	for i := range 12 {
+		marker := 0
+		if i >= 8 {
+			marker = 1
+		}
+		segs = append(segs, domain.Segment{
+			ID:   fmt.Sprintf("s:%04d", i),
+			Kind: domain.KindText,
+			Text: fmt.Sprintf("passage #%d", marker),
+		})
+	}
+
+	got, err := c.embedder(t, 4).Embed(context.Background(), docTitle, segs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(segs) {
+		t.Fatalf("%d embeddings for %d segments", len(got), len(segs))
+	}
+	for i, e := range got {
+		if e.SegmentID != segs[i].ID {
+			t.Fatalf("vector %d belongs to %s, want %s", i, e.SegmentID, segs[i].ID)
+		}
+		want := float32(0)
+		if i >= 8 {
+			want = 1
+		}
+		if e.Vector[0] != want {
+			t.Fatalf("vector %d came from batch %v, want batch %v", i, e.Vector[0], want)
+		}
 	}
 }

@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 
 	"libris/internal/domain"
 	"libris/internal/llm"
@@ -36,6 +37,22 @@ import (
 // whole page rasters, so a far larger batch is a large body and a long stall, and eight stays
 // small enough that a busy server never has to refuse a request outright.
 const batchLimit = 8
+
+// inFlight is how many of those requests one call may have at the server at once.
+//
+// A request is not only the card's time. Reading the page images off disk, base64 of
+// a clip, the upload and the server's own parse all happen while the model has
+// nothing to run, and one request at a time makes that dead time add up across a
+// document. Four is the number of slots an instance is given by default — see
+// engine/preset.go, where the absence of a slot count is itself the choice — so the
+// queue in front of the server holds work for every slot while another body is still
+// being assembled. Beyond that this process is holding a queue the server would
+// have run anyway, along with more half-built requests of its own in memory.
+//
+// It is a queue depth, not a promise about throughput: the batching in batches()
+// already puts up to eight segments in one request, so a single Embed can have
+// thirty-two segments in the server's hands.
+const inFlight = 4
 
 // batch is a run of segments that travel in one request, as a half-open range of the input.
 type batch struct{ start, end int }
@@ -133,51 +150,108 @@ func (e *Embedder) Embed(ctx context.Context, title string, segments []domain.Se
 		return nil, nil
 	}
 
-	out := make([]domain.Embedding, 0, len(segments))
-	for _, b := range batches(segments) {
-		batch := segments[b.start:b.end]
+	runs := batches(segments)
 
-		inputs := make([]llm.EmbedInput, len(batch))
-		for i, seg := range batch {
-			in, err := e.inputFor(title, seg)
+	// One result slot per request. Each slot belongs to exactly one goroutine, which
+	// is the only writer it will ever have, and nothing is read until the WaitGroup
+	// joins them — so no lock is needed here, and none should be added to reassure a
+	// reader. The slots are read back in request order, because the order vectors are
+	// stored in is the order the source was chunked in, not the order the answers
+	// arrived in.
+	done := make([]*run, len(runs))
+	for i := range done {
+		// The parent writes these before any goroutine exists, and the goroutine that
+		// is handed one is the only thing that ever writes through it.
+		done[i] = new(run)
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	// The token bucket is taken before the goroutine starts, which is what bounds how
+	// many requests exist at once — and how many half-built bodies of page rasters this
+	// process holds while they are in flight.
+	slots := make(chan struct{}, inFlight)
+	var wg sync.WaitGroup
+	for i, b := range runs {
+		slots <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { <-slots }()
+
+			embeddings, err := e.embedBatch(ctx, title, segments[b.start:b.end], b, len(segments))
 			if err != nil {
-				return nil, fmt.Errorf("index: segment %s: %w", seg.ID, err)
+				// One failed batch fails the call, so the batches still running are
+				// stopped rather than finishing work that will never be stored.
+				cancel()
 			}
-			inputs[i] = in
-		}
+			*done[i] = run{embeddings: embeddings, err: err}
+		}()
+	}
+	wg.Wait()
 
-		resp, err := e.client.Embed(ctx, llm.EmbedRequest{
-			Model:          e.model,
-			Input:          inputs,
-			EncodingFormat: "float",
-		})
-		if err != nil {
-			// Name the server: this string becomes the detail a user reads in the
-			// UI, and "connection refused" alone does not say which of three URLs.
-			return nil, fmt.Errorf("index: embedding %d-%d of %d through %s: %w",
-				b.start+1, b.end, len(segments), e.baseURL, err)
+	out := make([]domain.Embedding, 0, len(segments))
+	for _, r := range done {
+		if r.err != nil {
+			return nil, r.err
 		}
-		if len(resp.Data) != len(batch) {
-			return nil, fmt.Errorf("index: %s returned %d vectors for %d segments",
-				e.baseURL, len(resp.Data), len(batch))
-		}
-
-		for k, row := range rowFor(resp.Data, len(batch)) {
-			vec := resp.Data[row].Embedding
-			if err := e.checkDim(batch[k].ID, vec); err != nil {
-				return nil, err
-			}
-			out = append(out, domain.Embedding{
-				SegmentID: batch[k].ID,
-				Model:     ModelIdentity(e.identity),
-				Dim:       len(vec),
-				Vector:    vec,
-			})
-		}
+		out = append(out, r.embeddings...)
 	}
 
 	if len(out) != len(segments) {
 		return nil, fmt.Errorf("index: produced %d vectors for %d segments", len(out), len(segments))
+	}
+	return out, nil
+}
+
+// run is one request's outcome, kept apart from its neighbours so the first failure
+// in request order is the one a user reads about.
+type run struct {
+	embeddings []domain.Embedding
+	err        error
+}
+
+// embedBatch is one request's worth: the batch's segments turned into inputs, sent,
+// and the answer matched back to them.
+func (e *Embedder) embedBatch(ctx context.Context, title string, batch []domain.Segment, b batch, total int) ([]domain.Embedding, error) {
+	inputs := make([]llm.EmbedInput, len(batch))
+	for i, seg := range batch {
+		in, err := e.inputFor(title, seg)
+		if err != nil {
+			return nil, fmt.Errorf("index: segment %s: %w", seg.ID, err)
+		}
+		inputs[i] = in
+	}
+
+	resp, err := e.client.Embed(ctx, llm.EmbedRequest{
+		Model:          e.model,
+		Input:          inputs,
+		EncodingFormat: "float",
+	})
+	if err != nil {
+		// Name the server: this string becomes the detail a user reads in the
+		// UI, and "connection refused" alone does not say which of three URLs.
+		return nil, fmt.Errorf("index: embedding %d-%d of %d through %s: %w",
+			b.start+1, b.end, total, e.baseURL, err)
+	}
+	if len(resp.Data) != len(batch) {
+		return nil, fmt.Errorf("index: %s returned %d vectors for %d segments",
+			e.baseURL, len(resp.Data), len(batch))
+	}
+
+	out := make([]domain.Embedding, 0, len(batch))
+	for k, row := range rowFor(resp.Data, len(batch)) {
+		vec := resp.Data[row].Embedding
+		if err := e.checkDim(batch[k].ID, vec); err != nil {
+			return nil, err
+		}
+		out = append(out, domain.Embedding{
+			SegmentID: batch[k].ID,
+			Model:     ModelIdentity(e.identity),
+			Dim:       len(vec),
+			Vector:    vec,
+		})
 	}
 	return out, nil
 }
