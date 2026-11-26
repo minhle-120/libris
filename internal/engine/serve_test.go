@@ -94,7 +94,7 @@ func TestPresetWritesOneSectionPerModel(t *testing.T) {
 		"version = 1", "[*]", "[libris-chat]", "[libris-embed]",
 		"model = /m/chat.gguf", "mmproj = /m/mmproj.gguf",
 		"embeddings = on", "fit = on", "backend-sampling = true",
-		"reasoning-preserve = true", "cache-type-k = q8_0", "no-warmup = true", "jinja = true",
+		"reasoning-preserve = true", "no-warmup = true", "jinja = true",
 		// Written out rather than left absent, so whoever opens this file sees the choice. And
 		// it is a choice: with it absent the section would still not load, and a reader could not
 		// tell that from an oversight.
@@ -139,6 +139,20 @@ func TestPresetWritesOneSectionPerModel(t *testing.T) {
 			t.Errorf("preset writes %q, which nothing tuned for this model:\n%s", absent, got)
 		}
 	}
+	// The KV cache's *type* is per kind too, and for the same reason its size is: q8_0 is a
+	// trade that pays for a 32 768-token chat history and buys an embedding pass nothing, while
+	// what an embedder returns is the vector a search compares. Four occurrences in the whole
+	// file — two keys, on the chat model alone — is the whole claim.
+	if n := strings.Count(got, "cache-type-k = q8_0"); n != 1 {
+		t.Errorf("cache-type-k = q8_0 appears %d times, want the chat model alone:\n%s", n, got)
+	}
+	if n := strings.Count(got, "cache-type-v = q8_0"); n != 1 {
+		t.Errorf("cache-type-v = q8_0 appears %d times, want the chat model alone:\n%s", n, got)
+	}
+	if regexp.MustCompile(`(?s)\[libris-embed\].*cache-type-`).MatchString(got) {
+		t.Errorf("the embedder is told how to quantise a KV cache it should not quantise:\n%s", got)
+	}
+
 	// Host KV cache is per kind: the embedder holds none, the chat model holds some. The size of
 	// that some is a trade against the rest of the machine rather than a contract, so this pins
 	// that the two differ and leaves the number to the one place that derives it.

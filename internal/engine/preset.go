@@ -136,8 +136,6 @@ func Preset(path string, device string, models []Model) error {
 	b.WriteString("backend-sampling = true\n")
 	b.WriteString("fit = on\n")
 	fmt.Fprintf(&b, "ubatch-size = %d\n", ubatchSize)
-	b.WriteString("cache-type-k = q8_0\n")
-	b.WriteString("cache-type-v = q8_0\n")
 	fmt.Fprintf(&b, "cache-ram = %d\n", chatCacheRAMMiB)
 	if device != "" {
 		fmt.Fprintf(&b, "device = %s\n", device)
@@ -164,6 +162,17 @@ func Preset(path string, device string, models []Model) error {
 			fmt.Fprintf(&b, "embeddings = on\npooling = mean\nctx-size = %d\ncache-ram = %d\n", embedCtx, smallCacheRAMMiB)
 		default:
 			fmt.Fprintf(&b, "ctx-size = %d\n", chatCtx)
+			// A quantised KV cache, and only on the model that can pay it back. The chat
+			// model's context is 32 768 tokens of history that gets re-read every turn, so
+			// q8_0 there is memory the card can use for something else. The embedder is left
+			// at llama.cpp's own f16: an embedding pass holds its context for the length of
+			// one request and never reloads one, so there is nothing here to save — and the
+			// one thing a lossy cache could change, for a model whose entire output is the
+			// vector a search then compares, is the numbers that get stored. Like cache-ram,
+			// this is a key that is written per model rather than shared, and for the same
+			// reason: what one model wants the KV cache for is not what another wants it for.
+			b.WriteString("cache-type-k = q8_0\n")
+			b.WriteString("cache-type-v = q8_0\n")
 			fmt.Fprintf(&b, "temp = %s\ntop-k = %s\ntop-p = %s\n", chatTemp, chatTopK, chatTopP)
 			// Speculative decoding, and it is per-section because the draft is a file belonging
 			// to one model: an MTP layer is trained against the network it drafts for, so a
