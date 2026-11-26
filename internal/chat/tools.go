@@ -128,7 +128,7 @@ func (t *Tools) Searched() bool { return t.searched }
 // conversation around it. A subject left to context is a subject retrieval never
 // sees, so the request has to stand alone.
 type searchArgs struct {
-	Query string `json:"query" desc:"A complete question or request, as a sentence, naming the subject in full — the retrieval model is given this string and nothing else. Not a list of two or three terms. Example: How fast is coastal erosion on the Holderness cliffs?"`
+	Query string `json:"query" desc:"A complete question or request, as a sentence, naming the subject in full. Example: How fast is coastal erosion on the Holderness cliffs?"`
 }
 
 type finalizeArgs struct {
