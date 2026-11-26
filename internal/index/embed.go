@@ -9,9 +9,9 @@
 //     llama-server, where a file:// path would demand --media-path;
 //   - a page raster with a caption sends image and text in one content object, so
 //     the vector covers what is on the page and what was said about it;
-//   - a clip of a recording goes the same way, as audio, and alone in its request
-//     (see batches). All three forms are unprefixed: the card's steering prefixes are
-//     for text inputs.
+//   - a clip of a recording goes the same way, as audio.
+
+// All three forms are unprefixed: the card's steering prefixes are for text inputs.
 //
 // The server normalises every vector (Euclidean norm), so nothing here does.
 package index
@@ -29,60 +29,37 @@ import (
 	"libris/internal/llm"
 )
 
-// batchLimit bounds how many segments go into one request. llama.cpp makes one task per input
-// and queues them together, so this is how many the instance may have in hand, not how many it
-// runs at once — and eight deliberately sits ahead of the four slots a model instance is given
-// by default. A batch that exactly fills the slots empties the queue at every round trip, and
-// the GPU then waits on this file while the next request is assembled. Multimodal inputs carry
-// whole page rasters, so a far larger batch is a large body and a long stall, and eight stays
-// small enough that a busy server never has to refuse a request outright.
-const batchLimit = 8
-
-// inFlight is how many of those requests one call may have at the server at once.
+// Every segment travels in a request of its own. Nothing is packed: llama.cpp makes one
+// task per input either way, so packing only decides how many chunks die together when
+// one of them is refused, and how much of a document has to be re-embedded after a
+// failure. One chunk per request keeps that blast radius at one chunk, keeps the
+// request body small when it carries a whole page raster or a clip of a recording, and
+// lets the upload's counter move one chunk at a time.
 //
-// A request is not only the card's time. Reading the page images off disk, base64 of
-// a clip, the upload and the server's own parse all happen while the model has
-// nothing to run, and one request at a time makes that dead time add up across a
-// document. Four is the number of slots an instance is given by default — see
-// engine/preset.go, where the absence of a slot count is itself the choice — so the
-// queue in front of the server holds work for every slot while another body is still
-// being assembled. Beyond that this process is holding a queue the server would
-// have run anyway, along with more half-built requests of its own in memory.
-//
-// It is a queue depth, not a promise about throughput: the batching in batches()
-// already puts up to eight segments in one request, so a single Embed can have
-// thirty-two segments in the server's hands.
-const inFlight = 4
-
-// batch is a run of segments that travel in one request, as a half-open range of the input.
+// The cost is more round trips — a 18 489-chunk source is 18 489 of them — and locally
+// that is headers, not bytes: the tokens sent are the same either way.
 type batch struct{ start, end int }
 
-// batches cuts the work into requests. Two rules decide the cuts.
-//
-//   - at most batchLimit segments in one request — see batchLimit for why eight;
-//   - never more than one audio clip in a request. A 15 s clip is ~480 KB of PCM and ~640 KB
-//     base64, so a full batch of clips is a ten-megabyte body for one round trip, and one
-//     clip the server dislikes would fail the seven others in the same request. Text and
-//     page rasters keep batching together, because the thing that produces clips — an hour
-//     of a recording — produces hundreds of them.
 func batches(segments []domain.Segment) []batch {
-	var out []batch
-	for start := 0; start < len(segments); {
-		if segments[start].Kind == domain.KindAudio {
-			out = append(out, batch{start, start + 1})
-			start++
-			continue
-		}
-		end := start + 1
-		for end < len(segments) && end-start < batchLimit &&
-			segments[end].Kind != domain.KindAudio {
-			end++
-		}
-		out = append(out, batch{start, end})
-		start = end
+	out := make([]batch, len(segments))
+	for i := range segments {
+		out[i] = batch{i, i + 1}
 	}
 	return out
 }
+
+// inFlight is how many of those one-chunk requests one call may have at the server at
+// once.
+//
+// A request is not only the card's time. Reading the page images off disk, base64 of a
+// clip, the upload and the server's own parse all happen while the model has nothing to
+// run, and one request at a time makes that dead time add up across a document.
+//
+// Four is a queue depth, not a promise about throughput, and what it assumes is that
+// the server has somewhere to put them. An instance started with one slot runs them one
+// after another and the other three wait in its queue; `--parallel` is the setting that
+// turns four in-flight requests into four slots of work.
+const inFlight = 4
 
 // MaxAssetBytes refuses to inline a media file this large. It is not a tuning
 // knob: past this the request is the problem, not the model. It is exported

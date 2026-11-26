@@ -215,8 +215,7 @@ func (c *capture) hungUpUntil(t *testing.T, want int) int {
 	return c.hungUp()
 }
 
-// clips is n segments that each demand a request of their own — a clip is never
-// batched with another, which is what makes a line of them a line of requests.
+// clips is n segments: a line of clips is a line of requests, one chunk to each.
 func clips(t *testing.T, n int) []domain.Segment {
 	t.Helper()
 	out := make([]domain.Segment, 0, n)
@@ -340,10 +339,20 @@ func TestEmbedsTextAsSteeredStrings(t *testing.T) {
 		t.Fatalf("got %d embeddings, want 2", len(got))
 	}
 
-	in := c.inputs(t, 0)
-	if len(in) != 2 {
-		t.Fatalf("sent %d inputs, want 2", len(in))
+	// One chunk per request, so the two segments are two requests. Which arrives first
+	// is not promised, so the prompts are compared as a set.
+	if got := c.inputCounts(); !slices.Equal(got, []int{1, 1}) {
+		t.Fatalf("requests carried %v inputs, want [1 1]", got)
 	}
+	var sent []string
+	for i := range c.callCount() {
+		in := c.inputs(t, i)
+		if len(in) != 1 {
+			t.Fatalf("request %d carried %d inputs, want 1", i, len(in))
+		}
+		sent = append(sent, in[0].(string))
+	}
+	slices.Sort(sent)
 	// Text still goes as a JSON string, not a content object: the object form is the
 	// llama.cpp extension and not every server accepts it for plain text. It carries
 	// the model's document prompt, which is what the card asks for.
@@ -351,8 +360,9 @@ func TestEmbedsTextAsSteeredStrings(t *testing.T) {
 		DocumentPrompt(docTitle, "the sky is blue"),
 		DocumentPrompt(docTitle, "water is wet"),
 	}
-	if in[0] != want[0] || in[1] != want[1] {
-		t.Errorf("input = %v, want %v", in, want)
+	slices.Sort(want)
+	if !slices.Equal(sent, want) {
+		t.Errorf("inputs = %v, want %v", sent, want)
 	}
 
 	body := c.bodies[0]
@@ -389,15 +399,15 @@ func TestBatchesSegments(t *testing.T) {
 	if len(got) != 20 {
 		t.Fatalf("got %d embeddings, want 20", len(got))
 	}
-	// What is cut into a request is the contract; which one arrives first is not a
-	// thing this code promises, so the sizes are compared as a set.
-	if got := c.callCount(); got != 3 {
-		t.Errorf("made %d requests, want 3 (8+8+4)", got)
+	// One chunk per request: twenty segments are twenty requests, and nothing travels
+	// with a neighbour to fail beside it.
+	if got := c.callCount(); got != 20 {
+		t.Errorf("made %d requests, want 20", got)
 	}
-	sizes := c.inputCounts()
-	slices.Sort(sizes)
-	if !slices.Equal(sizes, []int{4, 8, 8}) {
-		t.Errorf("requests carried %v inputs, want [4 8 8]", sizes)
+	for i, n := range c.inputCounts() {
+		if n != 1 {
+			t.Errorf("request %d carried %d inputs, want 1", i, n)
+		}
 	}
 	// Order is the citation contract: vector i must belong to segment i.
 	for i, e := range got {
@@ -539,11 +549,13 @@ func TestDimensionMismatchAgainstSettings(t *testing.T) {
 func TestShortResponseIsAnError(t *testing.T) {
 	c := newCapture(t)
 	c.wrongLen = true
+	// One segment, so the answer that comes back short is the one this request got:
+	// with a neighbour in flight, whichever failed first cancels the other, and the
+	// message is then the victim's.
 	_, err := c.embedder(t, 0).Embed(context.Background(), docTitle, []domain.Segment{
 		{ID: "a:0000", Kind: domain.KindText, Text: "hello"},
-		{ID: "a:0001", Kind: domain.KindText, Text: "world"},
 	}, nil)
-	if err == nil || !strings.Contains(err.Error(), "1 vectors for 2 segments") {
+	if err == nil || !strings.Contains(err.Error(), "0 vectors for 1 segments") {
 		t.Errorf("err = %v", err)
 	}
 }
@@ -696,11 +708,14 @@ func TestMediaInputsAreNeverPrefixed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	inputs := c.inputs(t, 0)
-	for i, want := range []string{"figure 3: latency", "caption: latency over quarters"} {
-		if got := textPartOf(t, inputs[i]); got != want {
-			t.Errorf("media %d carries %q, want the rendition verbatim and unprefixed", i, got)
-		}
+	var sent []string
+	for i := range c.callCount() {
+		sent = append(sent, textPartOf(t, c.inputs(t, i)[0]))
+	}
+	slices.Sort(sent)
+	want := []string{"caption: latency over quarters", "figure 3: latency"}
+	if !slices.Equal(sent, want) {
+		t.Errorf("media requests carried %q, want the renditions verbatim and unprefixed", sent)
 	}
 }
 
@@ -814,9 +829,9 @@ func TestEmbedRunsFourRequestsAtTheServerAtOnce(t *testing.T) {
 	}
 }
 
-// The server's own words on why one batch died are the detail a user reads, so the
-// first failure in request order is the one kept — and the requests still in flight
-// are stopped rather than finishing vectors that will never be stored.
+// The server's own words on why one chunk died are the detail a user reads, so the
+// first failure in request order is the one kept — and the requests still in flight are
+// stopped rather than finishing vectors that will never be stored.
 func TestEmbedStopsTheOtherRequestsWhenOneFails(t *testing.T) {
 	c := newCapture(t)
 	c.failFor = "#broken"
