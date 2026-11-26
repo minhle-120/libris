@@ -2,7 +2,7 @@
   import { app, chunkLoaded, closeViewer, loadMoreViewerChunks } from '../lib/store.svelte';
   import { chunksOf, repeatOf } from '../lib/chunks';
   import { formatBytes, formatSpan } from '../lib/format';
-  import { assetURL, SEGMENT_JUMP } from '../lib/api';
+  import { assetURL } from '../lib/api';
   import type { Segment } from '../lib/types';
   import Button from '../lib/ui/Button.svelte';
   import Icon from '../lib/ui/Icon.svelte';
@@ -112,14 +112,8 @@
   function onScroll() {
     if (!list) return;
     if (list.scrollHeight - list.scrollTop - list.clientHeight >= NEAR) return;
-    // A citation still being chased gets the largest window the server will send: a reader
-    // who clicked one is owed the chunk it points at, and walking there a screen at a time
-    // is a dozen round trips they would feel.
-    void loadMoreViewerChunks(app.viewerSeg && !foundCited() ? SEGMENT_JUMP : undefined);
+    void loadMoreViewerChunks();
   }
-
-  const foundCited = () =>
-    !app.viewerSeg || !!list?.querySelector(`[data-seg="${CSS.escape(app.viewerSeg)}"]`);
 
   /** One player for the whole clip list.
    *
@@ -167,25 +161,6 @@
     listeningTo = id;
   });
 
-  /** The citation that opened this view is brought into sight, and ringed, rather than left
-   *  somewhere below the fold. */
-  $effect(() => {
-    const want = app.viewerSeg;
-    const n = all.length;
-    void n;
-    if (!want || !list) return;
-    const node = list.querySelector(`[data-seg="${CSS.escape(want)}"]`);
-    if (!node) {
-      // Chunks arrive a window at a time, so a citation can point below what has been read
-      // in. Each answer extends the list and this runs again, so the file is walked until the
-      // cited chunk turns up rather than leaving the reader at its top.
-      void loadMoreViewerChunks(SEGMENT_JUMP);
-      return;
-    }
-    // The middle, not the top edge: the reader came to read this chunk, and a chunk pinned
-    // under the viewer's own header is half out of reach.
-    node.scrollIntoView({ block: 'center' });
-  });
 </script>
 
 <section class="viewer" aria-label="Chunks of {source?.name ?? 'source'}">
@@ -235,7 +210,7 @@
           {@const full = s.text ?? ''}
           {@const rep = marked.reps.get(s.id) ?? ''}
           {@const shown = openSet[s.id] || full.length <= CAP}
-          <li class="chunk" class:highlighted={s.id === app.viewerSeg} data-seg={s.id}>
+          <li class="chunk">
             <div class="cmeta">
               <span class="ord">{ord(s)}</span>
               <span class="prov">
@@ -268,7 +243,7 @@
       </div>
       <ul class="clips">
         {#each clips as s (s.id)}
-          <li class="clip" class:highlighted={s.id === app.viewerSeg} data-seg={s.id}>
+          <li class="clip">
             <div class="cmeta">
               <span class="ord">{ord(s)}</span>
               <span class="prov">
@@ -298,7 +273,7 @@
       </div>
       <ul class="tiles">
         {#each images as s (s.id)}
-          <li class="tile" class:highlighted={s.id === app.viewerSeg} data-seg={s.id}>
+          <li class="tile">
             {#if s.asset}
               <!-- The thumbnail is for finding the page; the page itself is what a reader
                    clicks for, and a raster is only worth squinting at at full size. -->
@@ -442,15 +417,6 @@
     scroll-margin-top: 8px;
   }
 
-  .chunk.highlighted {
-    /* A ring, not a fill. The shading inside a chunk is already colour — the tail the chunker
-       repeated — and a tint laid over it would hide exactly what that shading says. */
-    border-left-color: var(--accent);
-    outline: 1px solid var(--accent);
-    outline-offset: -1px;
-    border-radius: 0 var(--r) var(--r) 0;
-  }
-
   .cmeta {
     display: flex;
     align-items: baseline;
@@ -561,11 +527,6 @@
     border: 1px solid var(--border);
     border-radius: var(--r);
     background: var(--raised);
-  }
-
-  .tile.highlighted {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 1px var(--accent);
   }
 
   .tile a {

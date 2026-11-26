@@ -128,6 +128,59 @@ const code = await withBrowser(
       (heading ?? []).includes('clips'),
       (heading ?? []).join(', ')
     );
+
+    // Opening a recording used to hand the browser a bare audio file, and the browser
+    // decided what that meant — play it, or save it. Both are correct answers as far as
+    // the browser is concerned, and one of them is not what anyone asked for. The row
+    // asks for a page now, and the page has an <audio> in it.
+    // Back out of the viewer first: while it is open it stands in the panel's place,
+    // and the row whose link is being read is not on the page.
+    await ui.eval(`document.querySelector('.viewer [aria-label="Back to sources"]').click(); return true;`);
+    await ui.settle(300);
+    const link = await ui.eval(`
+      const row = [...document.querySelectorAll('.source')].find((r) =>
+        r.querySelector('.name')?.textContent.trim() === 'one-second.wav');
+      return row?.querySelector('a.iconlink')?.getAttribute('href') ?? null;
+    `);
+    checks.check(
+      'the row opens a recording as a player, not as a file to save',
+      /\/api\/sources\/[0-9a-f]{6,}\/player$/.test(link ?? ''),
+      () => String(link)
+    );
+
+    // The page is a document of its own, so it gets a navigation of its own — which is
+    // also exactly what an audio citation does. The clip window arrives in the hash and
+    // is read before a byte of sound has been asked for.
+    await ui.reload(`${app.replace(/\/$/, '')}${link}#t=0.4`);
+    const player = await ui.until(
+      `
+      const el = document.getElementById('play');
+      if (!el || el.readyState === 0) return null;
+      return {
+        src: el.getAttribute('src'),
+        at: Number(el.currentTime.toFixed(2)),
+        where: document.getElementById('where')?.textContent.trim(),
+        complained: document.getElementById('note')?.hidden !== true,
+      };
+    `,
+      60,
+      100,
+    );
+    checks.check(
+      'the player page plays the recording it was asked for',
+      /\/original$/.test(player?.src ?? '') && (player?.at ?? 0) >= 0.3,
+      () => JSON.stringify(player)
+    );
+    checks.check(
+      'and it says where in the recording it started',
+      /from 0:0\d/.test(player?.where ?? ''),
+      () => String(player?.where)
+    );
+    checks.check(
+      'a file this browser can decode says nothing about codecs',
+      player?.complained === false,
+      () => JSON.stringify(player)
+    );
   }
 );
 

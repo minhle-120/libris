@@ -83,7 +83,6 @@ export const app = $state({
   panel: 'sources' as Panel,
   /** The source whose chunks are open in the panel, and the chunk a citation pointed at. */
   viewer: null as string | null,
-  viewerSeg: '',
   viewerError: '',
   /** The chunks of the source the viewer has open. They arrive a fetch after the viewer does,
    *  so the heading renders from `sources` and the list fills in behind it. */
@@ -306,7 +305,6 @@ export async function openNotebook(id: string) {
   app.messages = [];
   app.sources = [];
   app.viewer = null;
-  app.viewerSeg = '';
   app.crumbNotebook = id;
   app.error = '';
   clearLive();
@@ -592,13 +590,12 @@ export async function reingest(source: Source) {
 
 let viewerSeq = 0;
 
-export async function openViewer(sourceId: string, segmentId = '') {
+export async function openViewer(sourceId: string) {
   const seq = ++viewerSeq;
   app.panel = 'sources';
   app.viewer = sourceId;
-  app.viewerSeg = segmentId;
   app.viewerError = '';
-  // Opening a citation forces the panel open even if it was shut.
+  // Opening the viewer forces the panel open even if it was shut.
   if (!app.sideOpen) setOpen(SIDE, true);
   app.viewerSegments = [];
   app.viewerKinds = {};
@@ -621,7 +618,7 @@ export async function openViewer(sourceId: string, segmentId = '') {
  *
  *  It asks for nothing when the file is already here, and asks twice never — a scroll gesture
  *  is a hundred events, and the answer to the first of them is still in the air. */
-export async function loadMoreViewerChunks(limit?: number) {
+export async function loadMoreViewerChunks() {
   const id = app.viewer;
   if (!id || app.viewerLoading) return;
   const offset = app.viewerSegments.length;
@@ -629,7 +626,7 @@ export async function loadMoreViewerChunks(limit?: number) {
   app.viewerLoading = true;
   const seq = viewerSeq;
   try {
-    const page = await api.listSegments(id, offset, limit);
+    const page = await api.listSegments(id, offset);
     // A viewer that was closed, or turned to another source, while this was in the air gets
     // no answer — its chunks belong to a file nobody is reading.
     if (seq !== viewerSeq || app.viewer !== id) return;
@@ -660,18 +657,22 @@ export function chunkLoaded() {
 export function closeViewer() {
   viewerSeq++;
   app.viewer = null;
-  app.viewerSeg = '';
   app.viewerError = '';
   app.viewerLoading = false;
 }
 
 /**
- * A citation is an instruction to look. The source is looked up rather than taken on trust
- * from the answer, because it may have been detached from this notebook since the question was
- * asked — and an old citation should still open.
+ * A citation is an instruction to look, and the looking happens in the browser's own
+ * document viewer: one tab, at the page the chunk came from. It is the same door the
+ * source row's "open the original" button opens, so there is one viewer to trust and it
+ * is not ours to build, redraw, or keep pace with.
+ *
+ * The tab is named, so the second citation lands in the first one's place instead of
+ * stacking a tab per chunk. A source detached from the notebook since the answer was
+ * written still opens while its file is kept — and once it is not, the tab says so.
  */
 export function openCitation(c: Citation) {
-  void openViewer(c.source_id, c.segment_id);
+  window.open(api.citationURL(c), "libris-document");
 }
 
 export function setPanel(p: Panel) {

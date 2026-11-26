@@ -99,6 +99,10 @@ func (s *Server) addAppRoutes(a API) {
 	s.mux.HandleFunc("POST /api/sources/{id}/stop", s.handleStopSource)
 	s.mux.HandleFunc("POST /api/sources/{id}/resume", s.handleResumeSource)
 	s.mux.HandleFunc("GET /api/sources/{id}/original", s.handleOriginal)
+	// A recording opened straight from its original is at the browser's discretion —
+	// play or download, decided by the MIME type and by whether it decodes the
+	// container. This route is the page that decides instead of the browser.
+	s.mux.HandleFunc("GET /api/sources/{id}/player", s.handlePlayer)
 
 	// Asset ids contain slashes ("<sha>/pages/page-0001.png"), so this is the
 	// one wildcard route. The id is looked up in the database and never

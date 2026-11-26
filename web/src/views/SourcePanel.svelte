@@ -21,7 +21,7 @@
   import Empty from '../lib/ui/Empty.svelte';
   import Modal from '../lib/ui/Modal.svelte';
   import ChunkViewer from './ChunkViewer.svelte';
-  import { originalURL } from '../lib/api';
+  import { originalURL, playerURL } from '../lib/api';
   import type { FindingCode } from '../lib/types';
 
   /**
@@ -319,10 +319,12 @@
                     {#if s.status === 'ready' || s.status === 'unsupported' || s.status === 'failed'}
                       <a
                         class="iconlink"
-                        href={originalURL(s.id)}
+                        href={s.kind === "audio" ? playerURL(s.id) : originalURL(s.id)}
                         target="_blank"
                         rel="noopener"
-                        title="Open the original file in a new tab"
+                        title={s.kind === "audio"
+                          ? "Play the recording in a new tab"
+                          : "Open the original file in a new tab"}
                         aria-label="Open {s.name}"
                       >
                         <Icon name="open" size={14} />

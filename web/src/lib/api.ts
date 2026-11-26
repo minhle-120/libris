@@ -168,11 +168,6 @@ export function resumeSource(sourceId: string): Promise<Source> {
  *  them to paint the first is what turns opening a viewer into waiting for one. */
 export const SEGMENT_WINDOW = 400;
 
-/** The largest window the server will send, and what the viewer asks for while it is walking
- *  to a cited chunk: a dozen screens' worth of round trips is what a slow window costs a
- *  reader who clicked a citation deep in a long file. */
-export const SEGMENT_JUMP = 2000;
-
 /** One window of a source's chunks, and what the file holds of each kind. */
 export interface SegmentWindow {
   segments: Segment[];
@@ -181,15 +176,11 @@ export interface SegmentWindow {
   kinds: Record<string, number>;
 }
 
-export async function listSegments(
-  sourceId: string,
-  offset = 0,
-  limit = SEGMENT_WINDOW,
-): Promise<SegmentWindow> {
+export async function listSegments(sourceId: string, offset = 0): Promise<SegmentWindow> {
   const page = await request<{
     segments?: Segment[] | null;
     kinds?: Record<string, number> | null;
-  }>(`/api/sources/${sourceId}/segments?offset=${offset}&limit=${limit}`);
+  }>(`/api/sources/${sourceId}/segments?offset=${offset}&limit=${SEGMENT_WINDOW}`);
   return { segments: list(page.segments ?? null), kinds: page.kinds ?? {} };
 }
 
@@ -198,6 +189,35 @@ export async function listSegments(
 /** The kept original, streamed by the backend. Open in a tab, or seek with Range. */
 export function originalURL(sourceId: string): string {
   return `/api/sources/${sourceId}/original`;
+}
+
+/**
+ * A recording opened as a page rather than as a file. Whether a browser plays a bare
+ * audio file or downloads it is decided by the MIME type it was handed and by what it
+ * can decode, and neither answer is the same on two machines. The page takes the
+ * decision away from the browser.
+ */
+export function playerURL(sourceId: string): string {
+  return `/api/sources/${sourceId}/player`;
+}
+
+/**
+ * Where a citation sends the browser, as a URL the browser can open by itself.
+ *
+ * The document, not a rendering of it: a PDF tab is the browser's own viewer, Range
+ * requests and all, and `#page=` is the one pointer it reliably honours. A recording
+ * gets the player page rather than the file, with the clip's window in the media
+ * fragment the page reads out of the hash. A source with no pages — markdown, plain
+ * text — has nothing to point at, so its citation opens at the top.
+ */
+export function citationURL(c: Citation): string {
+  if (c.kind === "audio") {
+    const { t0, t1 } = c.span;
+    const at = t1 && t1 > (t0 ?? 0) ? `${t0},${t1}` : `${t0 ?? 0}`;
+    return `${playerURL(c.source_id)}#t=${at}`;
+  }
+  const page = c.span.page ?? 0;
+  return page > 0 ? `${originalURL(c.source_id)}#page=${page}` : originalURL(c.source_id);
 }
 
 /** A derived page raster. The asset id contains slashes, which

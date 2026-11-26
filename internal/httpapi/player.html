@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{.Name}}</title>
+    <style>
+      :root { color-scheme: light dark; --line: color-mix(in srgb, CanvasText 18%, transparent); }
+      body {
+        margin: 0; padding: 3rem 1.25rem; display: grid; place-items: start center;
+        font: 15px/1.5 ui-sans-serif, system-ui, sans-serif; background: Canvas; color: CanvasText;
+      }
+      main { width: min(42rem, 100%); }
+      h1 { font-size: 1.15rem; font-weight: 600; margin: 0 0 .25rem; overflow-wrap: anywhere; }
+      .sub { margin: 0 0 1.5rem; opacity: .65; font-size: .85rem; }
+      audio { width: 100%; }
+      .where { margin: 1rem 0 0; font-size: .85rem; opacity: .8; }
+      .note {
+        margin: 1.5rem 0 0; padding: .75rem 1rem; border: 1px solid var(--line);
+        border-radius: .5rem; font-size: .85rem;
+      }
+      [hidden] { display: none; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>{{.Name}}</h1>
+      <p class="sub">{{.Detail}}<span id="dur"></span></p>
+      <audio id="play" controls preload="metadata" src="{{.Src}}"></audio>
+      <p class="where" id="where" hidden></p>
+      <p class="note" id="note" hidden>
+        This browser cannot play {{.Name}}.
+        <a href="{{.Src}}" download>Download it</a> and open it in a player that can.
+      </p>
+    </main>
+    <script>
+      const play = document.getElementById('play');
+      const where = document.getElementById('where');
+
+      // A citation names its window in the hash — #t=start,end, in seconds. It is read
+      // here rather than baked into the src the server renders: the page stays the same
+      // document for every clip of a recording, so one clip's window never becomes a URL
+      // someone can bookmark and serve against another one.
+      const clip = /t=([0-9.]+)(?:,([0-9.]+))?/.exec(location.hash);
+      let stop = 0;
+
+      const stamp = (s) =>
+        !isFinite(s) ? '' : Math.floor(s / 60) + ':' + String(Math.round(s % 60)).padStart(2, '0');
+
+      play.addEventListener('loadedmetadata', () => {
+        document.getElementById('dur').textContent = ' · ' + stamp(play.duration);
+        if (!clip) return;
+
+        const start = parseFloat(clip[1]);
+        const end = clip[2] ? parseFloat(clip[2]) : 0;
+        if (isFinite(start) && start > 0) play.currentTime = Math.min(start, play.duration || start);
+        if (isFinite(end) && end > start) stop = end;
+
+        where.hidden = false;
+        where.textContent = stop
+          ? 'the cited window · ' + stamp(start) + '–' + stamp(stop)
+          : 'from ' + stamp(start);
+
+        // A tab opened by a click may or may not be handed autoplay, depending on the
+        // browser's mood that day. Not starting is not worth a message: the control is
+        // right there.
+        play.play().catch(() => {});
+      });
+
+      // The end is the citation's edge. The model heard that window and quoted from it,
+      // and drifting past it into the rest of the tape makes the same quote mean more
+      // than was said. Pressing play again releases the edge, because from then on the
+      // listener has stopped treating it as theirs.
+      play.addEventListener('timeupdate', () => {
+        if (!stop || play.currentTime < stop) return;
+        const edge = stop;
+        stop = 0;
+        play.pause();
+        play.currentTime = edge;
+      });
+
+      // Decoding is the one thing this page cannot fix. Say what happened and hand over
+      // the file, rather than leave a control that does nothing.
+      play.addEventListener('error', () => {
+        document.getElementById('note').hidden = false;
+      });
+    </script>
+  </body>
+</html>

@@ -296,24 +296,48 @@ const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ask-p
   );
 
   // ── opening a citation ─────────────────────────────────────────
-  await ui.eval(`
+  // A citation opens the document itself, in a tab, in whatever viewer the browser
+  // brings. A second tab is a second target and hard to read from here, and the whole
+  // of the feature is the address asked for — this source, that page — so the open is
+  // intercepted and the address is what gets asserted.
+  const openedTab = await ui.eval(`
+    const real = window.open;
+    let seen = null;
+    window.open = (url, name) => { seen = { url, name }; return null; };
     document.querySelector('.turn.assistant:last-of-type .chips .cite').click();
-    return true;
+    window.open = real;
+    return seen;
   `);
-  // The viewer is on screen before its chunks are — the heading renders from the
-  // source, the list arrives a fetch later. Measuring the ring any earlier reports a
-  // working feature as broken.
+  checks.check(
+    'a citation opens the original document at the page it cites',
+    /\/api\/sources\/[0-9a-f]{6,}\/original#page=\d+$/.test(openedTab?.url ?? ''),
+    () => JSON.stringify(openedTab)
+  );
+  checks.check(
+    'and it lands in one tab, reused by name, not a tab per click',
+    openedTab?.name === 'libris-document',
+    () => JSON.stringify(openedTab)
+  );
+
+  // The chunk viewer is still the way in from the row, and the chat has to survive the
+  // detour: a reader who went to look at how a file was cut comes back to the same
+  // answer, header unmoved.
   const crumbsBefore = await ui.crumbs();
+  await ui.eval(`document.querySelector('[aria-label="Panel"] [role="tab"]').click(); return true;`);
+  await ui.eval(`document.querySelector('button[title="See how this source was chunked"]').click(); return true;`);
+  // The viewer is on screen before its chunks are — the heading renders from the
+  // source, the list arrives a fetch later. Measuring any earlier reports a working
+  // feature as broken.
   const viewer = await ui.until(`
     const dlg = document.querySelector('.viewer');
     if (!dlg || !dlg.querySelector('.chunk, .tile')) return null;
-    return {
-      heading: dlg.querySelector('h2')?.textContent,
-      highlighted: dlg.querySelectorAll('.chunk.highlighted, .tile.highlighted').length
-    };
+    return { heading: dlg.querySelector('h2')?.textContent };
   `);
-  checks.check('a citation opens the source it cites', /two-page\.pdf/.test(viewer?.heading ?? ''), () => `heading=${viewer?.heading}`);
-  checks.check('it opens on the cited chunk, ringed', viewer?.highlighted === 1, () => `highlighted=${viewer?.highlighted}`);
+  checks.check(
+    'a source still opens on how it was chunked',
+    /two-page\.pdf/.test(viewer?.heading ?? ''),
+    () => `heading=${viewer?.heading}`
+  );
 
   // No Escape any more: the viewer is a step off Sources, not a top layer, so Back is
   // the only way out — and the answer that cited it never left. Leaving it must not
