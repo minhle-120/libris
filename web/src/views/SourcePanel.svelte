@@ -215,9 +215,11 @@
                     <Icon
                       name={s.kind === 'image'
                         ? 'image'
-                        : s.status === 'unsupported' || s.kind === 'unsupported'
-                          ? 'inbox'
-                          : 'file'}
+                        : s.kind === 'audio'
+                          ? 'audio'
+                          : s.status === 'unsupported' || s.kind === 'unsupported'
+                            ? 'inbox'
+                            : 'file'}
                     />
                   </span>
 

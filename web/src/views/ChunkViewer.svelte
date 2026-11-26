@@ -1,7 +1,7 @@
 <script lang="ts">
   import { app, closeViewer } from '../lib/store.svelte';
   import { chunksOf, repeatOf } from '../lib/chunks';
-  import { formatBytes } from '../lib/format';
+  import { formatBytes, formatSpan } from '../lib/format';
   import { assetURL } from '../lib/api';
   import type { Segment } from '../lib/types';
   import Button from '../lib/ui/Button.svelte';
@@ -23,11 +23,16 @@
   const source = $derived(app.sources.find((s) => s.id === sourceId));
   const all = $derived(chunksOf(app.viewerSegments, sourceId));
   const images = $derived(all.filter((s) => s.kind === 'image'));
+  const clips = $derived(all.filter((s) => s.kind === 'audio'));
   const texts = $derived(all.filter((s) => s.kind === 'text'));
 
   /** A text chunk and a page raster both come from a PDF; a text file has one document, and
    *  naming it "page text" would be a lie about something nobody split into pages. */
   const textTitle = $derived(images.length ? 'page text' : 'text');
+
+  /** Where a clip sits in the recording, in the shape the player under it shows. */
+  const when = (s: Segment) =>
+    s.span?.t0 === undefined ? '\u2014' : formatSpan(s.span.t0, s.span.t1);
 
   const openSet = $state<Record<string, boolean>>({});
   const dims = $state<Record<string, string>>({});
@@ -159,6 +164,34 @@
           </li>
         {/each}
       </ol>
+    {/if}
+
+    {#if clips.length}
+      <div class="doc-head">
+        <h3>clips</h3>
+        <span class="small">{clips.length}</span>
+      </div>
+      <ul class="clips">
+        {#each clips as s (s.id)}
+          <li class="clip" class:highlighted={s.id === app.viewerSeg} data-seg={s.id}>
+            <div class="cmeta">
+              <span class="ord">{ord(s)}</span>
+              <span class="prov">
+                <span>{when(s)}</span>
+                <span>{s.asset ? formatBytes(s.asset.bytes) : ''}</span>
+              </span>
+            </div>
+            {#if s.asset}
+              <!-- preload="none": a source can hold hundreds of these, and a viewer that
+                   fetched every one to draw a play button would read the whole recording off
+                   the disk to show its list. -->
+              <audio controls preload="none" src={assetURL(s.asset)}></audio>
+            {:else}
+              <p class="center">No clip stored for this chunk.</p>
+            {/if}
+          </li>
+        {/each}
+      </ul>
     {/if}
 
     {#if images.length}
@@ -331,6 +364,28 @@
     color: var(--accent-text);
     padding: 0 1px;
     border-radius: 2px;
+  }
+
+  .clips {
+    list-style: none;
+    margin: 0 0 var(--sp-4);
+    padding: 0;
+    display: grid;
+    gap: var(--sp-2);
+  }
+
+  .clip {
+    border: 1px solid var(--line);
+    border-radius: var(--r-2);
+    padding: var(--sp-2);
+    display: grid;
+    gap: var(--sp-2);
+  }
+
+  /* The player is the content of a clip, so it gets the full width of the column. */
+  .clip audio {
+    width: 100%;
+    height: 32px;
   }
 
   .tiles {

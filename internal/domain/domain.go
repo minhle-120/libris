@@ -18,6 +18,7 @@ type Kind string
 const (
 	KindText  Kind = "text"
 	KindImage Kind = "image"
+	KindAudio Kind = "audio" // one clip window of a recording; Text is empty
 )
 
 // Media reports whether a segment carries a file to show a model rather than text to
@@ -29,7 +30,7 @@ const (
 // retrieve's mapping from a kind to a wire kind, and in llm's MediaPart and Caps.Allows.
 func (k Kind) Media() bool {
 	switch k {
-	case KindImage:
+	case KindImage, KindAudio:
 		return true
 	}
 	return false
@@ -41,6 +42,7 @@ type SourceKind string
 const (
 	SourcePDF         SourceKind = "pdf"         // text layer + page images
 	SourceImage       SourceKind = "image"       // one image
+	SourceAudio       SourceKind = "audio"       // sliced into clips, embedded whole
 	SourceText        SourceKind = "text"        // plain text, markdown, html, csv, code
 	SourceUnsupported SourceKind = "unsupported" // stored, not searchable
 )
@@ -161,17 +163,18 @@ type Provenance struct {
 	PageEnd   int `json:"page_end,omitempty"`
 	CharStart int `json:"char_start,omitempty"`
 	CharEnd   int `json:"char_end,omitempty"`
+
+	// T0 and T1 are the seconds of a recording one clip covers, and they are floats
+	// because a window boundary can land half-way between two. No omitempty on T0:
+	// the first clip starts at zero seconds, and that is a real value a client must
+	// not read as "absent". Both are 0 for every other kind, where the columns stay
+	// unread.
+	T0 float64 `json:"t0"`
+	T1 float64 `json:"t1,omitempty"`
 }
 
-// Audio deliberately has no fields here. Slicing a recording into timed clips was
-// built, and the clips had no words to quote, so an answer could lean on a
-// recording and cite nothing from it; the whole path went rather than a modality
-// that is searchable but unusable in prose. The `t0`/`t1` columns are still in the
-// schema — see the note in the store's segment row — because a migration that
-// deletes a column is a change with no user on the other side of it.
-
 // Asset is a file written by the sink: an extracted page image, a copied
-// original, or a media slice.
+// original, or a clip cut from a recording.
 type Asset struct {
 	ID string `json:"id"` // also its URL path under /api/assets/
 	// Path is absolute on this machine, and internal: the file endpoints look it
@@ -191,9 +194,12 @@ type Asset struct {
 //	            the server started with --media-path. Libris owns the assets
 //	            directory, so it reads the raster off disk instead of asking the
 //	            user for a flag.
+//	KindAudio -> the same, with the clip's bytes and the audio wire kind; Text is
+//	            empty and Span carries the window in T0/T1.
 //
-// Text always stays for citation and lexical search, even when the payload is
-// media.
+// Text stays for citation and lexical search wherever the source has any. A clip is
+// the exception ADR 0010 accepts: there are no words to store, so the segment is
+// found by its vector alone and quoted only by the model that hears it.
 type Segment struct {
 	ID       string     `json:"id"`
 	SourceID string     `json:"source_id"`

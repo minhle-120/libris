@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# The Windows half of scripts/dist/tools-linux.sh: pdftotext and pdftoppm with everything they
-# need, into one folder that travels beside libris.exe. Run under an MSYS2 shell (the GitHub
+# The Windows half of scripts/dist/tools-linux.sh: pdftotext, pdftoppm and ffmpeg with
+# everything they need, into one folder that travels beside libris.exe. Run under an MSYS2 shell (the GitHub
 # runner ships one), where the toolchain's own package manager supplies the binaries.
 #
 #   scripts/dist/tools-windows.sh <out-dir>
@@ -28,7 +28,8 @@ if command -v pacman >/dev/null 2>&1; then
   pacman -S --noconfirm --needed \
     mingw-w64-ucrt-x86_64-poppler \
     mingw-w64-ucrt-x86_64-poppler-data \
-    mingw-w64-ucrt-x86_64-fontconfig >/dev/null
+    mingw-w64-ucrt-x86_64-fontconfig \
+    mingw-w64-ucrt-x86_64-ffmpeg >/dev/null
 fi
 
 # The toolchain whose binaries we take. A runner may carry more than one; ucrt is the one
@@ -41,7 +42,7 @@ prefix=${MINGW_PREFIX:-/ucrt64}
 
 mkdir -p "$out"
 
-for prog in pdftotext pdftoppm; do
+for prog in pdftotext pdftoppm ffmpeg; do
   src="$prefix/bin/$prog.exe"
   [ -f "$src" ] || {
     echo "tools-windows: $prog is not installed ($src)" >&2

@@ -29,7 +29,7 @@ import (
 // single-threaded scan would have produced.
 const segmentSearchSelect = `
 	SELECT g.id, g.source_id, g.doc_id, g.kind, g.ordinal,
-	       g.page, g.page_end, g.char_start, g.char_end,
+	       g.page, g.page_end, g.char_start, g.char_end, g.t0, g.t1,
 	       a.id, a.path, a.mime, a.bytes,
 	       g.embedding, g.dim, g.model, s.name, g.rowid
 	  FROM segments g
@@ -439,6 +439,7 @@ func scanScored(rows *sql.Rows, vector []float32, qn float64) (scored, error) {
 		&cand.hit.Segment.Ordinal,
 		&cand.hit.Segment.Span.Page, &cand.hit.Segment.Span.PageEnd,
 		&cand.hit.Segment.Span.CharStart, &cand.hit.Segment.Span.CharEnd,
+		&cand.hit.Segment.Span.T0, &cand.hit.Segment.Span.T1,
 		&assetID, &path, &mime, &size,
 		&blob, &dim, &model, &source, &cand.rowid); err != nil {
 		return scored{}, err

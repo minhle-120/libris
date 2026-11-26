@@ -163,6 +163,12 @@ type Config struct {
 	ChunkWords       int  `key:"chunkWords" group:"retrieval" label:"Chunk size" help:"Target words per text chunk." min:"10" max:"1000" unit:"words"`
 	ChunkOverlap     int  `key:"chunkOverlap" group:"retrieval" label:"Chunk overlap" help:"Words carried into the next chunk." min:"0" max:"999" unit:"words"`
 
+	// A recording is cut into clips the way text is cut into chunks, and the same two
+	// questions apply: how big, and how much the neighbours share. The units differ
+	// because a clip has no words to count.
+	AudioClipSeconds int `key:"audioClipSeconds" group:"retrieval" label:"Recording clip length" help:"Seconds of a recording per clip. Longer is worse: a clip's vector is the average of everything in it, so one sentence in a long clip is diluted by the rest of it. Measured on real recordings, 15 s is the shortest window that still holds a whole sentence, and it beat 30 s and 60 s on every query." min:"5" max:"60" unit:"seconds"`
+	AudioClipOverlap int `key:"audioClipOverlap" group:"retrieval" label:"Recording clip overlap" help:"Percent of each clip repeated at the start of the next, so a sentence that straddles a boundary survives whole in at least one clip." min:"0" max:"95" unit:"%"`
+
 	// ── ingest ───────────────────────────────────────────────────
 	PDFMode   PDFMode `key:"pdfPageImages" group:"ingest" label:"PDF embeddings" help:"A PDF becomes two documents: page text and page rasters." kind:"enum" enum:"pdfModes"`
 	PDFDPI    int     `key:"pdfDPI" group:"ingest" label:"PDF raster DPI" help:"Resolution for page images. Only affects how legible a cited page looks: the embedding cost per image is fixed." min:"50" max:"600" unit:"dpi"`
@@ -206,6 +212,8 @@ func Default() Config {
 		HistoryMessages:  8,
 		ChunkWords:       100,
 		ChunkOverlap:     50,
+		AudioClipSeconds: 15,
+		AudioClipOverlap: 50,
 
 		PDFMode:   PDFModeAlways,
 		PDFDPI:    110,

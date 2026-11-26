@@ -29,7 +29,7 @@ trailer << /Root 1 0 R /Size 6 >>
 // not installed, so the unit suite stays hermetic.
 func TestPDFEndToEnd(t *testing.T) {
 	cfg := config.Default()
-	p, err := New(cfg, DirSink{Root: t.TempDir()}, tools.FromPath().PDF())
+	p, err := New(cfg, DirSink{Root: t.TempDir()}, tools.FromPath().PDF(), tools.FromPath().Audio())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestPDFDPIControlsRasterSize(t *testing.T) {
 		cfg := config.Default()
 		cfg.PDFDPI = dpi
 
-		p, err := New(cfg, DirSink{Root: t.TempDir()}, tools.FromPath().PDF())
+		p, err := New(cfg, DirSink{Root: t.TempDir()}, tools.FromPath().PDF(), tools.FromPath().Audio())
 		if err != nil {
 			t.Fatal(err)
 		}

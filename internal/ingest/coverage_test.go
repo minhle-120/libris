@@ -23,16 +23,34 @@ func TestSplitTextUnicodeOnlySpace(t *testing.T) {
 	}
 }
 
-// A recording is refused by its bytes rather than by its extension: the
-// extension-wins rule that makes a .md text whatever its first bytes look like
-// would otherwise index a WAV as mojibake text. ADR 0003 took recordings out as
-// an input modality; this is the door.
-func TestDetectRefusesAudio(t *testing.T) {
-	wav := append([]byte("RIFF\x24\x00\x00\x00WAVEfmt "), make([]byte, 64)...)
-	for _, name := range []string{"blob", "notes.md", "speech.txt"} {
-		if got := Detect(name, wav); got != domain.SourceUnsupported {
-			t.Errorf("Detect(%q, wav) = %q, want unsupported", name, got)
+// A recording is claimed by its bytes rather than released to its extension: the
+// extension-wins rule that makes a .md text whatever its first bytes look like would
+// otherwise index a WAV as mojibake text. These are the containers net/http's sniffing
+// does not answer for — the ones where a WAV named notes.md used to get through the door.
+func TestDetectClaimsAudioByBytes(t *testing.T) {
+	cases := map[string][]byte{
+		"flac": []byte("fLaC\x00\x00\x00" + string(make([]byte, 64))),
+		"m4a":  append([]byte{0, 0, 0, 32, 'f', 't', 'y', 'p', 'M', '4', 'A', ' '}, make([]byte, 64)...),
+		"mp3":  append([]byte{0xFF, 0xFB, 0x90, 0x64}, make([]byte, 64)...),
+		"aiff": append([]byte("FORM\x24\x00\x00\x00AIFF"), make([]byte, 64)...),
+	}
+	for format, head := range cases {
+		if got := Detect("notes.md", head); got != domain.SourceAudio {
+			t.Errorf("%s named notes.md: Detect = %q, want audio", format, got)
 		}
+	}
+}
+
+// Video is not an input. The box that opens an M4A opens an MP4 too, so a brand that names
+// nothing in particular is refused even beside an extension that asks for audio: what the
+// bytes say wins, and a file that says "video" gets no clips cut from it.
+func TestDetectRefusesVideoBrand(t *testing.T) {
+	head := append([]byte{0, 0, 0, 32, 'f', 't', 'y', 'p', 'i', 's', 'o', 'm'}, make([]byte, 64)...)
+	if got := Detect("clip.m4a", head); got != domain.SourceAudio {
+		t.Errorf("an .m4a whose container does not object: got %q, want audio", got)
+	}
+	if got := Detect("clip.mp4", head); got != domain.SourceUnsupported {
+		t.Errorf("Detect(clip.mp4) = %q, want unsupported", got)
 	}
 }
 
@@ -117,7 +135,7 @@ func TestProcessUnreadableFile(t *testing.T) {
 		t.Skip("root can read anything")
 	}
 
-	p, _ := New(testConfig(), DirSink{Root: t.TempDir()}, hostPDF(t))
+	p, _ := New(testConfig(), DirSink{Root: t.TempDir()}, hostPDF(t), hostAudio(t))
 	if _, err := p.Process(context.Background(), path); err == nil {
 		t.Fatal("expected permission error")
 	}
@@ -125,7 +143,7 @@ func TestProcessUnreadableFile(t *testing.T) {
 
 func TestProcessCorruptImage(t *testing.T) {
 	path := writeTemp(t, "broken.png", "definitely not a png")
-	p, _ := New(testConfig(), DirSink{Root: t.TempDir()}, hostPDF(t))
+	p, _ := New(testConfig(), DirSink{Root: t.TempDir()}, hostPDF(t), hostAudio(t))
 
 	res, err := p.Process(context.Background(), path)
 	if err != nil {

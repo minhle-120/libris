@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -95,6 +96,26 @@ func imageHit(docID string, ordinal, page int) domain.Hit {
 			Span:    domain.Provenance{Page: page},
 		},
 		SourceName: strings.TrimSuffix(docID, "#pages") + ".pdf",
+	}
+}
+
+// clipHit is a window of a recording: no text, a WAV, and a span that is the whole of
+// where it came from.
+func clipHit(docID string, ordinal int, t0, t1 float64) domain.Hit {
+	return domain.Hit{
+		Segment: domain.Segment{
+			ID:      docID + ":" + pad(ordinal),
+			DocID:   docID,
+			Kind:    domain.KindAudio,
+			Ordinal: ordinal,
+			Asset: &domain.Asset{
+				ID:   docID + "/clip-" + pad(ordinal+1) + ".wav",
+				Path: "/assets/" + docID + "/clip-" + pad(ordinal+1) + ".wav",
+				MIME: "audio/wav",
+			},
+			Span: domain.Provenance{T0: t0, T1: t1},
+		},
+		SourceName: docID + ".m4a",
 	}
 }
 
@@ -377,6 +398,92 @@ func TestRenderNamesThePageForAnImage(t *testing.T) {
 	}
 	if parts[1].Type != "image_url" || !strings.Contains(parts[1].ImageURL.URL, base64.StdEncoding.EncodeToString([]byte("PNG"))) {
 		t.Errorf("second part is %+v, want the raster itself", parts[1])
+	}
+}
+
+// A clip is labelled with the window it came from, in the same shape the player shows.
+// A clip has no words, so the span is the only thing about it the model can weigh against
+// the question — and it is the only thing pairing a name to a sound that the server keeps,
+// which is why it sits in the text directly above its own media part.
+func TestRenderNamesTheWindowForAClip(t *testing.T) {
+	clip := clipHit("rec1", 3, 45, 60)
+	assets := &fakeAssets{files: map[string][]byte{clip.Segment.Asset.Path: []byte("RIFF....")}}
+	reg := NewRegistry()
+	reg.Register(clip)
+
+	parts, err := newRetriever(&fakeCorpus{}, &fakeEmbed{}, assets).Render(reg.All())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parts) != 2 {
+		t.Fatalf("%d parts, want a label then the sound: %+v", len(parts), parts)
+	}
+	if want := "[[Chunk 1]] rec1.m4a — audio 0:45–1:00\n"; parts[0].Text != want {
+		t.Errorf("label = %q, want %q", parts[0].Text, want)
+	}
+	if parts[1].Type != llm.PartInputAudio || !strings.Contains(parts[1].InputAudio.Data, "audio/wav;base64,") {
+		t.Errorf("second part is %+v, want the clip as audio", parts[1])
+	}
+}
+
+// A recording is a hundred and fifty seconds of windows, and top-k does not know that.
+// The clips that arrive are the ones retrieval ranked highest, and the rest are said
+// for out loud rather than left out quietly: a prompt that shows three of five clips and
+// mentions nothing of the other two invites an answer that has heard the whole thing.
+func TestRenderPlaysSoManyClipsAndSaysSoForTheRest(t *testing.T) {
+	const n = clipsPerPrompt + 2
+	assets := &fakeAssets{files: map[string][]byte{}}
+	reg := NewRegistry()
+	for i := range n {
+		hit := clipHit("rec1", i, float64(i)*7.5, float64(i)*7.5+15)
+		assets.files[hit.Segment.Asset.Path] = []byte("RIFF")
+		reg.Register(hit)
+	}
+
+	parts, err := newRetriever(&fakeCorpus{}, &fakeEmbed{}, assets).Render(reg.All())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var sounds int
+	for _, p := range parts {
+		if p.Type == llm.PartInputAudio {
+			sounds++
+		}
+	}
+	if sounds != clipsPerPrompt {
+		t.Errorf("%d clips played, want the budget of %d", sounds, clipsPerPrompt)
+	}
+	body := partsText(parts)
+	for _, e := range reg.All() {
+		label := "[[Chunk " + strconv.Itoa(e.Index) + "]]"
+		if !strings.Contains(body, label) {
+			t.Errorf("%s vanished from the prompt entirely", label)
+		}
+	}
+	if got := strings.Count(body, "is not played to you this turn"); got != n-clipsPerPrompt {
+		t.Errorf("%d clips marked as not played, want %d", got, n-clipsPerPrompt)
+	}
+}
+
+// The shape a clip's window takes in a label, in the UI's m:ss and h:mm:ss. A citation
+// and a player that disagree about the same number is a reader trusting the wrong one.
+func TestClock(t *testing.T) {
+	for _, c := range []struct {
+		seconds float64
+		want    string
+	}{
+		{0, "0:00"},
+		{9.4, "0:09"},
+		{59.6, "1:00"},
+		{75, "1:15"},
+		{600, "10:00"},
+		{3599.5, "1:00:00"},
+		{3723, "1:02:03"},
+	} {
+		if got := clock(c.seconds); got != c.want {
+			t.Errorf("clock(%g) = %q, want %q", c.seconds, got, c.want)
+		}
 	}
 }
 

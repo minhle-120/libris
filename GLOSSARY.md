@@ -29,9 +29,19 @@ The `tools` folder that travels beside the libris executable, holding the progra
 _Avoid_: Dependencies, runtime, vendored binaries
 
 **Segment**:
-One embeddable piece of a source — a chunk of page text, or one page's image. The unit a
-vector is stored against and the unit a citation names.
+One embeddable piece of a source — a stretch of page text, one page's image, or one clip of a
+recording. The unit a vector is stored against and the unit a citation names.
 _Avoid_: Chunk, slice, block
+
+**Recording**:
+A source whose content is sound rather than pages. It is stored as one segment per clip window and
+answered from by ear: nothing writes out what was said.
+_Avoid_: Audio file, voice memo, transcript
+
+**Clip**:
+The sound one audio segment covers — a window of a recording, written at ingest and playable. The
+segment is what retrieval finds; the clip is what a person hears.
+_Avoid_: Slice, snippet, excerpt
 
 **Citation**:
 A frozen reference to a segment as it was when an answer was given, kept so history still

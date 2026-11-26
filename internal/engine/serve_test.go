@@ -37,6 +37,41 @@ func TestPresetWritesNoSlotCount(t *testing.T) {
 	}
 }
 
+// A single media input has to fit inside one ubatch, and llama.cpp's default of 512 fits
+// neither of the two libris sends. The server does not fail loudly about it: an image is
+// silently shrunk to 256 tokens of resolution, and audio past about twenty seconds is refused
+// outright. So this number is the difference between a page raster reaching the model at the
+// detail it was rendered at and reaching it at a quarter of that.
+//
+// It belongs in the preset rather than in a request because libris rewrites this file at every
+// start: a machine that has been running libris since before media worked picks the fix up the
+// next time it starts, with nothing for anybody to change.
+func TestPresetWritesTheUBatchThatHoldsMedia(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "libris.ini")
+	if err := engine.Preset(path, "", []engine.Model{
+		{Alias: engine.AliasChat, Kind: engine.KindChat, Path: "/m/chat.gguf"},
+		{Alias: engine.AliasEmbed, Kind: engine.KindEmbed, Path: "/m/emb.gguf"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(raw)
+
+	// Global: one line, above the first model's section. A per-section ubatch would be a
+	// number for a model that libris does not know about yet, and the two sections would
+	// drift.
+	if n := strings.Count(got, "ubatch-size"); n != 1 {
+		t.Errorf("ubatch-size appears %d times, want once in the globals:\n%s", n, got)
+	}
+	globals, _, _ := strings.Cut(got, "\n[chat]")
+	if !strings.Contains(globals, "ubatch-size = 4096") {
+		t.Errorf("the globals do not say what a media input needs:\n%s", globals)
+	}
+}
+
 func TestPresetWritesOneSectionPerModel(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "libris.ini")
 	err := engine.Preset(path, "", []engine.Model{

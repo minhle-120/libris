@@ -64,6 +64,12 @@ func PresetPath(dataDir, id string) string {
 // arguments that fit the memory it finds rather than libris claiming numbers it cannot
 // measure — which is also why the device report stops at reporting.
 //
+// The ubatch is written because the default is too small for media, and this is the one
+// global in here that fixes something that was already broken: at llama.cpp's 512 a page
+// raster is shrunk to 256 tokens of resolution with a log line saying so, and a clip over
+// about twenty seconds is refused outright. See serve.go, where the number and both of those
+// messages from the pinned build live together.
+//
 // Nothing is written for slots, and the absence is the choice. llama-server's default for a
 // model instance is auto, and auto means 4 slots *and* one KV buffer shared across them
 // ("n_parallel is set to auto, using n_parallel = 4 and kv_unified = true", tools/server/
@@ -129,6 +135,7 @@ func Preset(path string, device string, models []Model) error {
 	b.WriteString("no-warmup = true\n")
 	b.WriteString("backend-sampling = true\n")
 	b.WriteString("fit = on\n")
+	fmt.Fprintf(&b, "ubatch-size = %d\n", ubatchSize)
 	b.WriteString("cache-type-k = q8_0\n")
 	b.WriteString("cache-type-v = q8_0\n")
 	fmt.Fprintf(&b, "cache-ram = %d\n", chatCacheRAMMiB)

@@ -28,6 +28,19 @@ export function formatAge(unixSeconds: number): string {
 }
 
 /** Page provenance, including the case where a chunk straddles a page break. */
+/**
+ * A clip of a recording is a range of seconds, shown as m:ss — the same shape the player
+ * above it shows, so the label under a clip and the time inside it agree.
+ */
+export function formatSpan(t0: number, t1?: number): string {
+  const at = (s: number) => {
+    const m = Math.floor(s / 60);
+    const rest = Math.round(s % 60);
+    return `${m}:${String(rest).padStart(2, "0")}`;
+  };
+  return t1 ? `${at(t0)}\u2013${at(t1)}` : at(t0);
+}
+
 export function formatPages(page?: number, pageEnd?: number): string {
   if (!page) return "";
   return pageEnd && pageEnd !== page
@@ -44,7 +57,9 @@ export function formatPages(page?: number, pageEnd?: number): string {
  * The character range a text chunk cites is left out on purpose — it is what the
  * viewer highlights when the citation is opened, not what a label says about it.
  */
-export function citationLocator(c: Pick<Citation, "span">): string {
+export function citationLocator(c: Pick<Citation, "kind" | "span">): string {
+  if (c.kind === "audio" && (c.span.t0 || c.span.t1))
+    return formatSpan(c.span.t0!, c.span.t1);
   return formatPages(c.span.page, c.span.page_end);
 }
 
@@ -53,7 +68,15 @@ export function citationLocator(c: Pick<Citation, "span">): string {
  * row above an answer and the button inside its sentences come through here, so the two
  * cannot describe the same citation differently.
  */
-export function chipLabel(c: Pick<Citation, "chunk" | "span">): string {
+/**
+ * Which glyph a citation carries. A clip of a recording gets the waveform, so the row above an
+ * answer says what kind of thing it points at before anyone opens it.
+ */
+export function citationIcon(kind: Citation["kind"]): "image" | "audio" | "file" {
+  return kind === "image" ? "image" : kind === "audio" ? "audio" : "file";
+}
+
+export function chipLabel(c: Pick<Citation, "chunk" | "kind" | "span">): string {
   const where = citationLocator(c);
   return where ? `Chunk ${c.chunk} · ${where}` : `Chunk ${c.chunk}`;
 }

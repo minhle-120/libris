@@ -29,9 +29,9 @@ import (
 // lets a server that cannot take it answer with its own error — the honest outcome
 // for a server libris does not manage, where /props may not exist at all.
 //
-// Audio and Video are the engine's account of itself, not a modality libris sends:
-// image is the only kind with a wire shape (see MediaPart), and a recording is still
-// not an input.
+// Audio is a modality libris sends and asks about: a clip reaches the answering model
+// only when the server says its own projector decodes sound. Video is the engine's
+// account of itself and nothing else — there is still no wire shape for it.
 type Caps struct {
 	// Model is the alias the server reports itself under, so an error about a
 	// missing modality can name the thing to go and change.
@@ -52,6 +52,8 @@ func (c *Caps) Allows(kind MediaKind) bool {
 	switch kind {
 	case MediaImage:
 		return c.Vision
+	case MediaAudio:
+		return c.Audio
 	}
 	return false
 }

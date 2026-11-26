@@ -8,7 +8,10 @@
 //   - a page raster goes as a base64 data URL, which works against a plain
 //     llama-server, where a file:// path would demand --media-path;
 //   - a page raster with a caption sends image and text in one content object, so
-//     the vector covers what is on the page and what was said about it.
+//     the vector covers what is on the page and what was said about it;
+//   - a clip of a recording goes the same way, as audio, and alone in its request
+//     (see batches). All three forms are unprefixed: the card's steering prefixes are
+//     for text inputs.
 //
 // The server normalises every vector (Euclidean norm), so nothing here does.
 package index
@@ -33,6 +36,36 @@ import (
 // whole page rasters, so a far larger batch is a large body and a long stall, and eight stays
 // small enough that a busy server never has to refuse a request outright.
 const batchLimit = 8
+
+// batch is a run of segments that travel in one request, as a half-open range of the input.
+type batch struct{ start, end int }
+
+// batches cuts the work into requests. Two rules decide the cuts.
+//
+//   - at most batchLimit segments in one request — see batchLimit for why eight;
+//   - never more than one audio clip in a request. A 15 s clip is ~480 KB of PCM and ~640 KB
+//     base64, so a full batch of clips is a ten-megabyte body for one round trip, and one
+//     clip the server dislikes would fail the seven others in the same request. Text and
+//     page rasters keep batching together, because the thing that produces clips — an hour
+//     of a recording — produces hundreds of them.
+func batches(segments []domain.Segment) []batch {
+	var out []batch
+	for start := 0; start < len(segments); {
+		if segments[start].Kind == domain.KindAudio {
+			out = append(out, batch{start, start + 1})
+			start++
+			continue
+		}
+		end := start + 1
+		for end < len(segments) && end-start < batchLimit &&
+			segments[end].Kind != domain.KindAudio {
+			end++
+		}
+		out = append(out, batch{start, end})
+		start = end
+	}
+	return out
+}
 
 // MaxAssetBytes refuses to inline a media file this large. It is not a tuning
 // knob: past this the request is the problem, not the model. It is exported
@@ -101,9 +134,8 @@ func (e *Embedder) Embed(ctx context.Context, title string, segments []domain.Se
 	}
 
 	out := make([]domain.Embedding, 0, len(segments))
-	for start := 0; start < len(segments); start += batchLimit {
-		end := min(start+batchLimit, len(segments))
-		batch := segments[start:end]
+	for _, b := range batches(segments) {
+		batch := segments[b.start:b.end]
 
 		inputs := make([]llm.EmbedInput, len(batch))
 		for i, seg := range batch {
@@ -123,7 +155,7 @@ func (e *Embedder) Embed(ctx context.Context, title string, segments []domain.Se
 			// Name the server: this string becomes the detail a user reads in the
 			// UI, and "connection refused" alone does not say which of three URLs.
 			return nil, fmt.Errorf("index: embedding %d-%d of %d through %s: %w",
-				start+1, end, len(segments), e.baseURL, err)
+				b.start+1, b.end, len(segments), e.baseURL, err)
 		}
 		if len(resp.Data) != len(batch) {
 			return nil, fmt.Errorf("index: %s returned %d vectors for %d segments",
@@ -234,6 +266,27 @@ func rowFor(data []llm.Embedding, n int) []int {
 	return row
 }
 
+// MediaForm is how a segment's bytes reach a model: the modality to name them by on the
+// wire, and the MIME to claim when the asset itself does not say. It is exported because
+// both halves of the path ask the same question — the embedder putting a vector on a page
+// or a clip, and retrieval handing the same bytes to the answering model — and a kind that
+// embeds but cannot be displayed, or the other way round, is a bug nobody would see until
+// a turn failed.
+//
+// A media kind llm has no part type for is refused rather than guessed at, which is the
+// same rule llm.MediaPart applies one level down.
+func MediaForm(kind domain.Kind) (media llm.MediaKind, mime string, ok bool) {
+	switch kind {
+	case domain.KindImage:
+		// What a page raster renders to; see ingest's PDF stage.
+		return llm.MediaImage, "image/png", true
+	case domain.KindAudio:
+		// The one shape ingest ever writes: 16 kHz mono PCM. See ingest.Audio.
+		return llm.MediaAudio, "audio/wav", true
+	}
+	return "", "", false
+}
+
 // inputFor decides the wire form of one segment.
 func (e *Embedder) inputFor(title string, seg domain.Segment) (llm.EmbedInput, error) {
 	switch seg.Kind {
@@ -243,7 +296,7 @@ func (e *Embedder) inputFor(title string, seg domain.Segment) (llm.EmbedInput, e
 		}
 		return llm.TextInput(DocumentPrompt(title, seg.Text)), nil
 
-	case domain.KindImage:
+	case domain.KindImage, domain.KindAudio:
 		if seg.Asset == nil {
 			return llm.EmbedInput{}, fmt.Errorf("%s segment has no asset", seg.Kind)
 		}
@@ -255,18 +308,21 @@ func (e *Embedder) inputFor(title string, seg domain.Segment) (llm.EmbedInput, e
 			return llm.EmbedInput{}, fmt.Errorf("asset %s is %d bytes, over the %d byte inline limit",
 				seg.Asset.ID, len(raw), MaxAssetBytes)
 		}
-		encoded := base64.StdEncoding.EncodeToString(raw)
 
-		parts := make([]llm.ContentPart, 0, 2)
+		wire, mimeDefault, ok := MediaForm(seg.Kind)
+		if !ok {
+			return llm.EmbedInput{}, fmt.Errorf("no wire shape for segment kind %q", seg.Kind)
+		}
 		mime := seg.Asset.MIME
 		if mime == "" {
-			mime = "image/png"
+			mime = mimeDefault
 		}
-		media, err := llm.MediaPart(llm.MediaImage, mime, encoded)
+		media, err := llm.MediaPart(wire, mime, base64.StdEncoding.EncodeToString(raw))
 		if err != nil {
 			return llm.EmbedInput{}, err
 		}
-		parts = append(parts, media)
+
+		parts := []llm.ContentPart{media}
 		// A rendition travels with the media it describes, in the same content
 		// object, so one vector covers both — and it stays unprefixed. The card's
 		// prefixes are for text inputs; "pass images, video, and audio without any

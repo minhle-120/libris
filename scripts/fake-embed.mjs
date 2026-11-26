@@ -210,6 +210,7 @@ export class EmbedServer {
             propsNamed: this.propsAsked.named,
             propsUnnamed: this.propsAsked.unnamed,
             ...this.mediaSeen(),
+            ...this.mediaInputs(),
             ...this.thinkingSeen()
           }));
           return;
@@ -304,6 +305,29 @@ export class EmbedServer {
     const last = (withTools) =>
       this.chatRequests.filter((r) => Boolean(r.tools?.length) === withTools).at(-1);
     return { lastResearchMedia: scan(last(true)), lastAnswerMedia: scan(last(false)) };
+  }
+
+  /**
+   * How many embedding inputs arrived as a modality rather than as words, by part type —
+   * `imageURL` for a page raster, `inputAudio` for a clip. It is the embedding half of the
+   * same fact mediaSeen() asserts about a chat call: a recording that reaches the embedder
+   * as a file path, or as a transcript somebody wrote, still gets a vector of the right
+   * length, and every check that counts vectors passes while the thing being searched for is
+   * words nobody spoke.
+   */
+  mediaInputs() {
+    const byType = {};
+    for (const request of this.requests) {
+      for (const entry of request.input ?? []) {
+        if (typeof entry === 'string') continue;
+        for (const part of entry.content ?? []) {
+          if (part?.type && part.type !== 'text') {
+            byType[part.type] = (byType[part.type] ?? 0) + 1;
+          }
+        }
+      }
+    }
+    return { inputsByType: byType };
   }
 
   /**

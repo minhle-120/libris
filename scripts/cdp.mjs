@@ -260,3 +260,8 @@ class UI {
 // poppler reads it without an xref table, and it is 702 bytes.
 export const UPLOAD_FIXTURE =
   process.env.UPLOAD_FIXTURE ?? join(dirname(fileURLToPath(import.meta.url)), 'testdata', 'two-page.pdf');
+
+// A one-second recording, and the smallest thing that is really one: a WAV header and a
+// second of samples. Harnesses that only need a file ingest will call a recording use this.
+export const AUDIO_FIXTURE =
+  process.env.AUDIO_FIXTURE ?? join(dirname(fileURLToPath(import.meta.url)), 'testdata', 'one-second.wav');

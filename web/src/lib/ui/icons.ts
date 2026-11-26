@@ -14,6 +14,7 @@ export type IconName =
   | 'settings'
   | 'file'
   | 'image'
+  | 'audio'
   | 'trash'
   | 'x'
   | 'alert'
@@ -43,6 +44,9 @@ export const ICON_PATHS: Record<IconName, string> = {
   settings:
     'M8 10.2a2.2 2.2 0 1 0 0-4.4 2.2 2.2 0 0 0 0 4.4ZM8 1.8l1.1 1.6h2l.4 1.9 1.6.9-.8 1.9.8 1.9-1.6.9-.4 1.9h-2L8 14.2l-1.1-1.5h-2l-.4-1.9-1.6-.9.8-1.9-.8-1.9 1.6-.9.4-1.9h2Z',
   file: 'M3.5 2h6l3 3v9h-9ZM9.5 2v3h3',
+  // A recording is a waveform, not a musical note: what a reader is looking for in the list is
+  // the thing they spoke, and a note says "song".
+  audio: 'M2 6.5v3M5 4.5v7M8 2.5v11M11 5.5v5M14 7.2v1.6',
   image: 'M2.5 3.5h11v9h-11ZM2.5 10l3-3 2.5 2.5L11 6l2.5 3M5.8 6.2a.8.8 0 1 0 0-1.6.8.8 0 0 0 0 1.6Z',
   trash: 'M3.5 4.5h9M6.5 4.5V3h3v1.5M5 4.5l.5 9h5l.5-9M7 7v4M9 7v4',
   x: 'M4 4l8 8M12 4l-8 8',

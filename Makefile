@@ -49,11 +49,15 @@ e2e: build
 # answer path.
 UI_PORT ?= 8099
 UI_EMBED_PORT ?= 8124
-# The three harnesses in the order they run, each on its own CDP port. One app and one
-# fake for all of them, because that is what a running Libris looks like. UI_HARNESS
-# narrows it to one harness while developing — the whole suite is about a minute, so
-# this is about noise and signal, not waiting.
-UI_HARNESS ?= ui-upload ui-drop ui-ask ui-nav
+# The harnesses in the order they run, each on its own CDP port. One app and one fake
+# for all of them, because that is what a running Libris looks like. UI_HARNESS narrows
+# it to one harness while developing — the whole suite is about a minute, so this is
+# about noise and signal, not waiting.
+#
+# ui-clips last and on purpose: it uploads a recording, which is the only thing in the
+# suite that runs ffmpeg, so a machine without it fails one named harness rather than
+# blurring a check on something else's row.
+UI_HARNESS ?= ui-upload ui-drop ui-ask ui-nav ui-clips
 ui: build
 	@for h in $(UI_HARNESS); do test -f scripts/$$h.mjs || { echo "make ui: no harness named $$h" >&2; exit 2; }; done
 # -open=false: a harness is headless by definition, and on a machine that happens to

@@ -113,11 +113,13 @@ func TestDetect(t *testing.T) {
 		// Magic beats a misleading extension: a PNG named .txt must not be
 		// read as text. The reverse does not apply — a .md is text whatever
 		// the sniffer makes of its first bytes — except for recordings, which
-		// are refused by their bytes whatever they are called (ADR 0003).
+		// are claimed by their bytes whatever they are called — a WAV named
+		// notes.md is a recording, and text is what it must never become.
 		{"mislabelled.txt", "\x89PNG\r\n\x1a\n", "image"},
-		{"speech.txt", "RIFF\x00\x00\x00\x00WAVEfmt ", "unsupported"},
-		{"clip.wav", "RIFF\x00\x00\x00\x00WAVEfmt ", "unsupported"},
-		{"talk.mp3", "ID3\x03\x00\x00\x00\x00\x00", "unsupported"},
+		{"speech.txt", "RIFF\x00\x00\x00\x00WAVEfmt ", "audio"},
+		{"clip.wav", "RIFF\x00\x00\x00\x00WAVEfmt ", "audio"},
+		{"talk.mp3", "ID3\x03\x00\x00\x00\x00\x00", "audio"},
+		{"notes.md", "fLaC\x00\x00\x00", "audio"},
 		{"renamed.ai", "%PDF-1.7", "pdf"},
 		{"notes.md", "# heading\n", "text"},
 	}

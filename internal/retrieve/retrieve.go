@@ -228,6 +228,17 @@ func Order(evidence []Evidence) []Evidence {
 // same gap the chunks have from each other.
 const ChunkSeparator = "\n\n"
 
+// clipsPerPrompt bounds how much of a recording one model call is given, counted in clips.
+//
+// A clip costs 25.4 prompt tokens a second, and the server spends about 0.14 s decoding each
+// 15-second one, so ten clips — which is exactly what a top-k of 10 will hand back for a
+// notebook of recordings — is four thousand tokens of audio and a second and a half spent
+// before the model has read a word. What gets dropped is the tail of retrieval's own ranking,
+// so it is the least likely to have been quoted anyway. Its label stays in the prompt: the
+// model learns the recording goes on, rather than concluding the clip it was shown is all
+// there is.
+const clipsPerPrompt = 3
+
 // Render turns evidence into the content a model is shown. Both consumers are built
 // here — the research turn's tool result and the answer's knowledge block — and that
 // is the point: the model deciding what to cite sees what the model writing the
@@ -259,6 +270,7 @@ func (r *Retriever) Render(evidence []Evidence) ([]llm.ContentPart, error) {
 	}
 
 	parts := make([]llm.ContentPart, 0, 2*len(evidence))
+	played := 0
 	for i, e := range evidence {
 		if i > 0 {
 			parts = append(parts, llm.TextPart(ChunkSeparator))
@@ -267,28 +279,14 @@ func (r *Retriever) Render(evidence []Evidence) ([]llm.ContentPart, error) {
 		case e.Segment.Kind == domain.KindText || e.Segment.Asset == nil:
 			parts = append(parts, llm.TextPart(label(e)+"\n"+e.Segment.Text))
 		default:
-			if r.assets == nil {
-				parts = append(parts, llm.TextPart(label(e)+
-					"\n("+string(e.Segment.Kind)+" itself is not available to this model)"))
-				continue
-			}
-			kind, ok := wireKind(e.Segment.Kind)
-			if !ok {
-				return nil, fmt.Errorf("retrieve: no wire shape for segment kind %q", e.Segment.Kind)
-			}
-			raw, err := r.assets.Read(*e.Segment.Asset)
+			made, given, err := r.mediaPart(e, played)
 			if err != nil {
 				return nil, err
 			}
-			mime := e.Segment.Asset.MIME
-			if mime == "" {
-				mime = "image/png" // what a page raster renders to; see ingest's PDF stage
+			if given && e.Segment.Kind == domain.KindAudio {
+				played++
 			}
-			media, err := llm.MediaPart(kind, mime, base64.StdEncoding.EncodeToString(raw))
-			if err != nil {
-				return nil, err
-			}
-			parts = append(parts, llm.TextPart(label(e)+"\n"), media)
+			parts = append(parts, made...)
 		}
 	}
 	return parts, nil
@@ -310,13 +308,13 @@ func (r *Retriever) canShow(evidence []Evidence) error {
 		return nil // nothing here would have carried pixels anyway
 	}
 	for _, e := range evidence {
-		kind, ok := wireKind(e.Segment.Kind)
+		kind, _, ok := index.MediaForm(e.Segment.Kind)
 		if !ok || r.caps.Allows(kind) {
 			continue
 		}
 		n := 0
 		for _, o := range evidence {
-			if k, ok := wireKind(o.Segment.Kind); ok && k == kind && o.Segment.Asset != nil {
+			if k, _, ok := index.MediaForm(o.Segment.Kind); ok && k == kind && o.Segment.Asset != nil {
 				n++
 			}
 		}
@@ -325,24 +323,52 @@ func (r *Retriever) canShow(evidence []Evidence) error {
 	return nil
 }
 
-// wireKind maps a segment's modality onto the one the wire speaks. A kind domain knows
-// that llm has no part type for is refused where it would be rendered, never turned
-// into pixels under a guessed type.
-func wireKind(k domain.Kind) (llm.MediaKind, bool) {
-	if !k.Media() {
-		return "", false
+// mediaPart is one evidence row's media, or the sentence explaining why the model is not
+// getting it.
+//
+// It takes how many clips have already gone out, and answers whether this one did, because
+// the clip budget is a property of the rendered set and this is the only place that knows
+// which set a row is being rendered into.
+func (r *Retriever) mediaPart(e Evidence, played int) (parts []llm.ContentPart, given bool, err error) {
+	if r.assets == nil {
+		return []llm.ContentPart{llm.TextPart(label(e) +
+			"\n(" + string(e.Segment.Kind) + " itself is not available to this model)")}, false, nil
 	}
-	switch k {
-	case domain.KindImage:
-		return llm.MediaImage, true
+	kind, mimeDefault, ok := index.MediaForm(e.Segment.Kind)
+	if !ok {
+		return nil, false, fmt.Errorf("retrieve: no wire shape for segment kind %q", e.Segment.Kind)
 	}
-	return "", false
+	if kind == llm.MediaAudio && played >= clipsPerPrompt {
+		return []llm.ContentPart{llm.TextPart(label(e) + fmt.Sprintf(
+			"\n(%s is not played to you this turn; this prompt already holds %d of them)",
+			string(e.Segment.Kind), clipsPerPrompt))}, false, nil
+	}
+
+	raw, err := r.assets.Read(*e.Segment.Asset)
+	if err != nil {
+		return nil, false, err
+	}
+	mime := e.Segment.Asset.MIME
+	if mime == "" {
+		mime = mimeDefault
+	}
+	media, err := llm.MediaPart(kind, mime, base64.StdEncoding.EncodeToString(raw))
+	if err != nil {
+		return nil, false, err
+	}
+	return []llm.ContentPart{llm.TextPart(label(e) + "\n"), media}, true, nil
 }
 
 // label is the citation handle plus, for media, what it is: a bare [[Chunk N]] over an
 // image gives the model nothing to reason about when it decides whether this evidence
 // answers the question — the pixels are the content, and the only thing a label can
 // point at is where they came from.
+//
+// A clip's label carries its window in the recording for the same reason, and a second
+// one: a clip has no words, so the span is the only thing about it that can match the
+// question. It also has to sit in the text directly above its own media part, because
+// position is the only pairing the server keeps between a name and a payload — measured
+// with four clips and four names in one text blob, which mis-assigned one of them.
 func label(e Evidence) string {
 	if e.Segment.Kind == domain.KindText {
 		return fmt.Sprintf("[[Chunk %d]]", e.Index)
@@ -351,5 +377,20 @@ func label(e Evidence) string {
 	if e.Segment.Span.Page > 0 {
 		page = fmt.Sprintf(" page %d", e.Segment.Span.Page)
 	}
-	return fmt.Sprintf("[[Chunk %d]] %s%s — %s", e.Index, e.SourceName, page, e.Segment.Kind)
+	span := ""
+	if e.Segment.Kind == domain.KindAudio {
+		span = " " + clock(e.Segment.Span.T0) + "–" + clock(e.Segment.Span.T1)
+	}
+	return fmt.Sprintf("[[Chunk %d]] %s%s — %s%s", e.Index, e.SourceName, page, e.Segment.Kind, span)
+}
+
+// clock writes seconds as m:ss, or h:mm:ss once there is an hour to name. It is the shape
+// the UI uses for the same number, so the citation and the player agree.
+func clock(seconds float64) string {
+	total := int64(seconds + 0.5)
+	h, m, s := total/3600, total/60%60, total%60
+	if h > 0 {
+		return fmt.Sprintf("%d:%02d:%02d", h, m, s)
+	}
+	return fmt.Sprintf("%d:%02d", m, s)
 }

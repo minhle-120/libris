@@ -13,21 +13,19 @@ import (
 // segmentSelect is the shared projection of the two segment queries, so the
 // scan below matches one place. The LEFT JOIN keeps text segments, which carry
 // no asset.
-// segments.t0 and segments.t1 are deliberately absent from every query. They held
-// the start and end seconds of an audio clip, and audio is no longer an input
-// modality; the columns stay because dropping one is a migration whose only effect
-// is to invalidate an older binary's reads, with no user on the other side of it.
-// Rows written before the change keep their timings unread.
+// t0 and t1 are a clip's window in seconds, and the columns that held them survived
+// the removal of the audio path — see the note in Provenance — so nothing here had to
+// change shape to read them again.
 const segmentSelect = `
 	SELECT g.id, g.source_id, g.doc_id, g.kind, g.ordinal, g.text,
-	       g.page, g.page_end, g.char_start, g.char_end,
+	       g.page, g.page_end, g.char_start, g.char_end, g.t0, g.t1,
 	       a.id, a.path, a.mime, a.bytes
 	  FROM segments g
 	  LEFT JOIN assets a ON a.id = g.asset_id`
 
 const segmentFromNotebook = `
 	SELECT g.id, g.source_id, g.doc_id, g.kind, g.ordinal, g.text,
-	       g.page, g.page_end, g.char_start, g.char_end,
+	       g.page, g.page_end, g.char_start, g.char_end, g.t0, g.t1,
 	       a.id, a.path, a.mime, a.bytes
 	  FROM segments g
 	  JOIN sources s          ON s.id = g.source_id
@@ -89,12 +87,12 @@ func (db *DB) PutSegments(ctx context.Context, sourceID string, segments []domai
 		}
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO segments
-			   (id, source_id, doc_id, kind, ordinal, text,
-			    page, page_end, char_start, char_end, asset_id)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				(id, source_id, doc_id, kind, ordinal, text,
+				    page, page_end, char_start, char_end, t0, t1, asset_id)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			s.ID, sourceID, s.DocID, string(s.Kind), s.Ordinal, s.Text,
 			s.Span.Page, s.Span.PageEnd, s.Span.CharStart, s.Span.CharEnd,
-			assetID); err != nil {
+			s.Span.T0, s.Span.T1, assetID); err != nil {
 			return fmt.Errorf("store: put segment %s: %w", s.ID, err)
 		}
 	}
@@ -196,6 +194,7 @@ func scanSegments(rows *sql.Rows) ([]domain.Segment, error) {
 		)
 		if err := rows.Scan(&s.ID, &s.SourceID, &s.DocID, &kind, &s.Ordinal, &s.Text,
 			&s.Span.Page, &s.Span.PageEnd, &s.Span.CharStart, &s.Span.CharEnd,
+			&s.Span.T0, &s.Span.T1,
 			&assetID, &path, &mime, &size); err != nil {
 			return nil, err
 		}

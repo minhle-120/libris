@@ -265,11 +265,27 @@ type PDF struct {
 	Raster Program
 }
 
+// Audio names the one program a recording needs.
+//
+// ffprobe is deliberately not here. A build that cut a recording into fixed windows had to
+// ask how long it was before reading a sample of it; this one learns the length from the
+// samples as they arrive, so the question has nothing to be asked for. A second program
+// would be a second process per upload and a second answer that can disagree with the first.
+func (r Resolver) Audio() Audio {
+	return Audio{FFmpeg: r.Look("ffmpeg")}
+}
+
+// Audio is the one.
+type Audio struct {
+	FFmpeg Program
+}
+
 // All names every program libris runs that a person might have to care about: the two that
-// read a PDF. The programs run for libris's own convenience — opening a browser, asking ps
-// which processes are llama-server — are deliberately not here. They degrade on their own and
-// their absence is not something anyone could go and fix.
+// read a PDF and the two that read a recording. The programs run for libris's own
+// convenience — opening a browser, asking ps which processes are llama-server — are
+// deliberately not here. They degrade on their own and their absence is not something
+// anyone could go and fix.
 func (r Resolver) All() []Program {
-	pdf := r.PDF()
-	return []Program{pdf.Text, pdf.Raster}
+	pdf, audio := r.PDF(), r.Audio()
+	return []Program{pdf.Text, pdf.Raster, audio.FFmpeg}
 }

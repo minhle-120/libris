@@ -45,6 +45,9 @@ type Store interface {
 	ListSegments(context.Context, string) ([]domain.Segment, error)
 	GetAsset(context.Context, string) (domain.Asset, error)
 
+	// Both of these are repair for work a previous process left behind: rows an older
+	// build wrote that this one must not retrieve, and sources killed mid-flight.
+	PurgeLegacyAudio(context.Context) (int, []domain.Orphan, error)
 	FailStaleSources(context.Context) (int64, error)
 }
 
@@ -241,6 +244,20 @@ func New(opts Options) (*Service, error) {
 // Jobs do not run on the caller's context: an upload's request ending, or the
 // process shutting down, must not abandon a half-rasterised PDF.
 func (s *Service) Start(ctx context.Context) error {
+	// What an older build wrote goes before anything can read it. ADR 0003 left its
+	// recordings in the database as rows no binary defined; this build defines the kind,
+	// so those thirty-second clips would rank beside the fifteen-second ones it cuts and
+	// look like the same thing. Their files follow once the rows are committed.
+	dropped, orphans, err := s.store.PurgeLegacyAudio(ctx)
+	if err != nil {
+		return err
+	}
+	s.collect(orphans)
+	if dropped > 0 {
+		s.log.Info("discarded clips sliced by an older build",
+			"segments", dropped, "sources", len(orphans))
+	}
+
 	n, err := s.store.FailStaleSources(ctx)
 	if err != nil {
 		return err

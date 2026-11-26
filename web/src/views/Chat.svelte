@@ -7,7 +7,7 @@
     openCitation,
     stopTurn
   } from '../lib/store.svelte';
-  import { chipLabel } from '../lib/format';
+  import { chipLabel, citationIcon } from '../lib/format';
   import type { MessageStatus } from '../lib/types';
   import Rich from '../lib/Rich.svelte';
   import Reasoning from '../lib/Reasoning.svelte';
@@ -172,7 +172,7 @@
                       title="{c.source_name} — {chipLabel(c)}"
                       onclick={() => openCitation(c)}
                     >
-                      <Icon name={c.kind === 'image' ? 'image' : 'file'} size={13} />
+                      <Icon name={citationIcon(c.kind)} size={13} />
                       {chipLabel(c)}
                     </button>
                   {/each}
@@ -206,7 +206,7 @@
                 {#each live.citations as c (c.segment_id + c.chunk)}
                   <!-- Disabled: not yet the frozen set the answer is being written against. -->
                   <button class="cite" type="button" disabled title="{c.source_name} — {chipLabel(c)}">
-                    <Icon name={c.kind === 'image' ? 'image' : 'file'} size={13} />
+                    <Icon name={citationIcon(c.kind)} size={13} />
                     {chipLabel(c)}
                   </button>
                 {/each}

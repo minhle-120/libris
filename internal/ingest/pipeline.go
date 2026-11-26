@@ -42,16 +42,17 @@ type Result struct {
 // Processor turns files into segments. It never returns an error for a file it
 // cannot understand: that is recorded in Result so a batch keeps going.
 type Processor struct {
-	cfg  config.Config
-	sink Sink
-	pdf  *PDF
+	cfg   config.Config
+	sink  Sink
+	pdf   *PDF
+	audio *Audio
 }
 
 // New validates the config and takes the programs it will run, already resolved. They arrive
 // resolved because resolution is a question about folders and operating systems rather than
 // about this file, and because a Processor is built per job: the answer is asked for when an
 // upload happens rather than remembered from whenever the process started.
-func New(cfg config.Config, sink Sink, progs tools.PDF) (*Processor, error) {
+func New(cfg config.Config, sink Sink, progs tools.PDF, audio tools.Audio) (*Processor, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -65,6 +66,11 @@ func New(cfg config.Config, sink Sink, progs tools.PDF) (*Processor, error) {
 			Text:   progs.Text,
 			Raster: progs.Raster,
 			DPI:    cfg.PDFDPI,
+		},
+		audio: &Audio{
+			FFmpeg:  audio.FFmpeg,
+			Seconds: cfg.AudioClipSeconds,
+			Overlap: cfg.AudioClipOverlap,
 		},
 	}, nil
 }
@@ -111,6 +117,8 @@ func (p *Processor) Process(ctx context.Context, path string) (*Result, error) {
 		p.pdfDoc(ctx, res, path)
 	case domain.SourceImage:
 		p.image(ctx, res, path)
+	case domain.SourceAudio:
+		p.audioDoc(ctx, res, path)
 	default:
 		res.Unsupported = "unsupported file type"
 	}
@@ -276,10 +284,47 @@ func textSegments(doc Doc, sourceID, text string, cfg config.Config) []domain.Se
 	return out
 }
 
-// There is no audio path here. Recordings used to be sliced into timed clips and
-// embedded whole; a clip had no text, so a hit was findable but the synthesiser
-// could never quote it, and every answer leaning on one cited nothing. The
-// modality went rather than stayed half-built. See ADR 0003.
+// audioDoc turns a recording into one segment per clip: the clip's bytes as the asset, no
+// text, and the window it covers in the span.
+//
+// A clip is not a citation a reader can quote, and ADR 0010 says so rather than hiding it:
+// the words arrive when the answering model hears the clip, not before.
+func (p *Processor) audioDoc(ctx context.Context, res *Result, path string) {
+	clips, err := p.audio.Clips(ctx, path, p.sink, res.Source.ID+"/clips")
+	switch {
+	case errors.Is(err, ErrNoAudioTools):
+		// No recording anywhere could be read on this machine, so this is not the file's
+		// fault — the same distinction the PDF branch makes, with the same finding naming
+		// the program to go and get.
+		res.Findings = append(res.Findings, domain.ToolMissing(p.audio.FFmpeg.Name))
+		res.Unsupported = "no ffmpeg on this machine"
+	case errors.Is(err, ErrAudioTooLong):
+		res.Findings = append(res.Findings, domain.StageFailed("clips", err))
+		res.Unsupported = "recording is longer than libris slices"
+	case err != nil:
+		res.Findings = append(res.Findings, domain.StageFailed("clips", err))
+		res.Unsupported = "recording could not be sliced"
+	case len(clips) == 0:
+		// The recording decoded, and every window of it was below the audible floor. The
+		// file is fine; there is simply nothing in it to answer from.
+		res.Unsupported = "recording holds nothing audible"
+	default:
+		doc := Doc{ID: res.Source.ID, Title: res.Source.Name, Kind: domain.KindAudio}
+		res.Docs = append(res.Docs, doc)
+		for i, clip := range clips {
+			a := clip.Asset
+			res.Segments = append(res.Segments, domain.Segment{
+				ID:       segmentID(doc.ID, i),
+				SourceID: res.Source.ID,
+				DocID:    doc.ID,
+				Kind:     domain.KindAudio,
+				Ordinal:  i,
+				Asset:    &a,
+				Span:     domain.Provenance{T0: clip.T0, T1: clip.T1},
+			})
+		}
+	}
+}
 
 func segmentID(docID string, ordinal int) string {
 	return fmt.Sprintf("%s:%04d", docID, ordinal)

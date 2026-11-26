@@ -519,6 +519,10 @@ async function pump() {
     uploading -= 1;
     void refreshSources();
     pollSources();
+    // One file per pump, and the queue is the reason pump exists at all: a drop of six
+    // files is six uploads, and stopping after the first would leave five sitting in an
+    // array nothing else reads. Serial on purpose — see the comment above the queue.
+    if (queue.length) void pump();
   }
 }
 

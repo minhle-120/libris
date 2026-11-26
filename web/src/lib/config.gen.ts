@@ -37,6 +37,8 @@ export type Settings = {
 	historyMessages: number;
 	chunkWords: number;
 	chunkOverlap: number;
+	audioClipSeconds: number;
+	audioClipOverlap: number;
 	pdfPageImages: 'always' | 'fallback';
 	pdfDPI: number;
 	maxFileMB: number;
@@ -196,6 +198,24 @@ export const settingGroups: SettingGroup[] = [
 				"unit": "words",
 				"min": 0,
 				"max": 999
+			},
+			{
+				"key": "audioClipSeconds",
+				"label": "Recording clip length",
+				"help": "Seconds of a recording per clip. Longer is worse: a clip's vector is the average of everything in it, so one sentence in a long clip is diluted by the rest of it. Measured on real recordings, 15 s is the shortest window that still holds a whole sentence, and it beat 30 s and 60 s on every query.",
+				"kind": "number",
+				"unit": "seconds",
+				"min": 5,
+				"max": 60
+			},
+			{
+				"key": "audioClipOverlap",
+				"label": "Recording clip overlap",
+				"help": "Percent of each clip repeated at the start of the next, so a sentence that straddles a boundary survives whole in at least one clip.",
+				"kind": "number",
+				"unit": "%",
+				"min": 0,
+				"max": 95
 			}
 		]
 	},
@@ -260,6 +280,8 @@ export function defaultSettings(): Settings {
 		historyMessages: 8,
 		chunkWords: 100,
 		chunkOverlap: 50,
+		audioClipSeconds: 15,
+		audioClipOverlap: 50,
 		pdfPageImages: "always",
 		pdfDPI: 110,
 		maxFileMB: 512,

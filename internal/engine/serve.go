@@ -120,6 +120,22 @@ type Model struct {
 // contribute — a guess that runs long and misses wastes the pass that made it — and the draft's
 // KV cache is kept at q8_0 for the same reason the real model's is, for less memory per token
 // at a cost the draft model can afford.
+// ubatchSize is the biggest single input the server will hold. llama.cpp fits one media
+// input — one page raster, one clip — inside one ubatch, and the 512 default fits neither. The
+// consequence at 512 is not a clean refusal: an image is quietly shrunk,
+// `cap image_max_tokens (original=1120) to 256 (n_ubatch = 512) … increase n_ubatch (-ub)`, so
+// every page raster libris has ever sent reached the answering model at a quarter of the detail
+// it was rasterised at; audio is refused outright past about twenty seconds,
+// `input (754 tokens) is too large to process. increase the physical batch size (current batch
+// size: 512)`. Both sentences are the pinned build's own, from its log.
+//
+// 4096 is not a generous round number. Audio costs 25.4 tokens a second on both models libris
+// ships, so 4096 is a little over two minutes of a recording as one input — more than any clip
+// ingest will ever cut, since the setting tops out at 60 s — and a page raster costs about
+// 1120 of them. -b, the batch size the second message names first, is the wrong knob: it is how
+// much the server runs at once, and a single input has to fit inside one ubatch.
+const ubatchSize = 4096
+
 const (
 	chatCtx  = 32768
 	embedCtx = 8192

@@ -18,7 +18,7 @@ export type Notebook = {
   source_count: number; // read from the database, so it is 0 on a brand-new notebook
 };
 
-export type SourceKind = "pdf" | "image" | "text" | "unsupported";
+export type SourceKind = "pdf" | "image" | "audio" | "text" | "unsupported";
 
 /**
  * Async ingest state. `processing` covers everything from queue to chunking —
@@ -89,23 +89,25 @@ export type Asset = {
  * Points back into the original. Char offsets are page-local; `page_end` is
  * present only when a chunk straddles a page break.
  *
- * There are no time offsets: they belonged to audio slices, and recordings are no
- * longer an input modality (ADR 0003). The `t0` had no optional marker for the
- * same reason a first slice started at zero — a missing value meant something
- * different from zero, which is exactly what JSON with omitempty cannot carry.
+ * `t0` is where a clip of a recording starts, in seconds, and `t1` where it ends — the clip
+ * *is* its span, so a chunk of a recording has no other coordinates and no text. `t0` has no
+ * optional marker because the first clip of a recording legitimately starts at zero, and a
+ * missing value would have to mean something different from that.
  */
 export type Provenance = {
   page?: number;
   page_end?: number;
   char_start?: number;
   char_end?: number;
+  t0?: number;
+  t1?: number;
 };
 
 export type Segment = {
   id: string;
   source_id: string;
   doc_id: string; // a PDF yields two documents: the text and the page rasters
-  kind: "text" | "image";
+  kind: "text" | "image" | "audio";
   ordinal: number;
   text: string;
   asset?: Asset;
@@ -154,7 +156,7 @@ export type Citation = {
   doc_id: string;
   source_id: string;
   source_name: string;
-  kind: "text" | "image";
+  kind: "text" | "image" | "audio";
   ordinal: number;
   quote?: string;
   /** The page raster a citation opens. */

@@ -12,8 +12,9 @@ import (
 	"libris/internal/domain"
 )
 
-// Sink stores derived files: extracted page images, copied originals, media
-// slices. Implementations decide where; the pipeline only needs an Asset back.
+// Sink stores derived files: extracted page images, copied originals, clips cut
+// from a recording. Implementations decide where; the pipeline only needs an Asset
+// back — including its MIME, which is what tells the browser to put a player on it.
 type Sink interface {
 	PutFile(ctx context.Context, name, srcPath string) (domain.Asset, error)
 	Put(ctx context.Context, name string, r io.Reader) (domain.Asset, error)
@@ -108,6 +109,8 @@ func mimeByExt(path string) string {
 		return "image/gif"
 	case ".pdf":
 		return "application/pdf"
+	case ".wav":
+		return "audio/wav"
 	}
 	return "application/octet-stream"
 }

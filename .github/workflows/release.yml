@@ -81,7 +81,7 @@ jobs:
           set -eu
           for f in scripts/dist/*.sh; do bash -n "$f"; done
 
-      - name: gather the PDF tools (linux)
+      - name: gather the tools (linux)
         if: matrix.base != ''
         env:
           BASE: ${{ matrix.base }}
@@ -90,6 +90,9 @@ jobs:
           docker run --rm -v "$PWD":/w "$BASE" \
             bash /w/scripts/dist/tools-linux.sh /w/stage/tools
           test -f stage/tools/pdftotext
+          # The download carries ffmpeg too, so a recording opens on a machine that never
+          # installed anything. See scripts/dist/tools-linux.sh for where it comes from.
+          test -f stage/tools/ffmpeg
 
       # The runner ships no registered MSYS2 shell any more, so the action
       # installs it, along with the packages the bundle is built from.
@@ -103,15 +106,17 @@ jobs:
             mingw-w64-ucrt-x86_64-poppler
             mingw-w64-ucrt-x86_64-poppler-data
             mingw-w64-ucrt-x86_64-fontconfig
+            mingw-w64-ucrt-x86_64-ffmpeg
             binutils
 
-      - name: gather the PDF tools (windows)
+      - name: gather the tools (windows)
         if: matrix.base == ''
         shell: msys2 {0}
         run: |
           set -eu
           bash scripts/dist/tools-windows.sh stage/tools
           test -f stage/tools/pdftotext.exe
+          test -f stage/tools/ffmpeg.exe
 
       # The archive is the download. bsdtar is named outright on Windows
       # because the `tar` on a bash PATH there is GNU tar, which will write a

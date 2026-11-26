@@ -33,23 +33,23 @@ type Message struct {
 
 // ── multimodal content ────────────────────────────────────────────
 
-// MediaKind is an input modality libris can show a model. Only image is built by
-// anything today, and the wire types of the others stay undeclared until something
-// sends them: a client carrying audio and video it never builds is a menu of wire
-// shapes rather than a description of this program's traffic, which is why
-// input_audio and input_video were deleted once.
+// MediaKind is an input modality libris can show a model. Video stays undeclared:
+// a client carrying a wire shape it never builds is a menu rather than a description
+// of this program's traffic, which is why input_video was deleted and has not come
+// back.
 //
 // What the seam buys is that adding one is mechanical rather than a search: a constant
 // here, its Part constant, one case in MediaPart, one case in Caps.Allows, and one arm
 // of retrieve's mapping from a segment kind.
 //
-// Nothing here is a standing invitation. A modality earns its place by arriving with
-// citable words beside it — which is why recordings were taken out again rather than
-// left as vectors a reader could rank and never quote.
+// The bar for arriving here used to be "with citable words beside it", and ADR 0010
+// lowered it for audio: a clip carries no words of its own, and the words arrive inside
+// the answer, because the model that writes the answer is the one that heard the clip.
 type MediaKind string
 
 const (
 	MediaImage MediaKind = "image"
+	MediaAudio MediaKind = "audio"
 )
 
 // Modality names the thing a serving model must have loaded to take this kind, in
@@ -65,18 +65,29 @@ func (k MediaKind) Modality() string {
 // Only the part types libris actually sends. See MediaKind for why the others are
 // not here yet.
 const (
-	PartText  = "text"
-	PartImage = "image_url"
+	PartText       = "text"
+	PartImage      = "image_url"
+	PartInputAudio = "input_audio"
 )
 
 type ContentPart struct {
-	Type     string    `json:"type"`
-	Text     string    `json:"text,omitempty"`
-	ImageURL *ImageURL `json:"image_url,omitempty"`
+	Type       string      `json:"type"`
+	Text       string      `json:"text,omitempty"`
+	ImageURL   *ImageURL   `json:"image_url,omitempty"`
+	InputAudio *InputAudio `json:"input_audio,omitempty"`
 }
 
 type ImageURL struct {
 	URL string `json:"url"`
+}
+
+// InputAudio is the audio half of OpenAI's audio content part. Only Data is sent,
+// as a data URI: a URL form would ask the server for --media-path, which libris never
+// passes (see MediaPart). "format" is deliberately absent — llama.cpp ignores the key
+// and sniffs the bytes it decoded, so sending one would be a claim about the container
+// that nothing reads.
+type InputAudio struct {
+	Data string `json:"data"`
 }
 
 func Parts(p ...ContentPart) []ContentPart { return p }
@@ -106,15 +117,20 @@ func ImagePart(url string) ContentPart {
 // nothing of the server, which is why every media part libris sends is one. That is
 // true of the embedding stage too, which is started with nobody holding a flag.
 //
+// The data URI is the whole transport for both kinds, which is what the server's own
+// reader accepts for audio: oaicompat_content_load_media decodes the base64 and hands
+// the bytes to the projector, which sniffs the container from the data rather than from
+// a format key beside it.
+//
 // A kind with no case is refused rather than guessed at: shipping a part of a type
 // the server throws on would fail the turn for a mistake made here.
 func MediaPart(kind MediaKind, mimeType, data string) (ContentPart, error) {
+	uri := "data:" + mimeType + ";base64," + data
 	switch kind {
 	case MediaImage:
-		return ContentPart{
-			Type:     PartImage,
-			ImageURL: &ImageURL{URL: "data:" + mimeType + ";base64," + data},
-		}, nil
+		return ContentPart{Type: PartImage, ImageURL: &ImageURL{URL: uri}}, nil
+	case MediaAudio:
+		return ContentPart{Type: PartInputAudio, InputAudio: &InputAudio{Data: uri}}, nil
 	}
 	return ContentPart{}, fmt.Errorf("llm: no wire shape for media kind %q", kind)
 }

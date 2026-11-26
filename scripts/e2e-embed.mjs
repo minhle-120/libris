@@ -16,6 +16,7 @@ import { DIM, EmbedServer } from './fake-embed.mjs';
 
 const BIN = process.env.LIBRIS ?? './libris';
 const PDF = 'scripts/testdata/two-page.pdf';
+const AUDIO = 'scripts/testdata/one-second.wav';
 
 // ── checks ──────────────────────────────────────────────────────
 
@@ -187,6 +188,59 @@ try {
     r.input.some((e) => typeof e === 'object' && e.content?.some((p) => p.image_url?.url?.startsWith('data:')))
   );
   checks.check('page rasters are embedded as images, not as paths', inlineImages);
+
+  // ── a recording ───────────────────────────────────────────────
+  // The same path with a modality that has no words anywhere on it: ffmpeg cuts it into
+  // windows, the embedder is handed sound, and what comes back is a row that cites a range
+  // of seconds and a file a browser will play. Every one of those is a place the pipeline
+  // could quietly decide there was nothing to do, because nothing it does with a clip has a
+  // string in it.
+  const wav = readFileSync(AUDIO);
+  const recording = await upload(base, nb.id, 'standup.wav', wav, 'audio/wav');
+  const sliced = await poll(`${base}/api/sources/${recording.id}`, (x) => x.status !== 'processing');
+  checks.check(
+    'a recording with no text in it reaches ready',
+    sliced.status === 'ready',
+    `status=${sliced.status} detail=${sliced.detail ?? ''}`
+  );
+
+  const windows = (await (await fetch(`${base}/api/sources/${recording.id}/segments`)).json()) ?? [];
+  checks.check('and was cut into clips rather than read as text', windows.length > 0, `${windows.length} segments`);
+  checks.check(
+    'every clip is audio, with a window and a file',
+    windows.length > 0 &&
+      windows.every((w) => w.kind === 'audio' && w.asset && w.span?.t0 !== undefined && w.span?.t1 > w.span?.t0),
+    windows.map((w) => `${w.kind}@${w.span?.t0}-${w.span?.t1}`).join(' ')
+  );
+  checks.check(
+    'clips are numbered from one, without holes',
+    windows.every((w, i) => w.asset?.id?.endsWith(`/clip-${String(i + 1).padStart(4, '0')}.wav`)),
+    windows.map((w) => w.asset?.id).join(' ')
+  );
+
+  // The embedder was handed sound, not a path and not a transcript of something it cannot
+  // hear. A clip sent as text would still get a vector, and the source would still say
+  // ready, so nothing else in the path can see this go wrong.
+  const stats = await (await fetch(`${embedURL}/stats`)).json();
+  checks.check(
+    'the clips reached the embedding model as audio',
+    (stats.inputsByType?.input_audio ?? 0) >= windows.length,
+    `input_audio=${stats.inputsByType?.input_audio ?? 0}, ${windows.length} clips stored`
+  );
+
+  // And the file behind the citation is the file: the route the player in the viewer points
+  // at, answering with bytes a decoder accepts.
+  const clipURL = `${base}/api/assets/${windows[0].asset.id.split('/').map(encodeURIComponent).join('/')}`;
+  const served = await fetch(clipURL);
+  const bytes = Buffer.from(await served.arrayBuffer());
+  checks.check(
+    'a clip is served as audio, and is a WAV',
+    served.status === 200 &&
+      (served.headers.get('content-type') ?? '').startsWith('audio/wav') &&
+      bytes.subarray(0, 4).toString() === 'RIFF' &&
+      bytes.subarray(8, 12).toString() === 'WAVE',
+    `status=${served.status} type=${served.headers.get('content-type')} bytes=${bytes.length}`
+  );
 
   // ── the server is not running ─────────────────────────────────
   embed.down = true;

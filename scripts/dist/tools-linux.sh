@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Gathers the programs libris runs to read a PDF — pdftotext and pdftoppm — together with
-# everything those programs need, into one folder that travels beside the libris executable.
+# Gathers the programs libris runs — pdftotext and pdftoppm to read a PDF, ffmpeg to read a
+# recording — together with everything those programs need, into one folder that travels beside
+# the libris executable.
 #
 # It runs inside the base image named by the caller, not on the machine that calls it, and
 # that image is the whole portability promise: the C library of the image the tools were
@@ -32,13 +33,21 @@ out=${1:?usage: tools-linux.sh "<out-dir>"}
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq >/dev/null
 apt-get install -y -qq --no-install-recommends \
-  poppler-utils fonts-dejavu-core fontconfig >/dev/null
+  poppler-utils ffmpeg fonts-dejavu-core fontconfig >/dev/null
 
 mkdir -p "$out/lib" "$out/fonts" "$out/fonts-conf"
 
 # The programs. -L follows a symlink, because the file that gets copied has to be the
 # program itself: a dangling symlink into /usr/bin is a folder that cannot travel.
-for prog in pdftotext pdftoppm; do
+# ffmpeg from the same package manager as poppler rather than from a static build downloaded
+# off a third-party site. It is the same promise the rest of this folder makes — the image's
+# glibc is the oldest one the result starts on — with no release pipeline depending on somebody
+# else's archive staying where it was, and no checksum to notice going stale. The cost is that
+# a distribution builds ffmpeg with everything it ships support for, so the library closure is
+# tens of megabytes of codecs libris never asks for: it decodes what a person recorded, and
+# today that means PCM, Vorbis, Opus, FLAC and AAC. A build cut to those decoders is the way to
+# shrink it, and it is a build step this pipeline does not take yet.
+for prog in pdftotext pdftoppm ffmpeg; do
   cp -L "$(command -v "$prog")" "$out/$prog"
 done
 
@@ -62,7 +71,7 @@ copy_deps() {
     done
 }
 
-for prog in pdftotext pdftoppm; do copy_deps "$out/$prog"; done
+for prog in pdftotext pdftoppm ffmpeg; do copy_deps "$out/$prog"; done
 
 # Fonts, and a fontconfig file that looks only at the bundle — so a machine with no fonts
 # and a machine with four hundred of them render the same page. The paths are relative,

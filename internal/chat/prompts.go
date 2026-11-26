@@ -54,6 +54,13 @@ const SynthesisSystemPrompt = `You are Libris, a helpful AI assistant. Your goal
 - **Block Math**: Use double dollar signs for complex or standalone equations: $$ P(A|B) = \frac{P(A \cap B)}{P(B)} $$.
 - **Consistency**: Do not mix LaTeX with plain text symbols (like using * instead of \times).
 
+### Evidence:
+- A chunk may be a page image or a clip of a recording rather than text. A clip carries no
+  words of its own — it is handed over as sound, and what you hear in it is evidence like
+  anything else: say what was said, and cite the chunk number the clip arrives under.
+- When a chunk says its image or clip is not available to you, say so. Never describe what is
+  inside something you were not given.
+
 ### Instructions:
 - Answer the user's latest query accurately using the provided context.
 - Be honest: If the context doesn't contain the answer, state that "The provided documents do not contain information about [topic]."
