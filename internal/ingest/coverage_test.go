@@ -117,7 +117,7 @@ func TestPDFPageImagesRunError(t *testing.T) {
 	pdf := &PDF{Raster: pathProgram("pdftoppm"), DPI: 72, Runner: &fakeRunner{fn: func(tools.Program, []string) ([]byte, error) {
 		return nil, boom
 	}}}
-	if _, err := pdf.PageImages(context.Background(), "x.pdf", DirSink{Root: t.TempDir()}, "p"); !errors.Is(err, boom) {
+	if _, err := pdf.PageImages(context.Background(), "x.pdf", DirSink{Root: t.TempDir()}, "p", 0); !errors.Is(err, boom) {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -216,13 +216,9 @@ func TestPDFSkipsEmptyPages(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	runner := &fakeRunner{fn: func(prog tools.Program, args []string) ([]byte, error) {
-		if strings.Contains(prog.Name, "totext") {
-			return []byte("first page\f\fthird page\f"), nil
-		}
-		writePNG(t, args[len(args)-1]+"-1.png", 2, 2)
-		return nil, nil
-	}}
+	// The middle page has no text but is a page, and the raster pass gets a raster for
+	// it: the count the fan-out cuts ranges by is the document's, not the text's.
+	runner := &fakeRunner{fn: pdfFn(t, []string{"first page", "", "third page"}, 3)}
 	p := &Processor{cfg: testConfig(), sink: DirSink{Root: t.TempDir()},
 		pdf: &PDF{Text: pathProgram("pdftotext"), Raster: pathProgram("pdftoppm"), DPI: 72, Runner: runner}}
 

@@ -194,7 +194,12 @@ func (p *Processor) pdfDoc(ctx context.Context, res *Result, path string) {
 	}
 
 	// Derived document 2: page rasters, one segment per page.
-	assets, err := p.pdf.PageImages(ctx, path, p.sink, res.Source.ID+"/pages")
+	//
+	// The text pass runs first, so its page count is already here, and pdftotext
+	// separates pages with a form feed whether or not a page has any text in it — the
+	// count is the document's, not the text's. Zero when that pass failed, which the
+	// rasteriser reads as "render this in one process".
+	assets, err := p.pdf.PageImages(ctx, path, p.sink, res.Source.ID+"/pages", len(pages))
 	switch {
 	case errors.Is(err, ErrNoPDFRaster):
 		res.Findings = append(res.Findings, domain.ToolMissing(p.pdf.Raster.Name))

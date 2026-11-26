@@ -3,13 +3,20 @@ package ingest
 import (
 	"context"
 	"errors"
+	"fmt"
 	"image"
 	"image/png"
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
+	"slices"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"libris/internal/config"
 	"libris/internal/domain"
@@ -45,17 +52,67 @@ func pathProgram(name string) tools.Program {
 	return tools.Program{Name: name, Path: name, Origin: tools.OriginPath}
 }
 
+// fakeRunner is safe across the goroutines a fan-out runs, because the thing under
+// test now calls it from several at once.
 type fakeRunner struct {
+	mu    sync.Mutex
 	calls []fakeCall
 	fn    func(prog tools.Program, args []string) ([]byte, error)
+
+	// fnCtx, when set, is asked instead of fn: the rare test that needs the context
+	// the runner was handed, which is what a cancelled fan-out is observed through.
+	fnCtx func(ctx context.Context, prog tools.Program, args []string) ([]byte, error)
 }
 
-func (f *fakeRunner) Run(_ context.Context, prog tools.Program, args ...string) ([]byte, error) {
+func (f *fakeRunner) Run(ctx context.Context, prog tools.Program, args ...string) ([]byte, error) {
+	f.mu.Lock()
 	f.calls = append(f.calls, fakeCall{prog, args})
+	f.mu.Unlock()
+	if f.fnCtx != nil {
+		return f.fnCtx(ctx, prog, args)
+	}
 	if f.fn == nil {
 		return nil, nil
 	}
 	return f.fn(prog, args)
+}
+
+// invoked returns the arguments of every call, newest fan-out included.
+func (f *fakeRunner) invoked() [][]string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([][]string, 0, len(f.calls))
+	for _, c := range f.calls {
+		out = append(out, c.args)
+	}
+	return out
+}
+
+// pdfFn answers both programs a PDF needs: the text pass gets the given page strings,
+// the raster pass gets the PNGs that invocation asked for. Honouring -f/-l is what
+// lets a test see a range — the rasteriser checks that each one wrote its own span and
+// nothing else — and writing the absolute page number is what poppler really does.
+func pdfFn(t *testing.T, text []string, pages int) func(tools.Program, []string) ([]byte, error) {
+	t.Helper()
+	return func(prog tools.Program, args []string) ([]byte, error) {
+		if strings.Contains(prog.Name, "totext") {
+			return []byte(strings.Join(text, "\f") + "\f"), nil
+		}
+		first, last := 1, pages
+		for i, a := range args {
+			switch a {
+			case "-f":
+				first, _ = strconv.Atoi(args[i+1])
+			case "-l":
+				last, _ = strconv.Atoi(args[i+1])
+			}
+		}
+		stem := args[len(args)-1]
+		for n := first; n <= last; n++ {
+			writePNG(t, fmt.Sprintf("%s-%d.png", stem, n), 4, 4)
+		}
+		return nil, nil
+	}
 }
 
 func writePNG(t *testing.T, path string, w, h int) {
@@ -126,7 +183,9 @@ func TestPDFPageImages(t *testing.T) {
 	pdf := &PDF{Raster: pathProgram("pdftoppm"), DPI: 96, Runner: runner}
 	sink := DirSink{Root: t.TempDir()}
 
-	assets, err := pdf.PageImages(context.Background(), "/tmp/x.pdf", sink, "src/pages")
+	// A page count of 0 is the caller not knowing it, which is the one case that must
+	// still render the whole document in a single process.
+	assets, err := pdf.PageImages(context.Background(), "/tmp/x.pdf", sink, "src/pages", 0)
 	if err != nil {
 		t.Fatalf("PageImages: %v", err)
 	}
@@ -142,22 +201,213 @@ func TestPDFPageImages(t *testing.T) {
 		}
 	}
 
-	args := strings.Join(runner.calls[0].args, " ")
+	calls := runner.invoked()
+	if len(calls) != 1 {
+		t.Fatalf("%d processes for a document of unknown length", len(calls))
+	}
+	args := strings.Join(calls[0], " ")
 	if !strings.Contains(args, "-png") || !strings.Contains(args, "-r 96") {
 		t.Fatalf("args = %q", args)
+	}
+	if strings.Contains(args, "-f") || strings.Contains(args, "-l") {
+		t.Fatalf("an unknown page count must not ask for a range: %q", args)
+	}
+}
+
+// A document whose length is known is cut into ranges and rendered by one process
+// each, and the pages come out in document order however many processes wrote them.
+func TestPDFPageImagesFanOut(t *testing.T) {
+	runner := &fakeRunner{fn: pdfFn(t, nil, 7)}
+	pdf := &PDF{Raster: pathProgram("pdftoppm"), DPI: 96, Shards: 3, Runner: runner}
+
+	assets, err := pdf.PageImages(context.Background(), "/tmp/x.pdf", DirSink{Root: t.TempDir()}, "src/pages", 7)
+	if err != nil {
+		t.Fatalf("PageImages: %v", err)
+	}
+	if len(assets) != 7 {
+		t.Fatalf("got %d assets, want 7", len(assets))
+	}
+	for i, a := range assets {
+		if want := fmt.Sprintf("src/pages/page-%04d.png", i+1); a.ID != want {
+			t.Errorf("asset %d = %q, want %q", i, a.ID, want)
+		}
+	}
+
+	// Three processes, and between them every page exactly once: the spans are what
+	// make that true, so they are asserted rather than inferred from the asset list.
+	calls := runner.invoked()
+	if len(calls) != 3 {
+		t.Fatalf("%d processes, want 3", len(calls))
+	}
+	seen := map[int]int{}
+	for _, args := range calls {
+		first, last := rangeOf(t, args)
+		for n := first; n <= last; n++ {
+			seen[n]++
+		}
+		if !strings.Contains(strings.Join(args, " "), "-r 96") {
+			t.Errorf("args lost the dpi: %q", args)
+		}
+	}
+	for n := 1; n <= 7; n++ {
+		if seen[n] != 1 {
+			t.Errorf("page %d rendered %d times", n, seen[n])
+		}
+	}
+}
+
+// rangeOf reads the -f/-l a raster call was given.
+func rangeOf(t *testing.T, args []string) (int, int) {
+	t.Helper()
+	first, last := 0, 0
+	for i, a := range args {
+		switch a {
+		case "-f":
+			first, _ = strconv.Atoi(args[i+1])
+		case "-l":
+			last, _ = strconv.Atoi(args[i+1])
+		}
+	}
+	if first == 0 || last == 0 {
+		t.Fatalf("no range in %q", args)
+	}
+	return first, last
+}
+
+func TestPDFPageRanges(t *testing.T) {
+	cases := []struct {
+		pages, shards int
+		want          []pageRange
+	}{
+		{0, 4, []pageRange{{0, 0}}},
+		{9, 1, []pageRange{{0, 0}}},
+		{1, 4, []pageRange{{0, 0}}},
+		{7, 3, []pageRange{{1, 3}, {4, 6}, {7, 7}}},
+		{10, 4, []pageRange{{1, 3}, {4, 6}, {7, 9}, {10, 10}}},
+		{6, 8, []pageRange{{1, 2}, {3, 4}, {5, 6}}},
+		{100, 8, []pageRange{{1, 13}, {14, 26}, {27, 39}, {40, 52}, {53, 65}, {66, 78}, {79, 91}, {92, 100}}},
+	}
+	for _, c := range cases {
+		got := rasterRanges(c.pages, c.shards)
+		if !slices.Equal(got, c.want) {
+			t.Errorf("rasterRanges(%d, %d) = %v, want %v", c.pages, c.shards, got, c.want)
+		}
+	}
+}
+
+// Every page in exactly one range, whatever the count and the shards: a page in none
+// is a missing raster, a page in two is the same page rendered twice and embedded twice.
+func TestPDFPageRangesCoverOnce(t *testing.T) {
+	for pages := 1; pages <= 250; pages++ {
+		for shards := 1; shards <= 12; shards++ {
+			checkRangesCoverOnce(t, pages, shards)
+		}
+	}
+}
+
+// checkRangesCoverOnce asserts what a cut of one document always has to be: at most
+// shards processes, and every page inside one of their spans and no other. A page in
+// none is a missing raster; a page in two is the same page rendered and embedded twice.
+func checkRangesCoverOnce(t *testing.T, pages, shards int) {
+	t.Helper()
+
+	ranges := rasterRanges(pages, shards)
+	if len(ranges) > max(shards, 1) {
+		t.Fatalf("pages %d shards %d: %d ranges", pages, shards, len(ranges))
+	}
+
+	seen := make([]int, pages+1)
+	for _, r := range ranges {
+		first, last := r.first, r.last
+		if first == 0 {
+			// A process asked for no range, which is the whole document — allowed only
+			// when there is nothing to cut or nothing to cut it with.
+			if pages > 1 && shards > 1 {
+				t.Fatalf("pages %d shards %d: whole-document range", pages, shards)
+			}
+			first, last = 1, pages
+		}
+		if first > last || first < 1 || last > pages {
+			t.Fatalf("pages %d shards %d: bad span %v", pages, shards, r)
+		}
+		for n := first; n <= last; n++ {
+			seen[n]++
+		}
+	}
+	for n := 1; n <= pages; n++ {
+		if seen[n] != 1 {
+			t.Fatalf("pages %d shards %d: page %d in %d ranges", pages, shards, n, seen[n])
+		}
+	}
+}
+
+func TestPDFPageImagesShortRun(t *testing.T) {
+	runner := &fakeRunner{fn: func(prog tools.Program, args []string) ([]byte, error) {
+		writePNG(t, args[len(args)-1]+"-1.png", 4, 4) // whatever the range asked for
+		return nil, nil
+	}}
+	pdf := &PDF{Raster: pathProgram("pdftoppm"), DPI: 96, Shards: 2, Runner: runner}
+
+	_, err := pdf.PageImages(context.Background(), "/tmp/x.pdf", DirSink{Root: t.TempDir()}, "src/pages", 6)
+	if err == nil || !strings.Contains(err.Error(), "page files for pages") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// One range failing fails the document — and stops the processes still rendering it.
+// The surviving range here returns only once its own context is closed, so a fan-out
+// that waited for it to finish on its own would time this test out rather than fail it.
+func TestPDFPageImagesRangeErrorCancelsTheRest(t *testing.T) {
+	var cancelled atomic.Int32
+	runner := &fakeRunner{fnCtx: func(ctx context.Context, _ tools.Program, args []string) ([]byte, error) {
+		if strings.Contains(strings.Join(args, " "), "-f 4") {
+			return nil, errors.New("boom")
+		}
+		select {
+		case <-ctx.Done():
+			cancelled.Add(1)
+			return nil, ctx.Err()
+		case <-time.After(5 * time.Second):
+			return nil, nil
+		}
+	}}
+	pdf := &PDF{Raster: pathProgram("pdftoppm"), DPI: 96, Shards: 2, Runner: runner}
+
+	if _, err := pdf.PageImages(context.Background(), "/tmp/x.pdf", DirSink{Root: t.TempDir()}, "src/pages", 6); err == nil ||
+		!strings.Contains(err.Error(), "boom") {
+		t.Fatalf("err = %v", err)
+	}
+	if cancelled.Load() != 1 {
+		t.Fatal("the surviving range ran on instead of being cancelled")
+	}
+}
+
+func TestRasterShardsFollowsTheMachine(t *testing.T) {
+	got := rasterShards()
+	if got < 1 {
+		t.Fatalf("shards = %d", got)
+	}
+	if cpu := runtime.NumCPU(); got > cpu {
+		t.Fatalf("shards %d on %d cpus", got, cpu)
+	}
+	if p := runtime.GOMAXPROCS(0); got > p {
+		t.Fatalf("shards %d with GOMAXPROCS %d", got, p)
+	}
+	if got > rasterShardCap {
+		t.Fatalf("shards %d over the cap", got)
 	}
 }
 
 func TestPDFPageImagesUnavailable(t *testing.T) {
 	pdf := &PDF{}
-	if _, err := pdf.PageImages(context.Background(), "x.pdf", DirSink{Root: t.TempDir()}, "p"); !errors.Is(err, ErrNoPDFRaster) {
+	if _, err := pdf.PageImages(context.Background(), "x.pdf", DirSink{Root: t.TempDir()}, "p", 0); !errors.Is(err, ErrNoPDFRaster) {
 		t.Fatalf("err = %v", err)
 	}
 }
 
 func TestPDFPageImagesNoOutput(t *testing.T) {
 	pdf := &PDF{Raster: pathProgram("pdftoppm"), DPI: 72, Runner: &fakeRunner{}}
-	_, err := pdf.PageImages(context.Background(), "x.pdf", DirSink{Root: t.TempDir()}, "p")
+	_, err := pdf.PageImages(context.Background(), "x.pdf", DirSink{Root: t.TempDir()}, "p", 0)
 	if err == nil || !strings.Contains(err.Error(), "produced no pages") {
 		t.Fatalf("err = %v", err)
 	}
@@ -171,7 +421,7 @@ func TestPDFPageImagesSinkError(t *testing.T) {
 	pdf := &PDF{Raster: pathProgram("pdftoppm"), DPI: 72, Runner: runner}
 	boom := errors.New("disk full")
 
-	if _, err := pdf.PageImages(context.Background(), "x.pdf", failSink{err: boom}, "p"); !errors.Is(err, boom) {
+	if _, err := pdf.PageImages(context.Background(), "x.pdf", failSink{err: boom}, "p", 0); !errors.Is(err, boom) {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -475,15 +725,7 @@ func TestProcessPDF(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	runner := &fakeRunner{fn: func(prog tools.Program, args []string) ([]byte, error) {
-		if strings.Contains(prog.Name, "totext") {
-			return []byte("Alpha page\fBeta page\f"), nil
-		}
-		stem := args[len(args)-1]
-		writePNG(t, stem+"-1.png", 4, 4)
-		writePNG(t, stem+"-2.png", 4, 4)
-		return nil, nil
-	}}
+	runner := &fakeRunner{fn: pdfFn(t, []string{"Alpha page", "Beta page"}, 2)}
 
 	p := &Processor{
 		cfg:  testConfig(),
