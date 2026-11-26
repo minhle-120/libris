@@ -802,30 +802,49 @@ func TestModelIdentityRecordsThePromptScheme(t *testing.T) {
 // not visible from the vectors: they come out correct either way. It is visible from
 // the server, which holds every request until four of them are being served together.
 // A queue of one would sit in the handler until the timeout and answer nothing.
-func TestEmbedRunsFourRequestsAtTheServerAtOnce(t *testing.T) {
+func TestEmbedRunsEightRequestsAtTheServerAtOnce(t *testing.T) {
 	c := newCapture(t)
-	// Four, written out rather than read from the constant: the constant is the thing
+	// Eight, written out rather than read from the constant: the constant is the thing
 	// under test, and a test that asks the server for whatever the code decided would
 	// pass on a queue of one.
-	c.holdRequests(4)
+	c.holdRequests(8)
 
-	got, err := c.embedder(t, 4).Embed(context.Background(), "", clips(t, 8), nil)
+	got, err := c.embedder(t, 4).Embed(context.Background(), "", clips(t, 16), nil)
 
 	// Asked before the error: a cohort that never assembled is the failure, and the
 	// EOF the client then reads is only how it feels from here.
 	if c.neverCompleted() > 0 {
-		t.Fatalf("the server never saw 4 requests at once; the most was %d", c.peakInFlight())
+		t.Fatalf("the server never saw 8 requests at once; the most was %d", c.peakInFlight())
 	}
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 8 {
-		t.Fatalf("%d embeddings, want 8", len(got))
+	if len(got) != 16 {
+		t.Fatalf("%d embeddings, want 16", len(got))
 	}
-	// Exactly four: fewer is a queue, more is this process owning a queue the server
+	// Exactly eight: fewer is a queue, more is this process owning a queue the server
 	// would have run anyway, and holding half-built page-raster bodies of its own.
-	if peak := c.peakInFlight(); peak != 4 {
-		t.Fatalf("%d requests in flight at the peak, want exactly 4", peak)
+	if peak := c.peakInFlight(); peak != 8 {
+		t.Fatalf("%d requests in flight at the peak, want exactly 8", peak)
+	}
+}
+
+// Sixteen one-chunk requests, answered one at a time with a nudge between each, and the
+// server never sees fewer than eight while any of them are left. That is the difference
+// between a window and a wave: a wave drains to zero and refills eight at a time, and
+// the gap it leaves is time the server spends idle in the middle of an upload.
+func TestTheWindowIsRefilledAsRequestsLand(t *testing.T) {
+	c := newCapture(t)
+	c.delayFor = func(string) time.Duration { return 5 * time.Millisecond }
+
+	if _, err := c.embedder(t, 4).Embed(context.Background(), "", clips(t, 16), nil); err != nil {
+		t.Fatal(err)
+	}
+	if peak := c.peakInFlight(); peak != 8 {
+		t.Fatalf("%d requests in flight at the peak, want the window full at 8", peak)
+	}
+	if got := c.callCount(); got != 16 {
+		t.Fatalf("%d requests, want 16 — one chunk each", got)
 	}
 }
 

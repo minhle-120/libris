@@ -48,18 +48,23 @@ func batches(segments []domain.Segment) []batch {
 	return out
 }
 
-// inFlight is how many of those one-chunk requests one call may have at the server at
-// once.
+// inFlight is how many of those one-chunk requests one call keeps at the server, and it
+// is a window rather than a wave: the next request goes out the moment one lands, so the
+// count stays at eight for the length of a document instead of draining and refilling
+// eight at a time.
 //
-// A request is not only the card's time. Reading the page images off disk, base64 of a
+// A request is not only the card's time. Reading the page image off disk, base64 of a
 // clip, the upload and the server's own parse all happen while the model has nothing to
-// run, and one request at a time makes that dead time add up across a document.
+// run, and with one chunk per request that dead time is repeated for every chunk of a
+// document — so the window is what makes the depth worth having.
 //
-// Four is a queue depth, not a promise about throughput, and what it assumes is that
-// the server has somewhere to put them. An instance started with one slot runs them one
-// after another and the other three wait in its queue; `--parallel` is the setting that
-// turns four in-flight requests into four slots of work.
-const inFlight = 4
+// It is a queue depth, not a promise about throughput, and what it assumes is that the
+// server has somewhere to put them. An instance started with one slot runs the eight one
+// after another and the other seven wait in its queue; `--parallel` is the setting that
+// turns eight in-flight requests into eight slots of work. Eight is also how many
+// half-built requests this process holds in memory, which is the cost when they carry
+// whole page rasters.
+const inFlight = 8
 
 // MaxAssetBytes refuses to inline a media file this large. It is not a tuning
 // knob: past this the request is the problem, not the model. It is exported
@@ -158,6 +163,9 @@ func (e *Embedder) Embed(ctx context.Context, title string, segments []domain.Se
 	// The token bucket is taken before the goroutine starts, which is what bounds how
 	// many requests exist at once — and how many half-built bodies of page rasters this
 	// process holds while they are in flight.
+	// The token is taken by the loop before the goroutine exists, and given back by the
+	// goroutine on its way out — so the loop is never more than one request behind, and
+	// the window stays full until the work is.
 	slots := make(chan struct{}, inFlight)
 	var wg sync.WaitGroup
 	for i, b := range runs {
