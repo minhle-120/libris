@@ -33,6 +33,8 @@ type fakeAPI struct {
 	upload     string // filename passed to AddUpload
 	body       string // contents passed to AddUpload
 	reingested string // id passed to ReingestSource
+	stopped    string // id passed to StopSource
+	resumed    string // id passed to ResumeSource
 
 	// The chat half, scripted and recorded by chat_test.go.
 	chats      []domain.Chat
@@ -105,6 +107,21 @@ func (f *fakeAPI) ListSources(context.Context, string) ([]domain.Source, error) 
 
 func (f *fakeAPI) ListSegments(context.Context, string) ([]domain.Segment, error) {
 	return f.segments, f.err
+}
+
+// StopSource answers the way the use case does: the row as it was read, which is
+// usually still processing, because the run records the stop a moment after being
+// cancelled.
+func (f *fakeAPI) StopSource(_ context.Context, id string) (domain.Source, error) {
+	f.stopped = id
+	return domain.Source{ID: id, Name: "doc.pdf", Status: domain.StatusProcessing}, f.err
+}
+
+// ResumeSource answers the way the use case does: 202's body, a row already moved back
+// to processing so the UI knows to keep watching.
+func (f *fakeAPI) ResumeSource(_ context.Context, id string) (domain.Source, error) {
+	f.resumed = id
+	return domain.Source{ID: id, Name: "doc.pdf", Status: domain.StatusProcessing}, f.err
 }
 
 func (f *fakeAPI) ReingestSource(_ context.Context, id string) (domain.Source, error) {
@@ -610,6 +627,62 @@ func TestReingestStartsTheWork(t *testing.T) {
 	// The row the call just caused, not the one it read: the UI polls on this status.
 	if got.ID != "abc123" || got.Status != domain.StatusProcessing {
 		t.Errorf("body = %+v", got)
+	}
+}
+
+// Stopping is an ask, not an outcome: 200 with the row as the use case read it, and the
+// promise kept in the call it made.
+func TestStopCancelsTheRun(t *testing.T) {
+	api := &fakeAPI{}
+	srv := newAppServer(t, api)
+
+	resp := request(t, srv, "POST", "/api/sources/abc123/stop", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", resp.StatusCode, readAll(t, resp))
+	}
+	if api.stopped != "abc123" {
+		t.Errorf("stop reached no use case (stopped=%q)", api.stopped)
+	}
+}
+
+// A source that is not being built is the use case's own refusal, and it reaches the
+// browser as 400 rather than as a success that did nothing.
+func TestStopRefusesASourceThatIsNotBuilding(t *testing.T) {
+	srv := newAppServer(t, &fakeAPI{err: fmt.Errorf("%w: this source is not being built", app.ErrInvalid)})
+
+	resp := request(t, srv, "POST", "/api/sources/abc123/stop", nil)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", resp.StatusCode, readAll(t, resp))
+	}
+}
+
+// Resuming starts work, so it answers the way the other calls that start work answer.
+func TestResumeStartsTheWork(t *testing.T) {
+	api := &fakeAPI{}
+	srv := newAppServer(t, api)
+
+	resp := request(t, srv, "POST", "/api/sources/abc123/resume", nil)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202: %s", resp.StatusCode, readAll(t, resp))
+	}
+	if api.resumed != "abc123" {
+		t.Errorf("resume reached no use case (resumed=%q)", api.resumed)
+	}
+	var got domain.Source
+	if err := json.Unmarshal([]byte(readAll(t, resp)), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != domain.StatusProcessing {
+		t.Errorf("body = %+v, want the row back at processing so the UI polls it", got)
+	}
+}
+
+func TestResumeRefusesASourceThatIsNotStopped(t *testing.T) {
+	srv := newAppServer(t, &fakeAPI{err: fmt.Errorf("%w: only a stopped source can be resumed", app.ErrInvalid)})
+
+	resp := request(t, srv, "POST", "/api/sources/abc123/resume", nil)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", resp.StatusCode, readAll(t, resp))
 	}
 }
 

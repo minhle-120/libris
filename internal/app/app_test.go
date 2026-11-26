@@ -90,9 +90,45 @@ type fakeEmbedder struct {
 	embedded int
 	segments []domain.Segment
 	titles   []string // what the source was called, in embedding order
+	once     sync.Once
+
+	// entered is closed the first time Embed is reached, and block — when set — is
+	// waited on there. A test that stops a run mid-embedding needs both: to know the
+	// run is really inside the call, and to keep it there until the stop lands.
+	entered chan struct{}
+	block   chan struct{}
 
 	dim int
 	err error
+}
+
+// hold stands inside the embedding call until the test lets the run go, and reports the
+// context's error when the run is cancelled while standing there — which is what a real
+// embedder does with a request whose caller has gone away.
+func (f *fakeEmbedder) hold(ctx context.Context) error {
+	if f.entered != nil {
+		f.once.Do(func() { close(f.entered) })
+	}
+	if f.block == nil {
+		return nil
+	}
+	select {
+	case <-f.block:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// ids are the segments the fake has been asked to embed, in the order it was asked.
+func (f *fakeEmbedder) ids() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]string, 0, len(f.segments))
+	for _, s := range f.segments {
+		out = append(out, s.ID)
+	}
+	return out
 }
 
 // title is the document name the most recent batch was embedded under.
@@ -105,7 +141,32 @@ func (f *fakeEmbedder) title() string {
 	return f.titles[len(f.titles)-1]
 }
 
-func (f *fakeEmbedder) Embed(_ context.Context, title string, segs []domain.Segment) ([]domain.Embedding, error) {
+func (f *fakeEmbedder) Embed(ctx context.Context, title string, segs []domain.Segment, onBatch func([]domain.Embedding) error) ([]domain.Embedding, error) {
+	if err := f.hold(ctx); err != nil {
+		return nil, err
+	}
+	out, err := f.record(title, segs)
+	if err != nil {
+		return nil, err
+	}
+	if onBatch != nil && len(out) > 0 {
+		// Handed over in two pieces when there are two or more, so a caller that counts
+		// progress is tested against what a real embedder hands it rather than one lump.
+		half := max(1, len(out)/2)
+		if err := onBatch(out[:half]); err != nil {
+			return nil, err
+		}
+		if half < len(out) {
+			if err := onBatch(out[half:]); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return out, nil
+}
+
+// record is what the fake remembers about a call, and the vectors it owes for it.
+func (f *fakeEmbedder) record(title string, segs []domain.Segment) ([]domain.Embedding, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -267,6 +328,252 @@ func sourceStatus(t *testing.T, db *sqlite.DB, id string) domain.Source {
 		t.Fatal(err)
 	}
 	return got
+}
+
+// ── stopping a run ────────────────────────────────────────────
+
+// A source stopped mid-embedding is left where it stood: the chunks extraction had
+// written stay, nothing is written after the cancellation, and the row reads stopped.
+// Not failed — nothing broke — and not left processing for a restart to sweep as
+// though the machine had died.
+func TestStopSourceLeavesTheRunWhereItStopped(t *testing.T) {
+	emb := &fakeEmbedder{dim: 8, entered: make(chan struct{}), block: make(chan struct{})}
+	svc, db, _ := testServiceWith(t, &fakeProcessor{res: &ingest.Result{Segments: []domain.Segment{
+		textSegment("doc1", 0, "first"),
+		textSegment("doc1", 1, "second"),
+	}}}, emb)
+
+	nb, _ := svc.CreateNotebook(context.Background(), "stop")
+	src, err := svc.AddUpload(context.Background(), nb.ID, strings.NewReader("x"), "p.pdf")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	<-emb.entered // the run is inside the embedding call, held there by the test
+	if _, err := svc.StopSource(context.Background(), src.ID); err != nil {
+		t.Fatal(err)
+	}
+	// emb.block is never closed on purpose: the run must end on the cancellation, not
+	// on being let go.
+
+	waitUntil(t, "the stopped row", func() bool {
+		return sourceStatus(t, db, src.ID).Status == domain.StatusStopped
+	})
+	got := sourceStatus(t, db, src.ID)
+	if got.SegmentCount != 0 && got.EmbeddedCount > got.SegmentCount {
+		t.Errorf("embedded_count %d exceeds segment_count %d", got.EmbeddedCount, got.SegmentCount)
+	}
+	if n := segmentCount(t, db, src.ID); n != 2 {
+		t.Errorf("%d chunks stored, want the two extraction had already written", n)
+	}
+	if n := storedVectors(t, db, src.ID); n != 0 {
+		t.Errorf("%d vectors stored, want none: the run died inside the first batch", n)
+	}
+	if got.EmbeddedCount != 0 {
+		t.Errorf("embedded_count = %d, want 0", got.EmbeddedCount)
+	}
+}
+
+// Stopping asks, and a source that is not being built has no run to cancel. The answer
+// is a refusal, and the finished file is untouched by it.
+func TestStopRefusesASourceThatIsNotBuilding(t *testing.T) {
+	svc, db, _ := testServiceWith(t, &fakeProcessor{res: &ingest.Result{Segments: []domain.Segment{
+		textSegment("doc1", 0, "one"),
+	}}}, &fakeEmbedder{dim: 8})
+
+	nb, _ := svc.CreateNotebook(context.Background(), "not running")
+	src, err := svc.AddUpload(context.Background(), nb.ID, strings.NewReader("x"), "p.pdf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, "the source to become ready", func() bool {
+		return sourceStatus(t, db, src.ID).Status == domain.StatusReady
+	})
+
+	if _, err := svc.StopSource(context.Background(), src.ID); !errors.Is(err, ErrInvalid) {
+		t.Errorf("StopSource error = %v, want ErrInvalid", err)
+	}
+	if got := sourceStatus(t, db, src.ID); got.Status != domain.StatusReady {
+		t.Errorf("status = %s, want the finished source left as it was", got.Status)
+	}
+}
+
+// A stop and then a resume, end to end: the resume embeds the chunks the cancelled run
+// never got vectors for, does not extract the file again, and closes the row as ready.
+func TestResumeAfterAStopFinishesTheEmbedding(t *testing.T) {
+	emb := &fakeEmbedder{dim: 8, entered: make(chan struct{}), block: make(chan struct{})}
+	proc := &fakeProcessor{res: &ingest.Result{Segments: []domain.Segment{
+		textSegment("doc1", 0, "first"),
+		textSegment("doc1", 1, "second"),
+	}}}
+	svc, db, _ := testServiceWith(t, proc, emb)
+
+	nb, _ := svc.CreateNotebook(context.Background(), "resume")
+	src, err := svc.AddUpload(context.Background(), nb.ID, strings.NewReader("x"), "p.pdf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-emb.entered
+	if _, err := svc.StopSource(context.Background(), src.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, "the stopped row", func() bool {
+		return sourceStatus(t, db, src.ID).Status == domain.StatusStopped
+	})
+	close(emb.block) // let the cancelled request go; the fake outlives the run it blocked
+
+	calls, embedded := emb.stats()
+	if embedded != 0 {
+		t.Fatalf("%d segments embedded before the stop, want the run caught red-handed", embedded)
+	}
+
+	if _, err := svc.ResumeSource(context.Background(), src.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, "the resumed source to become ready", func() bool {
+		return sourceStatus(t, db, src.ID).Status == domain.StatusReady
+	})
+
+	// One embedder call in total, and it is the resume's: the first run was stopped
+	// before it recorded anything.
+	if got, n := emb.stats(); got != calls+1 || n != embedded+2 {
+		t.Errorf("embedder saw %d calls / %d segments after resume, want one call for the two left over", got, n)
+	}
+	// The file was not taken apart again. Extraction is the stage with nothing to
+	// continue from, and a resume that has chunks in the store must not redo it.
+	if proc.called() != 1 {
+		t.Errorf("pipeline ran %d times, want once", proc.calls)
+	}
+	if n := segmentCount(t, db, src.ID); n != 2 {
+		t.Errorf("%d chunks stored, want the two from the first run", n)
+	}
+	if n := storedVectors(t, db, src.ID); n != 2 {
+		t.Errorf("%d vectors stored, want both chunks vectorised at last", n)
+	}
+}
+
+// The resume reads the store, not a note the stopped run left behind: half a file's
+// vectors were written before the stop, and only the other half is asked for now.
+func TestResumeEmbedsOnlyWhatHasNoVector(t *testing.T) {
+	emb := &fakeEmbedder{dim: 8, entered: make(chan struct{}), block: make(chan struct{})}
+	svc, db, _ := testServiceWith(t, &fakeProcessor{res: &ingest.Result{Segments: []domain.Segment{
+		textSegment("doc1", 0, "first"),
+		textSegment("doc1", 1, "second"),
+		textSegment("doc1", 2, "third"),
+	}}}, emb)
+
+	nb, _ := svc.CreateNotebook(context.Background(), "half done")
+	src, err := svc.AddUpload(context.Background(), nb.ID, strings.NewReader("x"), "p.pdf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-emb.entered
+	if _, err := svc.StopSource(context.Background(), src.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, "the stopped row", func() bool {
+		return sourceStatus(t, db, src.ID).Status == domain.StatusStopped
+	})
+	close(emb.block)
+
+	// A vector for one of the three, written by hand: this is what a run that got part
+	// way through a long pass leaves behind.
+	segs, err := db.ListSegments(context.Background(), src.ID)
+	if err != nil || len(segs) != 3 {
+		t.Fatalf("stored segments = %d, err %v", len(segs), err)
+	}
+	if err := db.PutEmbeddings(context.Background(), []domain.Embedding{
+		{SegmentID: segs[0].ID, Vector: []float32{1, 2, 3, 4}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := svc.ResumeSource(context.Background(), src.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, "the resumed source to become ready", func() bool {
+		return sourceStatus(t, db, src.ID).Status == domain.StatusReady
+	})
+
+	if want := map[string]bool{segs[1].ID: true, segs[2].ID: true}; !sameIDs(emb.ids(), want) {
+		t.Errorf("resume embedded %+v, want only the two chunks without a vector", emb.ids())
+	}
+	if n := storedVectors(t, db, src.ID); n != 3 {
+		t.Errorf("%d vectors stored, want all three", n)
+	}
+}
+
+// A stopped row with nothing in it is a run that died mid-extraction, where there is
+// nothing to continue from. The resume says so by doing the whole thing.
+func TestResumeWithoutStoredChunksRunsTheWholePipeline(t *testing.T) {
+	emb := &fakeEmbedder{dim: 8}
+	proc := &fakeProcessor{res: &ingest.Result{Segments: []domain.Segment{
+		textSegment("doc1", 0, "first"),
+	}}}
+	svc, db, _ := testServiceWith(t, proc, emb)
+
+	nb, _ := svc.CreateNotebook(context.Background(), "nothing stored")
+	src, err := svc.AddUpload(context.Background(), nb.ID, strings.NewReader("x"), "p.pdf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, "the source to become ready", func() bool {
+		return sourceStatus(t, db, src.ID).Status == domain.StatusReady
+	})
+	// Back to a stopped row with its chunks deleted, as a run stopped before extraction
+	// committed would leave it.
+	if err := db.PutSegments(context.Background(), src.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetSourceStatus(context.Background(), src.ID, domain.StatusStopped, "stopped", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := svc.ResumeSource(context.Background(), src.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, "the source to become ready again", func() bool {
+		return sourceStatus(t, db, src.ID).Status == domain.StatusReady
+	})
+	if proc.called() != 2 {
+		t.Errorf("pipeline ran %d times, want twice: nothing was stored to resume from", proc.calls)
+	}
+	if n := storedVectors(t, db, src.ID); n != 1 {
+		t.Errorf("%d vectors stored, want the chunk rebuilt and vectorised", n)
+	}
+}
+
+// Only a stopped source has a run to continue.
+func TestResumeRefusesASourceThatIsNotStopped(t *testing.T) {
+	svc, db, _ := testServiceWith(t, &fakeProcessor{res: &ingest.Result{Segments: []domain.Segment{
+		textSegment("doc1", 0, "one"),
+	}}}, &fakeEmbedder{dim: 8})
+
+	nb, _ := svc.CreateNotebook(context.Background(), "not stopped")
+	src, err := svc.AddUpload(context.Background(), nb.ID, strings.NewReader("x"), "p.pdf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, "the source to become ready", func() bool {
+		return sourceStatus(t, db, src.ID).Status == domain.StatusReady
+	})
+
+	if _, err := svc.ResumeSource(context.Background(), src.ID); !errors.Is(err, ErrInvalid) {
+		t.Errorf("ResumeSource error = %v, want ErrInvalid", err)
+	}
+}
+
+// sameIDs compares the ids a test asked for against the ids a fake recorded.
+func sameIDs(got []string, want map[string]bool) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for _, id := range got {
+		if !want[id] {
+			return false
+		}
+	}
+	return true
 }
 
 // ── embedding ─────────────────────────────────────────────────

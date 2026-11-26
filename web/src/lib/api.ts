@@ -138,6 +138,30 @@ export function reingestSource(sourceId: string): Promise<Source> {
   });
 }
 
+/**
+ * Halt a source where it stands. The run's own work is cancelled — page rasters,
+ * ffmpeg, the embedding request in flight — and the row comes back `stopped`.
+ *
+ * Nothing is deleted: the chunks and vectors written so far stay, which is what makes
+ * `resumeSource` mean something. The answer is the row as it was read, usually still
+ * `processing`, because the run records the stop a heartbeat after being cancelled; the
+ * caller keeps polling and the row catches up.
+ */
+export function stopSource(sourceId: string): Promise<Source> {
+  return request<Source>(`/api/sources/${sourceId}/stop`, { method: "POST" });
+}
+
+/**
+ * Continue a stopped source. Chunks that already have vectors are left alone and only
+ * the rest are embedded again; a file stopped before any chunk was written starts over,
+ * because there is nothing stored to continue from.
+ *
+ * Answers 202 with the row back at `processing`, so the caller keeps polling it.
+ */
+export function resumeSource(sourceId: string): Promise<Source> {
+  return request<Source>(`/api/sources/${sourceId}/resume`, { method: "POST" });
+}
+
 export async function listSegments(sourceId: string): Promise<Segment[]> {
   return list(
     await request<Segment[] | null>(`/api/sources/${sourceId}/segments`),

@@ -21,10 +21,18 @@ export type Notebook = {
 export type SourceKind = "pdf" | "image" | "audio" | "text" | "unsupported";
 
 /**
- * Async ingest state. `processing` covers everything from queue to chunking —
- * there is no finer progress signal until ingest emits SSE events.
+ * Async ingest state. `processing` covers everything from queue to chunking; while a
+ * source sits there, `embedded_count` of its `segment_count` chunks have vectors, which
+ * is what the row counts on. `stopped` is a run someone halted: what was built is still
+ * there and still inert — the search path only reads `ready` — and `resume` continues it
+ * where it stopped.
  */
-export type SourceStatus = "processing" | "ready" | "unsupported" | "failed";
+export type SourceStatus =
+  | "processing"
+  | "ready"
+  | "unsupported"
+  | "failed"
+  | "stopped";
 
 /**
  * What a run noticed on its way to a status. `tool_missing` names a program this machine does
@@ -69,6 +77,11 @@ export type Source = {
   findings?: Finding[]; // non-fatal: a stage skipped, a tool absent
   added_at: number;
   segment_count: number;
+  /**
+   * How many of those chunks have vectors. It grows while the source is processing,
+   * and it is what a resume reads: the chunks without a vector are the work left.
+   */
+  embedded_count: number;
   /**
    * How many notebooks list this file. Removing it from the last one deletes the
    * original and everything derived from it, so the row that says `1` is the row

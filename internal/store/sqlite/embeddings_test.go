@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
-	"io/fs"
 	"math"
 	"path/filepath"
 	"testing"
@@ -163,18 +162,15 @@ func TestMigrationsApplyOnceEach(t *testing.T) {
 	// Open takes a database file, and creates the directory above it.
 	path := filepath.Join(t.TempDir(), "libris.db")
 
-	files, err := fs.Glob(migrations, "migrations/*.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
+	want := wantMigrations(t)
 
 	for range 3 {
 		db, err := Open(path)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := mustInt(t, db, `SELECT COUNT(*) FROM schema_migrations`); got != len(files) {
-			t.Fatalf("%d migrations after a reopen, want %d exactly once each", got, len(files))
+		if got := mustInt(t, db, `SELECT COUNT(*) FROM schema_migrations`); got != want {
+			t.Fatalf("%d migrations after a reopen, want %d exactly once each", got, want)
 		}
 		db.Close()
 	}

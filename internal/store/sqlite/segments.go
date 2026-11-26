@@ -167,6 +167,24 @@ func (db *DB) ListSegments(ctx context.Context, sourceID string) ([]domain.Segme
 	return scanSegments(rows)
 }
 
+// SegmentsWithoutEmbeddings returns a source's chunks that have no vector yet, in
+// reading order — the work a resumed run has left to do.
+//
+// This is what makes Resume a continuation rather than a rerun. A run stopped halfway
+// through a four-thousand chunk upload has written every chunk and roughly half the
+// vectors; the rows already carrying one are not asked again, because re-embedding
+// them would produce the same numbers and cost the card the same minutes.
+func (db *DB) SegmentsWithoutEmbeddings(ctx context.Context, sourceID string) ([]domain.Segment, error) {
+	rows, err := db.sql.QueryContext(ctx, segmentSelect+
+		` WHERE g.source_id = ? AND g.embedding IS NULL
+		  ORDER BY g.doc_id, g.ordinal`, sourceID)
+	if err != nil {
+		return nil, fmt.Errorf("store: segments awaiting vectors: %w", err)
+	}
+	defer rows.Close()
+	return scanSegments(rows)
+}
+
 // SegmentsForNotebook returns every segment belonging to a notebook's ready
 // sources. This is the retrieval scope: the whole notebook, nothing outside it.
 // Brute-force cosine over 10⁴–10⁵ rows is what the embedding stage will scan.

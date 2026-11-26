@@ -52,13 +52,22 @@ func TestOpenMakesDirectory(t *testing.T) {
 	defer again.Close()
 
 	// Counted from the embedded files, so adding a migration does not break this.
+	if got, want := mustInt(t, again, `SELECT COUNT(*) FROM schema_migrations`), wantMigrations(t); got != want {
+		t.Fatalf("migrations applied = %d, want %d", got, want)
+	}
+}
+
+// wantMigrations is how many rows schema_migrations should hold once a database has
+// been opened: every embedded .sql file, plus the ones a Go migration marks. The
+// rebuild that admits the `stopped` status is one of those, because SQLite will not
+// change a CHECK inside a transaction — see stopped_status.go.
+func wantMigrations(t *testing.T) int {
+	t.Helper()
 	files, err := fs.Glob(migrations, "migrations/*.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := mustInt(t, again, `SELECT COUNT(*) FROM schema_migrations`); got != len(files) {
-		t.Fatalf("migrations applied = %d, want %d", got, len(files))
-	}
+	return len(files) + goMigrations
 }
 
 func TestOpenPragmas(t *testing.T) {

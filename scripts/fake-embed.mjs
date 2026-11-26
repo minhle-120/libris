@@ -126,6 +126,11 @@ export class EmbedServer {
     this.dim = dim;
     this.requests = [];
     this.down = false;
+    // Held: an embedding request arrives and nothing answers it, which is the only way
+    // a browser harness can catch a run in the middle of a pass and stop it. Releasing
+    // answers whatever is queued, in the order it came.
+    this.embedHold = false;
+    this.held = [];
 
     // The model half. `script` overrides the derived replies with an exact list of
     // completions, which is how a check makes a turn end a specific way: a refusal, an
@@ -160,6 +165,8 @@ export class EmbedServer {
           // Reset first: a caller that says "start over, and say this" means the
           // script it named, and a reset processed afterwards would delete it.
           if ('reset' in cmd) {
+            this.embedHold = false;
+            this.held = [];
             this.think = null;
             this.chatScript = null;
             this.chatHold = false;
@@ -167,6 +174,13 @@ export class EmbedServer {
             this.chatDown = false;
           }
           if ('down' in cmd) this.down = !!cmd.down;
+          if ('embedHold' in cmd) {
+            this.embedHold = !!cmd.embedHold;
+            if (!this.embedHold) {
+              const queued = this.held.splice(0);
+              for (const answer of queued) answer();
+            }
+          }
           if ('chatDown' in cmd) this.chatDown = !!cmd.chatDown;
           if ('script' in cmd) this.chatScript = cmd.script;
           // A script that is held rather than consumed: a loop that re-prompts a
@@ -262,8 +276,18 @@ export class EmbedServer {
           // scrambles order shows up as a mismatch against the segment's text.
           embedding: this.vector(entry, i)
         }));
-        res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ object: 'list', model: parsed.model, data }));
+        const answer = () => {
+          // A stopped run hangs up on its own request; answering a dead socket is the
+          // harmless half of holding, and the harness counts the arrival anyway.
+          if (res.writableEnded || res.destroyed) return;
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ object: 'list', model: parsed.model, data }));
+        };
+        if (this.embedHold) {
+          this.held.push(answer);
+          return;
+        }
+        answer();
       });
     });
   }

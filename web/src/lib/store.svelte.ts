@@ -540,6 +540,31 @@ export async function removeSource(source: Source) {
   await Promise.all([refreshSources(), refreshNotebooks()]);
 }
 
+/** Halt a source's run where it stands; the row goes to `stopped` when the run notices. */
+export async function stop(source: Source) {
+  try {
+    const halted = await api.stopSource(source.id);
+    app.sources = app.sources.map((s) => (s.id === halted.id ? halted : s));
+    // The stop lands a moment after the answer, so this is the poll that sees it.
+    pollSources();
+    void refreshSources();
+  } catch (e) {
+    app.error = errorMessage(e);
+  }
+}
+
+/** Continue a stopped source: everything already vectorised is kept, the rest is done. */
+export async function resume(source: Source) {
+  try {
+    const again = await api.resumeSource(source.id);
+    app.sources = app.sources.map((s) => (s.id === again.id ? again : s));
+    pollSources();
+    void refreshSources();
+  } catch (e) {
+    app.error = errorMessage(e);
+  }
+}
+
 export async function reingest(source: Source) {
   if (!app.notebookId) return;
   try {

@@ -127,12 +127,13 @@ func NewEmbedderStamping(client *llm.Client, baseURL, dial, stamps string, wantD
 // so the dimension the settings promise can be checked.
 func (e *Embedder) Probe(ctx context.Context) (int, error) {
 	// Probed through the document form rather than a bare string, so the length
-	// discovered belongs to the shape the pipeline will actually send.
+	// discovered belongs to the shape the pipeline will actually send. No batch sink:
+	// a probe is one segment, and there is nothing to report while it is in flight.
 	vecs, err := e.Embed(ctx, "", []domain.Segment{{
 		ID:   "probe",
 		Kind: domain.KindText,
 		Text: "libris embedding probe",
-	}})
+	}}, nil)
 	if err != nil {
 		return 0, err
 	}
@@ -145,7 +146,16 @@ func (e *Embedder) Probe(ctx context.Context) (int, error) {
 // filename libris kept — and is used to build the model's document prompt. Empty
 // means there is none. It never reaches the stored text: citations quote the
 // segment, not the prompt.
-func (e *Embedder) Embed(ctx context.Context, title string, segments []domain.Segment) ([]domain.Embedding, error) {
+//
+// onBatch, which may be nil, is handed each batch as soon as that batch is done. A
+// caller that stores vectors as they land is the reason it exists: a four-thousand
+// chunk upload otherwise reports nothing until the last of them, and the UI has no
+// way to say how far the wait has got. It is called from whichever goroutine finished
+// that batch, in no particular order, and as many at a time as are in flight — so a
+// caller that counts or stores has to be safe for that, which a database write is.
+// An error from it stops the run: a caller whose own store is failing has no use for
+// the vectors still arriving.
+func (e *Embedder) Embed(ctx context.Context, title string, segments []domain.Segment, onBatch func([]domain.Embedding) error) ([]domain.Embedding, error) {
 	if len(segments) == 0 {
 		return nil, nil
 	}
@@ -181,6 +191,11 @@ func (e *Embedder) Embed(ctx context.Context, title string, segments []domain.Se
 			defer func() { <-slots }()
 
 			embeddings, err := e.embedBatch(ctx, title, segments[b.start:b.end], b, len(segments))
+			if err == nil && onBatch != nil {
+				if err = onBatch(embeddings); err != nil {
+					err = fmt.Errorf("index: storing vectors: %w", err)
+				}
+			}
 			if err != nil {
 				// One failed batch fails the call, so the batches still running are
 				// stopped rather than finishing work that will never be stored.

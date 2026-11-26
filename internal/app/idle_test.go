@@ -26,7 +26,8 @@ func TestIdleReleaseWaitsForTheQueueAndFiresOnce(t *testing.T) {
 
 	var fires atomic.Int64
 	svc := &Service{
-		jobs:    make(chan string, queueDepth),
+		jobs:    make(chan job, queueDepth),
+		work:    work{running: map[string]*run{}, queued: map[string]bool{}},
 		log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 		jobCtx:  context.Background(),
 		release: func(context.Context) error { fires.Add(1); return nil },
@@ -34,7 +35,7 @@ func TestIdleReleaseWaitsForTheQueueAndFiresOnce(t *testing.T) {
 
 	// A job waiting is not an idle machine, however long the window is left to run. This is the
 	// rule that keeps a twenty-file drop from putting the model to sleep between files.
-	svc.jobs <- "still coming"
+	svc.jobs <- job{sourceID: "still coming"}
 	svc.armIdleRelease()
 	time.Sleep(5 * embedIdleWindow)
 	if got := fires.Load(); got != 0 {
@@ -65,7 +66,8 @@ func TestIdleReleaseWaitsForTheQueueAndFiresOnce(t *testing.T) {
 // not care.
 func TestIdleReleaseDoesNothingWhenThereIsNobodyToTell(t *testing.T) {
 	svc := &Service{
-		jobs:   make(chan string, queueDepth),
+		jobs:   make(chan job, queueDepth),
+		work:   work{running: map[string]*run{}, queued: map[string]bool{}},
 		log:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 		jobCtx: context.Background(),
 	}

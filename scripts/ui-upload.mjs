@@ -32,6 +32,15 @@ const control = (down) =>
     headers: { 'content-type': 'application/json' }
   });
 
+// Hold the embedding server's answers without taking it down: a run that is stuck
+// mid-pass is the only thing a browser can plausibly press Stop on.
+const holdEmbeddings = (hold) =>
+  fetch(`${embed}/control`, {
+    method: 'POST',
+    body: JSON.stringify({ embedHold: hold }),
+    headers: { 'content-type': 'application/json' }
+  });
+
 const app = process.env.APP ?? 'http://127.0.0.1:8080/';
 const cdpPort = Number(process.env.CDP_PORT ?? 9321);
 
@@ -465,6 +474,87 @@ const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ui-pr
     console.log('  skip EMBED is not set, so the retry path is not exercised');
   }
 
+  // ── stopping a run, and picking it back up ─────────────────────
+  // Embedding is the long tail of an upload, so it is what a person stops. The fake
+  // server holds its answers to keep the run there: the row has to show where the run
+  // stands, then sit still at that place, then finish from it.
+  if (embed) {
+    // This section sits before the settings check on purpose: the settings view is a
+    // page of its own, and the upload control lives only in the sources panel.
+    await holdEmbeddings(true);
+    const stopFile = '/tmp/libris-stop-resume-fixture.txt';
+    writeFileSync(stopFile, `stop probe ${Date.now()}\n` + 'a sentence about rivers and roads.\n');
+
+    await ui.setFiles('input[type=file]', [stopFile]);
+    const mid = await ui.until(`
+      const row = [...document.querySelectorAll('.source')].find((r) =>
+        r.textContent.includes('libris-stop-resume-fixture'));
+      const badge = row?.querySelector('.badge')?.textContent.trim();
+      if (badge !== 'processing') return null;
+      return {
+        facts: row.querySelector('.facts')?.textContent.replace(/\\s+/g, ' ').trim() ?? '',
+        stop: !!row.querySelector('button[title^="Stop this file"]')
+      };
+    `, 200, 50);
+    checks.check('a processing row counts chunks, not just waits',
+      /\d+ \/ \d+ chunks?/.test(mid?.facts ?? ''), () => `facts=${JSON.stringify(mid?.facts)}`);
+    checks.check('a processing row offers stop', mid?.stop === true);
+
+    await ui.eval(`
+      const row = [...document.querySelectorAll('.source')].find((r) =>
+        r.textContent.includes('libris-stop-resume-fixture'));
+      row.querySelector('button[title^="Stop this file"]').click();
+      return true;
+    `);
+    const halted = await ui.until(`
+      const row = [...document.querySelectorAll('.source')].find((r) =>
+        r.textContent.includes('libris-stop-resume-fixture'));
+      const badge = row?.querySelector('.badge')?.textContent.trim();
+      if (badge !== 'stopped') return null;
+      return {
+        badge,
+        facts: row.querySelector('.facts')?.textContent.replace(/\\s+/g, ' ').trim() ?? '',
+        resume: !!row.querySelector('button[title^="Continue where it stopped"]'),
+        // Stopping deletes nothing, and the chunks it had written are still readable.
+        inspect: !!row.querySelector('button[title^="See how"]')
+      };
+    `, 200, 50);
+    checks.check('stop leaves the row stopped, not failed', halted?.badge === 'stopped', () => `badge=${halted?.badge}`);
+    // The counter, not the whole fact line: the badge's own word changes between the
+    // two reads, and it lives in the same line.
+    const counter = (facts) => (facts.match(/\d+ \/ \d+ chunks?/) ?? [''])[0];
+    checks.check('the stopped row keeps its counter where it stopped',
+      counter(halted?.facts ?? '') !== '' && counter(halted?.facts ?? '') === counter(mid?.facts ?? ''),
+      () => `${counter(halted?.facts ?? '')} vs ${counter(mid?.facts ?? '')}`);
+    checks.check('a stopped row offers resume', halted?.resume === true);
+    checks.check('a stopped row can still be read', halted?.inspect === true);
+
+    // Released, and resumed: the same file reaches ready without being re-uploaded.
+    await holdEmbeddings(false);
+    const statsBefore = await stats();
+    await ui.eval(`
+      const row = [...document.querySelectorAll('.source')].find((r) =>
+        r.textContent.includes('libris-stop-resume-fixture'));
+      row.querySelector('button[title^="Continue where it stopped"]').click();
+      return true;
+    `);
+    const backUp = await ui.until(`
+      const row = [...document.querySelectorAll('.source')].find((r) =>
+        r.textContent.includes('libris-stop-resume-fixture'));
+      const badge = row?.querySelector('.badge')?.textContent.trim();
+      return badge === 'ready'
+        ? { facts: row.querySelector('.facts')?.textContent.replace(/\\s+/g, ' ').trim() ?? '' }
+        : null;
+    `, 200, 50);
+    checks.check('resume reaches ready', !!backUp, () => `facts=${backUp?.facts}`);
+    checks.check('a resumed row reports its chunks as a finished one does',
+      /\b\d+ chunks?\b/.test(backUp?.facts ?? '') && !/\//.test(backUp?.facts ?? ''),
+      () => `facts=${backUp?.facts}`);
+    const statsAfter = await stats();
+    checks.check('the resume asked the embedding server for the work, not for nothing',
+      statsAfter.requests > statsBefore.requests,
+      () => `${statsBefore.requests} -> ${statsAfter.requests}`);
+
   // ── settings still work in the same session ────────────────────
   const settings = await ui.eval(`
     [...document.querySelectorAll('header .right button')].at(-2).click();
@@ -476,6 +566,9 @@ const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ui-pr
              inputs: document.querySelectorAll('.panels input').length };
   `);
   checks.check('settings still render from the backend', settings.groups >= 3 && settings.inputs > 10, JSON.stringify(settings));
+
+
+  }
 
   checks.check('no uncaught page errors', ui.pageErrors.length === 0, ui.pageErrors.slice(0, 2).join(' | '));
   checks.check('no console errors', ui.consoleErrors.length === 0, ui.consoleErrors.slice(0, 2).join(' | '));

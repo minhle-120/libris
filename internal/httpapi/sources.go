@@ -32,6 +32,8 @@ type API interface {
 	ListSources(context.Context, string) ([]domain.Source, error)
 	ListSegments(context.Context, string) ([]domain.Segment, error)
 	ReingestSource(context.Context, string) (domain.Source, error)
+	StopSource(context.Context, string) (domain.Source, error)
+	ResumeSource(context.Context, string) (domain.Source, error)
 	GetAsset(context.Context, string) (domain.Asset, error)
 
 	Chats(context.Context, string) ([]domain.Chat, error)
@@ -40,6 +42,33 @@ type API interface {
 	DeleteChat(context.Context, string, string) error
 	ChatMessages(context.Context, string, string) ([]domain.Message, error)
 	Ask(context.Context, string, string, string, app.AskEvents) (domain.Message, error)
+}
+
+// handleStopSource cancels the work in flight for one source. The row comes back as it
+// is at the moment of the ask, which is usually still "processing": the run notices the
+// cancellation a heartbeat later and writes "stopped", and the UI is polling until it
+// does. What the answer guarantees is that the work has been stopped, not that the row
+// has caught up.
+func (s *Server) handleStopSource(w http.ResponseWriter, r *http.Request) {
+	source, err := s.app.StopSource(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.fail(w, "stop source", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, source)
+}
+
+// handleResumeSource puts a stopped source back on the queue. It answers 202 like the
+// other calls that start work rather than report it, with the row now sitting at
+// "processing" — which is the status the UI polls on, and the reason the row cannot be
+// left showing "stopped" while work is happening.
+func (s *Server) handleResumeSource(w http.ResponseWriter, r *http.Request) {
+	source, err := s.app.ResumeSource(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.fail(w, "resume source", err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, source)
 }
 
 // uploadHeadroom is how much of a multipart body is kept in memory before Go
@@ -67,6 +96,8 @@ func (s *Server) addAppRoutes(a API) {
 	s.mux.HandleFunc("GET /api/sources/{id}", s.handleGetSource)
 	s.mux.HandleFunc("GET /api/sources/{id}/segments", s.handleListSegments)
 	s.mux.HandleFunc("POST /api/sources/{id}/reingest", s.handleReingestSource)
+	s.mux.HandleFunc("POST /api/sources/{id}/stop", s.handleStopSource)
+	s.mux.HandleFunc("POST /api/sources/{id}/resume", s.handleResumeSource)
 	s.mux.HandleFunc("GET /api/sources/{id}/original", s.handleOriginal)
 
 	// Asset ids contain slashes ("<sha>/pages/page-0001.png"), so this is the

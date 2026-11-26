@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"libris/internal/config"
@@ -43,6 +44,7 @@ type Store interface {
 	PutSegments(context.Context, string, []domain.Segment) error
 	PutEmbeddings(context.Context, []domain.Embedding) error
 	ListSegments(context.Context, string) ([]domain.Segment, error)
+	SegmentsWithoutEmbeddings(context.Context, string) ([]domain.Segment, error)
 	GetAsset(context.Context, string) (domain.Asset, error)
 
 	// Both of these are repair for work a previous process left behind: rows an older
@@ -88,12 +90,19 @@ type Ingestor interface {
 //
 // Returning fewer vectors than it was given is an error, not a partial success.
 // A source with some vectors and not others answers questions with a silent
-// slice of itself, which is the failure this contract exists to prevent.
+// slice of itself, which is the failure this contract exists to prevent. Handing
+// the vectors over as they are finished does not weaken it: the source stays
+// unready until every one of them has arrived and been written.
 type Embedder interface {
 	// Embed vectors a batch of segments belonging to one document. title is that
 	// document's display name, used by models that want their inputs steered; an
 	// embedder that has no use for it ignores it.
-	Embed(ctx context.Context, title string, segments []domain.Segment) ([]domain.Embedding, error)
+	//
+	// onBatch, which may be nil, is given each finished batch as it lands — in no
+	// order, from as many goroutines as the embedder has requests in flight. It is
+	// how a four-thousand chunk upload can say how far it has got instead of
+	// reporting nothing until the last vector. An error from it stops the run.
+	Embed(ctx context.Context, title string, segments []domain.Segment, onBatch func([]domain.Embedding) error) ([]domain.Embedding, error)
 }
 
 // EmbedderFor builds an embedder for one configuration. It is a factory for the
@@ -183,11 +192,18 @@ type Service struct {
 	originals Originals
 	assetsDir string
 	log       *slog.Logger
-	jobs      chan string
+	jobs      chan job
 	stop      chan struct{}
 	done      chan struct{}
 	jobCtx    context.Context
 	jobCancel context.CancelFunc
+
+	// work is what is happening to which source, so stopping one file leaves every
+	// other upload alone. It holds the runs in flight and the ids still waiting in the
+	// queue, because a channel has no contents to look at and "is this one still
+	// merely queued?" has to be answerable to stop it.
+	workMu sync.Mutex
+	work   work
 
 	release func(ctx context.Context) error
 	// idle is guarded by idleMu because it is written by the worker and cleared by the goroutine
@@ -234,9 +250,10 @@ func New(opts Options) (*Service, error) {
 		originals: Originals{Dir: opts.Originals},
 		assetsDir: opts.Assets,
 		log:       log,
-		jobs:      make(chan string, queueDepth),
+		jobs:      make(chan job, queueDepth),
 		stop:      make(chan struct{}),
 		done:      make(chan struct{}),
+		work:      work{running: map[string]*run{}, queued: map[string]bool{}},
 	}, nil
 }
 
@@ -372,11 +389,11 @@ func (s *Service) AddUpload(ctx context.Context, notebookID string, r io.Reader,
 
 	switch {
 	case added:
-		return stored, s.enqueue(stored.ID)
+		return stored, s.enqueue(job{sourceID: stored.ID})
 	case stored.Status == domain.StatusFailed:
 		// Re-offering a file that failed is the cheapest way to retry it.
 		s.log.Info("re-queueing a failed source", "source", stored.ID, "was", stored.Detail)
-		return s.requeue(ctx, stored)
+		return s.requeue(ctx, stored, false)
 	default:
 		return stored, nil
 	}
@@ -407,11 +424,12 @@ func (s *Service) ReingestSource(ctx context.Context, id string) (domain.Source,
 		// interleave two pipelines over one set of segments.
 		return source, fmt.Errorf("%w: this source is already being rebuilt", ErrInvalid)
 	}
-	return s.requeue(ctx, source)
+	return s.requeue(ctx, source, false)
 }
 
-// requeue marks a source as working again, puts it back in the queue, and answers
-// with the source as it now is.
+// requeue marks a source as working again, puts it back in the queue, and answers with
+// the source as it now is. `resume` is what the worker is told to do with it when its
+// turn comes: build the file from nothing, or finish what a stop left half done.
 //
 // The returned value matters: it is the body the UI writes into the row, and a row
 // still saying "failed" after a retry that started is worse than no answer at all
@@ -420,13 +438,48 @@ func (s *Service) ReingestSource(ctx context.Context, id string) (domain.Source,
 //
 // The status is written before enqueueing on purpose. A source re-ingests by
 // deleting its segments, which deletes their vectors with them, so a `ready`
-// source sitting in the queue is a source answering questions with nothing while
-// the UI says it is searchable.
-func (s *Service) requeue(ctx context.Context, source domain.Source) (domain.Source, error) {
-	if err := s.store.SetSourceStatus(ctx, source.ID, domain.StatusProcessing, "", nil); err != nil {
+// source sitting in the queue is a source answering questions with nothing while the UI says it is searchable.
+
+// ResumeSource puts a stopped source back on the queue without throwing anything away.
+//
+// What it can continue is bounded by what the store actually holds, and the bound is
+// worth stating plainly: a run stopped during embedding leaves every chunk of the file
+// sitting there with its text, its ordinal and its page image, and only the vectors
+// missing — so that is all a resume does, which on a long upload is nearly the whole
+// job. A run stopped mid-extraction leaves nothing, because extraction commits a
+// source's chunks in one transaction at the end; for that file the only honest resume
+// is the whole pipeline again, and that is what it becomes.
+func (s *Service) ResumeSource(ctx context.Context, id string) (domain.Source, error) {
+	source, err := s.store.GetSource(ctx, id)
+	if err != nil {
+		return domain.Source{}, err
+	}
+
+	switch source.Status {
+	case domain.StatusStopped:
+	case domain.StatusProcessing:
+		return domain.Source{}, fmt.Errorf("%w: this source is already being built", ErrInvalid)
+	default:
+		return domain.Source{}, fmt.Errorf("%w: only a stopped source can be resumed", ErrInvalid)
+	}
+
+	return s.requeue(ctx, source, true)
+}
+
+func (s *Service) requeue(ctx context.Context, source domain.Source, resume bool) (domain.Source, error) {
+	// A resume keeps the warnings the first run recorded, because the stage that
+	// produced them may be skipped this time — and a finding nobody recomputes is a
+	// finding quietly deleted. A rerun starts from nothing, so it starts from no
+	// findings either.
+	var findings []domain.Finding
+	if resume {
+		findings = source.Findings
+	}
+
+	if err := s.store.SetSourceStatus(ctx, source.ID, domain.StatusProcessing, "", findings); err != nil {
 		return source, err
 	}
-	if err := s.enqueue(source.ID); err != nil {
+	if err := s.enqueue(job{sourceID: source.ID, resume: resume}); err != nil {
 		// Undo, or the row waits at "processing" for the next start's sweep.
 		if restore := s.store.SetSourceStatus(ctx, source.ID, source.Status, source.Detail, source.Findings); restore != nil {
 			s.log.Warn("could not restore status after a refused retry",
@@ -579,9 +632,112 @@ func (s *Service) requireNotebook(ctx context.Context, id string) error {
 	return nil
 }
 
-func (s *Service) enqueue(sourceID string) error {
+// work is the queue's idea of what is happening: the runs in flight keyed by source,
+// and the ids still waiting their turn. Both are needed to stop a file — a run can be
+// cancelled, a queued one can only be marked, because it has not begun.
+type work struct {
+	running map[string]*run
+	queued  map[string]bool
+}
+
+// job is one source waiting in the queue, and whether its turn is a first run or a
+// resume. The queue carries this rather than a bare id because "build this file" and
+// "finish this file" are different promises, and a channel has no room to remember
+// which one it was sent.
+type job struct {
+	sourceID string
+	resume   bool
+}
+
+// run is one source's ingest in flight: how to cancel it, and whether the cancellation
+// came from a person rather than from a shutdown. That flag is the whole difference
+// between a row that reads `stopped` and one left processing for the next start's
+// sweep to close out as failed.
+type run struct {
+	cancel  context.CancelFunc
+	stopped atomic.Bool
+}
+
+// begin takes a queued id and starts its run, in one step: a stop landing between the
+// two would otherwise find the source neither queued nor running, and answer "this
+// source is not being built" about work that is happening.
+func (s *Service) begin(sourceID string, r *run) {
+	s.workMu.Lock()
+	defer s.workMu.Unlock()
+	delete(s.work.queued, sourceID)
+	s.work.running[sourceID] = r
+}
+
+// end forgets a run that has finished.
+func (s *Service) end(sourceID string) {
+	s.workMu.Lock()
+	defer s.workMu.Unlock()
+	delete(s.work.running, sourceID)
+}
+
+// stopping marks a queued source stopped in the database, and answers whether it was
+// queued at all. The worker reads the row before it starts, so a source marked here is
+// skipped rather than built — and its chunks, which no stage wrote yet, stay absent.
+func (s *Service) stopping(ctx context.Context, sourceID string) bool {
+	s.workMu.Lock()
+	queued := s.work.queued[sourceID]
+	if queued {
+		delete(s.work.queued, sourceID)
+	}
+	s.workMu.Unlock()
+
+	if !queued {
+		return false
+	}
+	s.setStatus(ctx, sourceID, domain.StatusStopped, "stopped before it started", nil)
+	return true
+}
+
+// recordStopped closes a cancelled run's row. It cannot use the run's own context —
+// that is what was just cancelled — so it writes on one detached from it, with a
+// deadline, because detached must not mean forever.
+func (s *Service) recordStopped(sourceID string) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(s.jobCtx), 10*time.Second)
+	defer cancel()
+	s.setStatus(ctx, sourceID, domain.StatusStopped, "stopped", nil)
+}
+
+// StopSource cancels the work in flight for one source.
+//
+// Everything the run had already written stays: chunks, page rasters, clips, and the
+// vectors written so far. None of it is citable while the row is `stopped` — the scan
+// asks for `status = 'ready'` — so a stopped source is inert rather than half
+// searchable. Resume picks the rest of it up where it stopped; Rerun throws it away
+// and rebuilds.
+func (s *Service) StopSource(ctx context.Context, id string) (domain.Source, error) {
+	source, err := s.store.GetSource(ctx, id)
+	if err != nil {
+		return domain.Source{}, err
+	}
+
+	s.workMu.Lock()
+	r := s.work.running[id]
+	s.workMu.Unlock()
+
+	if r != nil {
+		// The flag first, then the cancellation: the run reads the flag to tell a stop
+		// it was asked for from a shutdown it was caught in.
+		r.stopped.Store(true)
+		r.cancel()
+		return source, nil
+	}
+	if s.stopping(ctx, id) {
+		return source, nil
+	}
+	return source, fmt.Errorf("%w: this source is not being built", ErrInvalid)
+}
+
+func (s *Service) enqueue(j job) error {
 	select {
-	case s.jobs <- sourceID:
+	case s.jobs <- j:
+		s.workMu.Lock()
+		s.work.queued[j.sourceID] = true
+		s.workMu.Unlock()
 		return nil
 	default:
 		return fmt.Errorf("%w: %d uploads waiting", ErrBusy, len(s.jobs))
@@ -596,13 +752,25 @@ func (s *Service) worker() {
 		select {
 		case <-s.stop:
 			return
-		case id := <-s.jobs:
+		case j := <-s.jobs:
 			// The grace period restarts on work, not on completion: the point is that an
 			// upload has arrived, which is known the moment it is taken off the queue.
 			s.cancelIdleRelease()
-			ctx, cancel := context.WithTimeout(s.jobCtx, jobTimeout)
-			s.ingest(ctx, id)
+
+			r := &run{}
+			// jobCtx stays the parent: shutting the process down must still reach a run in
+			// flight, and that cancellation is the one a run must not mistake for a person
+			// pressing stop.
+			runCtx, stopRun := context.WithCancel(s.jobCtx)
+			r.cancel = stopRun
+			s.begin(j.sourceID, r)
+
+			ctx, cancel := context.WithTimeout(runCtx, jobTimeout)
+			s.ingest(ctx, j.sourceID, r, j.resume)
 			cancel()
+			stopRun()
+			s.end(j.sourceID)
+
 			s.armIdleRelease()
 		}
 	}
@@ -664,19 +832,88 @@ func (s *Service) releaseEmbedder(waited time.Duration) {
 	s.log.Info("ingest idle; the embedding model is off the device", "idle", waited.String())
 }
 
+// resumeMissing embeds the chunks a stopped run never got vectors for, and reports
+// whether it handled the job. It declines only one case — a source whose store holds no
+// chunks at all — because there is then nothing to continue from, and the caller's full
+// pipeline is the right answer.
+//
+// It reads the store rather than any note the stopped run left behind, so a resume works
+// after a restart just as well as right after the stop: the rows are the record of what
+// was done, which is the same thing the search path trusts.
+func (s *Service) resumeMissing(ctx context.Context, source domain.Source, settle func(domain.SourceStatus, string, []domain.Finding)) bool {
+	missing, err := s.store.SegmentsWithoutEmbeddings(ctx, source.ID)
+	if err != nil {
+		settle(domain.StatusFailed, "could not read what was left to embed: "+err.Error(), nil)
+		return true
+	}
+
+	if len(missing) == 0 {
+		stored, err := s.store.ListSegments(ctx, source.ID)
+		if err != nil {
+			settle(domain.StatusFailed, "could not read this source's chunks: "+err.Error(), nil)
+			return true
+		}
+		if len(stored) == 0 {
+			return false
+		}
+		// Every chunk already has a vector: the run finished the work and died before
+		// recording that it had. Nothing is recomputed; the row is simply closed.
+		settle(domain.StatusReady, "", source.Findings)
+		return true
+	}
+
+	start := time.Now()
+	if err := s.embed(ctx, source.Name, missing); err != nil {
+		s.log.Warn("resume embedding failed", "source", source.ID, "segments", len(missing), "err", err)
+		settle(domain.StatusFailed, err.Error(), source.Findings)
+		return true
+	}
+	settle(domain.StatusReady, "", source.Findings)
+	s.log.Info("resume done", "source", source.ID, "embedded", len(missing),
+		"seconds", time.Since(start).Round(time.Second))
+	return true
+}
+
 // ingest runs the pipeline for one source and records how it ended. A failure
 // here is data, never a crash: the batch continues and the source says why.
-func (s *Service) ingest(ctx context.Context, sourceID string) {
+func (s *Service) ingest(ctx context.Context, sourceID string, r *run, resume bool) {
 	source, err := s.store.GetSource(ctx, sourceID)
 	if err != nil {
 		s.log.Warn("ingest skipped", "source", sourceID, "err", err)
+		return
+	}
+	if source.Status != domain.StatusProcessing {
+		// Stopped between the queue and this moment. The stop marked the row when it
+		// arrived; there is nothing here to build and nothing to record.
+		s.log.Info("ingest skipped: the source is not waiting to be built",
+			"source", sourceID, "status", source.Status)
+		return
+	}
+
+	// settle writes an outcome, unless a person stopped this run on the way — in which
+	// case it writes the stop instead. Every branch asks it rather than the store
+	// because a cancelled context makes the writes along the way fail in exactly the
+	// shape of a real failure, and a file someone stopped must not read as a file that
+	// broke.
+	settle := func(status domain.SourceStatus, detail string, findings []domain.Finding) {
+		if r.stopped.Load() {
+			s.recordStopped(sourceID)
+			return
+		}
+		s.setStatus(ctx, sourceID, status, detail, findings)
+	}
+
+	// A resume takes the short path when there is something to resume from, and falls
+	// through to the whole pipeline when there is not — which is the honest answer for
+	// a run stopped before extraction committed its chunks.
+	if resume && s.resumeMissing(ctx, source, settle) {
 		return
 	}
 
 	cfg := s.settings.Get()
 	processor, err := s.processor(cfg, ingest.DirSink{Root: s.assetsDir})
 	if err != nil {
-		s.setStatus(ctx, sourceID, domain.StatusFailed, "could not start ingest: "+err.Error(), nil)
+		settle(domain.StatusFailed, "could not start ingest: "+err.Error(), nil)
 		return
 	}
 
@@ -684,13 +921,19 @@ func (s *Service) ingest(ctx context.Context, sourceID string) {
 	res, err := processor.Process(ctx, source.OriginalPath)
 	switch {
 	case errors.Is(err, context.Canceled):
+		if r.stopped.Load() {
+			settle(domain.StatusStopped, "stopped", nil)
+			s.log.Info("ingest stopped", "source", sourceID,
+				"seconds", time.Since(start).Round(time.Millisecond))
+			return
+		}
 		// Only a killed process gets here. Leave the row processing so the next
 		// start's sweep marks it failed and the user can retry.
 		s.log.Info("ingest interrupted", "source", sourceID)
 		return
 	case err != nil:
 		s.log.Warn("ingest failed", "source", sourceID, "err", err)
-		s.setStatus(ctx, sourceID, domain.StatusFailed, err.Error(), nil)
+		settle(domain.StatusFailed, err.Error(), nil)
 		return
 	}
 
@@ -714,16 +957,16 @@ func (s *Service) ingest(ctx context.Context, sourceID string) {
 		}
 	}
 	if err := s.store.PutAssets(ctx, sourceID, assets); err != nil {
-		s.setStatus(ctx, sourceID, domain.StatusFailed, "could not store assets: "+err.Error(), nil)
+		settle(domain.StatusFailed, "could not store assets: "+err.Error(), nil)
 		return
 	}
 	if err := s.store.PutSegments(ctx, sourceID, res.Segments); err != nil {
-		s.setStatus(ctx, sourceID, domain.StatusFailed, "could not store segments: "+err.Error(), nil)
+		settle(domain.StatusFailed, "could not store segments: "+err.Error(), nil)
 		return
 	}
 
 	if res.Unsupported != "" {
-		s.setStatus(ctx, sourceID, domain.StatusUnsupported, res.Unsupported, res.Findings)
+		settle(domain.StatusUnsupported, res.Unsupported, res.Findings)
 		s.log.Info("source unsupported", "source", sourceID, "reason", res.Unsupported,
 			"findings", res.Findings, "seconds", time.Since(start).Round(time.Millisecond))
 		return
@@ -736,11 +979,11 @@ func (s *Service) ingest(ctx context.Context, sourceID string) {
 		s.log.Warn("embedding failed", "source", sourceID, "segments", len(res.Segments), "err", err)
 		// The chunks stay, so the source is still readable and inspectable; what
 		// is missing is retrievability, and the detail says which server to fix.
-		s.setStatus(ctx, sourceID, domain.StatusFailed, err.Error(), res.Findings)
+		settle(domain.StatusFailed, err.Error(), res.Findings)
 		return
 	}
 
-	s.setStatus(ctx, sourceID, domain.StatusReady, "", res.Findings)
+	settle(domain.StatusReady, "", res.Findings)
 	// Findings are logged even on a Ready row, because "ready" is a promise about retrieval and
 	// says nothing about a PDF whose page images were skipped: the row that looks fine and
 	// answers no visual question is explained by this line and by nothing else.
@@ -761,13 +1004,28 @@ func (s *Service) embed(ctx context.Context, title string, segments []domain.Seg
 		return fmt.Errorf("could not start the embedder: %w", err)
 	}
 
-	vectors, err := embedder.Embed(ctx, title, segments)
+	// Every vector is written the moment its batch is done, which is what lets the
+	// source row count how far the wait has got: an hour of a recording is a quarter
+	// of an hour of vectors arriving one batch at a time, and until now the row said
+	// nothing about any of it until the last one.
+	//
+	// The sink is the write path when the embedder uses it. If one does not — a hosted
+	// API that has never heard of the callback — the vectors are still the source's
+	// promise, and the write after the call is where that promise is kept whole.
+	var sunk atomic.Bool
+	vectors, err := embedder.Embed(ctx, title, segments, func(batch []domain.Embedding) error {
+		sunk.Store(true)
+		return s.store.PutEmbeddings(ctx, batch)
+	})
 	if err != nil {
 		return err
 	}
 	if len(vectors) != len(segments) {
 		return fmt.Errorf("embedder returned %d vectors for %d segments",
 			len(vectors), len(segments))
+	}
+	if sunk.Load() {
+		return nil
 	}
 	return s.store.PutEmbeddings(ctx, vectors)
 }

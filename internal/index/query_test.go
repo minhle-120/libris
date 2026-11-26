@@ -87,7 +87,7 @@ func TestIdentityMatchesWhatEmbeddingsRecord(t *testing.T) {
 
 	got, err := e.Embed(context.Background(), docTitle, []domain.Segment{
 		{ID: "a:0000", Kind: domain.KindText, Text: "x"},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

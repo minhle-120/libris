@@ -4,6 +4,8 @@
     openViewer,
     removeSource,
     reingest,
+    resume,
+    stop,
     setOpen,
     setPanel,
     setWidth,
@@ -232,12 +234,23 @@
                           : s.status === 'processing'
                             ? 'attention'
                             : s.status === 'failed'
-                              ? 'danger'
+                            ? 'danger'
+                            : s.status === 'stopped'
+                              ? 'attention'
                               : 'neutral'}>{s.status}</Badge>
                       <span class="chip">{s.kind}</span>
                       <span>{formatBytes(s.bytes)}</span>
                       {#if s.status === 'ready'}
                         <span>{s.segment_count} {s.segment_count === 1 ? 'chunk' : 'chunks'}</span>
+                      {:else if s.status === 'processing' || s.status === 'stopped'}
+                        <!-- Chunks with vectors, against the chunks the file has. Extraction
+                             writes a source's chunks once and embedding writes thousands, so
+                             this is the number that moves — and on a stopped row it is the
+                             part still to do that `resume` is about. -->
+                        <span title="chunks vectorised so far, out of the chunks this file has">
+                          {s.embedded_count} / {s.segment_count}
+                          {s.segment_count === 1 ? 'chunk' : 'chunks'}
+                        </span>
                       {/if}
                     </p>
 
@@ -255,6 +268,30 @@
                   </div>
 
                   <span class="row-actions">
+                    {#if s.status === 'stopped'}
+                      <Button
+                        variant="ghost"
+                        shape="icon"
+                        size="sm"
+                        title="Continue where it stopped — chunks already vectorised are kept"
+                        ariaLabel="Resume {s.name}"
+                        onclick={() => resume(s)}
+                      >
+                        <Icon name="play" size={14} />
+                      </Button>
+                    {/if}
+                    {#if s.status === 'processing'}
+                      <Button
+                        variant="ghost"
+                        shape="icon"
+                        size="sm"
+                        title="Stop this file where it stands — what is built so far is kept"
+                        ariaLabel="Stop {s.name}"
+                        onclick={() => stop(s)}
+                      >
+                        <Icon name="stop" size={14} />
+                      </Button>
+                    {/if}
                     {#if s.status !== 'processing'}
                       <Button
                         variant="ghost"
@@ -267,7 +304,7 @@
                         <Icon name="retry" size={14} />
                       </Button>
                     {/if}
-                    {#if s.status === 'ready' || s.status === 'failed'}
+                    {#if s.status === 'ready' || s.status === 'failed' || s.status === 'stopped'}
                       <Button
                         variant="ghost"
                         shape="icon"

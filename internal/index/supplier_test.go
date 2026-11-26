@@ -183,7 +183,7 @@ func TestSupplierEnforcesTheServerLengthNotTheSetting(t *testing.T) {
 
 	vecs, err := emb.Embed(context.Background(), docTitle, []domain.Segment{
 		{ID: "d:0000", DocID: "d", Kind: domain.KindText, Text: "hello"},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("a stale configured length rejected a valid vector: %v", err)
 	}
@@ -267,7 +267,7 @@ func TestSupplierFollowsARepointedURL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	vecs, err := first.Embed(ctx, docTitle, one)
+	vecs, err := first.Embed(ctx, docTitle, one, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,7 +283,7 @@ func TestSupplierFollowsARepointedURL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	vecs, err = second.Embed(ctx, docTitle, one)
+	vecs, err = second.Embed(ctx, docTitle, one, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,7 +303,7 @@ func TestSupplierFollowsARepointedURL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := dead.Embed(ctx, docTitle, one); err == nil {
+	if _, err := dead.Embed(ctx, docTitle, one, nil); err == nil {
 		t.Fatal("a server that stopped listening produced no error")
 	} else if msg := err.Error(); !strings.Contains(msg, port(t, bURL)) || strings.Contains(msg, aHost) {
 		t.Errorf("the failure must name only the server it dialled:\n%s", msg)

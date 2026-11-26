@@ -289,7 +289,7 @@ func TestTheInstanceAskedAndTheModelRecordedAreDifferentThings(t *testing.T) {
 
 	vecs, err := e.Embed(context.Background(), docTitle, []domain.Segment{
 		{ID: "s1", Kind: domain.KindText, Text: "a page about rivers"},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -332,7 +332,7 @@ func TestEmbedsTextAsSteeredStrings(t *testing.T) {
 		{ID: "a:0001", Kind: domain.KindText, Text: "water is wet"},
 	}
 
-	got, err := c.embedder(t, 0).Embed(context.Background(), docTitle, segs)
+	got, err := c.embedder(t, 0).Embed(context.Background(), docTitle, segs, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -382,7 +382,7 @@ func TestBatchesSegments(t *testing.T) {
 		})
 	}
 
-	got, err := c.embedder(t, 0).Embed(context.Background(), docTitle, segs)
+	got, err := c.embedder(t, 0).Embed(context.Background(), docTitle, segs, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -421,7 +421,7 @@ func TestEmbedsImageAsDataURL(t *testing.T) {
 		Kind:  domain.KindImage,
 		Asset: &domain.Asset{ID: "s/pages/page-0001.png", Path: png, MIME: "image/png"},
 	}
-	if _, err := c.embedder(t, 0).Embed(context.Background(), docTitle, []domain.Segment{seg}); err != nil {
+	if _, err := c.embedder(t, 0).Embed(context.Background(), docTitle, []domain.Segment{seg}, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -455,7 +455,7 @@ func TestImageWithRenditionSendsBothParts(t *testing.T) {
 		Text:  "caption: figure 3",
 		Asset: &domain.Asset{ID: "s/pages/scan.jpg", Path: jpg, MIME: "image/jpeg"},
 	}
-	if _, err := c.embedder(t, 0).Embed(context.Background(), docTitle, []domain.Segment{seg}); err != nil {
+	if _, err := c.embedder(t, 0).Embed(context.Background(), docTitle, []domain.Segment{seg}, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -489,7 +489,7 @@ func TestEmptyTextInputIsAnError(t *testing.T) {
 	c := newCapture(t)
 	_, err := c.embedder(t, 0).Embed(context.Background(), docTitle, []domain.Segment{
 		{ID: "a:0007", Kind: domain.KindText, Text: "   \n  "},
-	})
+	}, nil)
 	if err == nil {
 		t.Fatal("an empty text segment must not be sent as an empty embedding")
 	}
@@ -502,7 +502,7 @@ func TestMissingAssetIsAnError(t *testing.T) {
 	c := newCapture(t)
 	_, err := c.embedder(t, 0).Embed(context.Background(), docTitle, []domain.Segment{
 		{ID: "a:0000", Kind: domain.KindImage},
-	})
+	}, nil)
 	if err == nil || !strings.Contains(err.Error(), "no asset") {
 		t.Errorf("err = %v", err)
 	}
@@ -514,7 +514,7 @@ func TestMissingAssetFileIsAnError(t *testing.T) {
 		ID:    "a:0000",
 		Kind:  domain.KindImage,
 		Asset: &domain.Asset{ID: "gone", Path: filepath.Join(t.TempDir(), "gone.png"), MIME: "image/png"},
-	}})
+	}}, nil)
 	if err == nil {
 		t.Fatal("a vanished asset must fail loudly, not embed nothing")
 	}
@@ -525,7 +525,7 @@ func TestDimensionMismatchAgainstSettings(t *testing.T) {
 	c.dim = 3072
 	_, err := c.embedder(t, 1024).Embed(context.Background(), docTitle, []domain.Segment{
 		{ID: "a:0000", Kind: domain.KindText, Text: "hello"},
-	})
+	}, nil)
 	if err == nil {
 		t.Fatal("want a dimension error")
 	}
@@ -542,7 +542,7 @@ func TestShortResponseIsAnError(t *testing.T) {
 	_, err := c.embedder(t, 0).Embed(context.Background(), docTitle, []domain.Segment{
 		{ID: "a:0000", Kind: domain.KindText, Text: "hello"},
 		{ID: "a:0001", Kind: domain.KindText, Text: "world"},
-	})
+	}, nil)
 	if err == nil || !strings.Contains(err.Error(), "1 vectors for 2 segments") {
 		t.Errorf("err = %v", err)
 	}
@@ -567,7 +567,7 @@ func TestUnorderedResponseStillMapsByID(t *testing.T) {
 	got, err := c.embedder(t, 0).Embed(context.Background(), docTitle, []domain.Segment{
 		{ID: "a:0000", Kind: domain.KindText, Text: "one"},
 		{ID: "a:0001", Kind: domain.KindText, Text: "two"},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -582,7 +582,7 @@ func TestMissingIndexesFallBackToOrder(t *testing.T) {
 	got, err := c.embedder(t, 0).Embed(context.Background(), docTitle, []domain.Segment{
 		{ID: "a:0000", Kind: domain.KindText, Text: "one"},
 		{ID: "a:0001", Kind: domain.KindText, Text: "two"},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -602,7 +602,7 @@ func TestUnreachableServerNamesTheURL(t *testing.T) {
 	}
 	_, err = NewEmbedder(client, url, "m", 0).Embed(context.Background(), docTitle, []domain.Segment{
 		{ID: "a:0000", Kind: domain.KindText, Text: "hello"},
-	})
+	}, nil)
 	if err == nil {
 		t.Fatal("want an error")
 	}
@@ -614,7 +614,7 @@ func TestUnreachableServerNamesTheURL(t *testing.T) {
 
 func TestEmptyInputIsNotARequest(t *testing.T) {
 	c := newCapture(t)
-	got, err := c.embedder(t, 0).Embed(context.Background(), docTitle, nil)
+	got, err := c.embedder(t, 0).Embed(context.Background(), docTitle, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -646,7 +646,7 @@ func TestBusyServerErrorIsPreserved(t *testing.T) {
 
 	_, err := c.embedder(t, 0).Embed(context.Background(), docTitle, []domain.Segment{
 		{ID: "a:0000", Kind: domain.KindText, Text: "hello"},
-	})
+	}, nil)
 	if !llm.IsBusy(err) {
 		t.Errorf("a 503 must stay recognisable through the embedder: %v", err)
 	}
@@ -692,7 +692,7 @@ func TestMediaInputsAreNeverPrefixed(t *testing.T) {
 		{ID: "s#figures:0000", Kind: domain.KindImage, Text: "caption: latency over quarters",
 			Asset: &domain.Asset{ID: "b", Path: write("f.png", []byte{0x89, 'P', 'N', 'G'}), MIME: "image/png"}},
 	}
-	if _, err := c.embedder(t, 0).Embed(context.Background(), docTitle, segs); err != nil {
+	if _, err := c.embedder(t, 0).Embed(context.Background(), docTitle, segs, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -760,7 +760,7 @@ func TestEmbeddingNeverRewritesStoredText(t *testing.T) {
 	c := newCapture(t)
 	segs := []domain.Segment{{ID: "a:0000", Kind: domain.KindText, Text: "the sky is blue"}}
 
-	if _, err := c.embedder(t, 0).Embed(context.Background(), docTitle, segs); err != nil {
+	if _, err := c.embedder(t, 0).Embed(context.Background(), docTitle, segs, nil); err != nil {
 		t.Fatal(err)
 	}
 	if segs[0].Text != "the sky is blue" {
@@ -794,7 +794,7 @@ func TestEmbedRunsFourRequestsAtTheServerAtOnce(t *testing.T) {
 	// pass on a queue of one.
 	c.holdRequests(4)
 
-	got, err := c.embedder(t, 4).Embed(context.Background(), "", clips(t, 8))
+	got, err := c.embedder(t, 4).Embed(context.Background(), "", clips(t, 8), nil)
 
 	// Asked before the error: a cohort that never assembled is the failure, and the
 	// EOF the client then reads is only how it feels from here.
@@ -825,7 +825,7 @@ func TestEmbedStopsTheOtherRequestsWhenOneFails(t *testing.T) {
 	segs := []domain.Segment{{ID: "bad", Kind: domain.KindText, Text: "passage #broken"}}
 	segs = append(segs, clips(t, 2*inFlight)...)
 
-	_, err := c.embedder(t, 4).Embed(context.Background(), "", segs)
+	_, err := c.embedder(t, 4).Embed(context.Background(), "", segs, nil)
 	if err == nil {
 		t.Fatal("a failing batch was accepted")
 	}
@@ -871,7 +871,7 @@ func TestVectorsBelongToTheirSegmentsWhateverOrderTheyArriveIn(t *testing.T) {
 		})
 	}
 
-	got, err := c.embedder(t, 4).Embed(context.Background(), docTitle, segs)
+	got, err := c.embedder(t, 4).Embed(context.Background(), docTitle, segs, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

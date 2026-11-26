@@ -23,6 +23,7 @@ export type IconName =
   | 'layers'
   | 'retry'
   | 'stop'
+  | 'play'
   | 'download'
   | 'send'
   | 'pencil'
@@ -65,5 +66,6 @@ export const ICON_PATHS: Record<IconName, string> = {
   // not mistaken for each other at a glance.
   back: 'M10 4 6 8l4 4',
   check: 'M3.5 8.5 6.5 11.5 12.5 4.5',
+  play: 'M5.5 3.5l7 4.5-7 4.5Z',
   search: 'M7 11.5a4.5 4.5 0 1 0 0-9 4.5 4.5 0 0 0 0 9ZM10.5 10.5 13.5 13.5'
 };

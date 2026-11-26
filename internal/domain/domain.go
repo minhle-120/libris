@@ -113,8 +113,14 @@ type Source struct {
 	AddedAt  int64     `json:"added_at"` // unix seconds
 
 	// SegmentCount is read from the database rather than stored: it is how the
-	// UI shows "8 chunks" next to a finished source, and is 0 while processing.
+	// UI shows "8 chunks" next to a finished source.
 	SegmentCount int `json:"segment_count"`
+
+	// EmbeddedCount is how many of those chunks have a vector yet. It only differs
+	// from SegmentCount while the source is processing, which is the one moment the
+	// number is wanted: "1 234 / 3 000 chunks" is the difference between a wait with
+	// a shape and a spinner that could be stuck.
+	EmbeddedCount int `json:"embedded_count"`
 
 	// NotebooksUsing counts the memberships this source has, which is how many
 	// notebooks would have to lose it before the file is worth deleting. The UI
@@ -148,6 +154,7 @@ const (
 	StatusReady       SourceStatus = "ready"       // segments written
 	StatusUnsupported SourceStatus = "unsupported" // read, but nothing to extract
 	StatusFailed      SourceStatus = "failed"      // crashed, or died mid-flight
+	StatusStopped     SourceStatus = "stopped"     // the person who uploaded it asked it to stop
 )
 
 // Provenance points back into the original file. Every segment carries one so

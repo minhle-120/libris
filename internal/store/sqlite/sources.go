@@ -133,7 +133,8 @@ func (db *DB) SetSourceStatus(ctx context.Context, id string, status domain.Sour
 		return err
 	}
 	if status != domain.StatusReady && status != domain.StatusUnsupported &&
-		status != domain.StatusFailed && status != domain.StatusProcessing {
+		status != domain.StatusFailed && status != domain.StatusProcessing &&
+		status != domain.StatusStopped {
 		return fmt.Errorf("store: bad status %q", status)
 	}
 
@@ -167,6 +168,7 @@ const sourceSelect = `
 	SELECT s.id, s.name, s.kind, s.sha256, s.bytes, s.original_path,
 	       s.status, s.detail, s.warnings, s.created_at,
 	       (SELECT COUNT(*) FROM segments g WHERE g.source_id = s.id),
+	       (SELECT COUNT(*) FROM segments g WHERE g.source_id = s.id AND g.embedding IS NOT NULL),
 	       (SELECT COUNT(*) FROM notebook_sources m WHERE m.source_id = s.id)
 	  FROM sources s`
 
@@ -200,7 +202,7 @@ func scanSource(row rowScanner) (domain.Source, error) {
 		warnings string
 	)
 	err := row.Scan(&s.ID, &s.Name, &kind, &s.SHA256, &s.Bytes, &s.OriginalPath,
-		&status, &s.Detail, &warnings, &s.AddedAt, &s.SegmentCount, &s.NotebooksUsing)
+		&status, &s.Detail, &warnings, &s.AddedAt, &s.SegmentCount, &s.EmbeddedCount, &s.NotebooksUsing)
 	if err == sql.ErrNoRows {
 		return domain.Source{}, ErrNotFound
 	}

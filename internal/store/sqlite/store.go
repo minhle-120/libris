@@ -145,5 +145,9 @@ func (db *DB) migrate(ctx context.Context) error {
 			return fmt.Errorf("store: commit %s: %w", name, err)
 		}
 	}
-	return nil
+
+	// A table rebuild cannot be a .sql file: it needs foreign keys off, which is a
+	// per-connection setting that cannot be changed inside a transaction. See
+	// stopped_status.go.
+	return db.allowStoppedStatus(ctx)
 }
