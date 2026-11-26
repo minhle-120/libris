@@ -22,10 +22,17 @@ type HistoryMessage struct {
 	Exclude bool
 }
 
-// citation is the grammar the synthesiser is instructed to emit and no other shape
-// is permitted. It is a key into the evidence the turn was built from, so the same
-// pattern serves rendering, citation lookup and history sanitising.
-var citation = regexp.MustCompile(`\[\[Chunk \d+\]\]`)
+// citation is the grammar the synthesiser is instructed to emit. It is a key into the
+// evidence the turn was built from, so the same pattern serves rendering, citation
+// lookup and history sanitising.
+//
+// The inside is a run of labels rather than the prompt's instructed shape, because the
+// shape a model writes is not the shape it was told to use: `[[Chunk 1], [Chunk 2]]`, and
+// even `[[Chunk 1], [[Chunk 2]]`, both arrive in real answers. Read only the instructed
+// shape and a grouped answer leaves its labels in the history, where the next turn finds
+// them and copies them. The run cannot match prose — `[[Some note]]` has no `Chunk` in it
+// — so nothing that is not a citation is deleted.
+var citation = regexp.MustCompile(`\[\[(?:Chunk \d+[\s\[\],]*)+\]\]`)
 
 // A label and the space it stood in go together, in the direction the sentence needs:
 // "1990 [[Chunk 2]]." must come back as "1990." rather than "1990 .", because the

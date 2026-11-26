@@ -649,6 +649,7 @@ An invented [[Chunk 99]] and a malformed [[chunk 3]] label.`;
   checks.check('an answer cannot execute anything', done?.scripts === 0 && done?.xss === 0, () => `scripts=${done?.scripts} ran=${done?.xss}`);
   checks.check('and cannot make a request of its own', (done?.remote ?? ['?']).length === 0, () => `remote=${JSON.stringify(done?.remote)}`);
 
+
   // What the renderer owns, at the narrowest width the layout claims: the body it built
   // must not exceed the thread, and the three things in it that can be wider than a
   // reading column — a code fence, a table, a display equation — must scroll inside
@@ -769,6 +770,47 @@ An invented [[Chunk 99]] and a malformed [[chunk 3]] label.`;
   checks.check('an unclosed fence is still a code block', drawn?.pre === 1, () => `pre=${drawn?.pre}`);
 
   await control({ reset: true });
+
+  // A model told to write `[[Chunk 1]][[Chunk 2]]` writes `[[Chunk 1], [Chunk 2]]` often
+  // enough that a reader would see grammar where a source was meant. The numbers come
+  // from the turn above, so both are chunks this answer was really shown.
+  const cited = [...new Set((done?.inline ?? []).map((t) => Number(t)).filter(Number.isInteger))];
+  const group = [cited[0], cited[1] ?? cited[0]];
+  // Twice over, because the bracket hygiene of a group is the model's choice and not
+  // the prompt's: the tidy form and the doubled-bracket form must both become buttons.
+  const labels = group.map((n) => `Chunk ${n}`);
+  const want = [...group, ...group].map(String);
+  await control({
+    reset: true,
+    answer: `Grouped: 4.2 K and 3mm [[${labels.join('], [')}]] and [[${labels[0]}, [[${labels[1]}]] in two places.`,
+  });
+  await send(ui, 'Cite them together');
+  await ui.settle(60);
+  await ask(ui);
+  const grouped = await ui.until(
+    `
+    const turn = [...document.querySelectorAll('.turn.assistant')].at(-1);
+    if (!turn || turn.classList.contains('live')) return null;
+    const answer = turn.querySelector('.answer');
+    if (!answer || !answer.textContent.includes('in two places')) return null;
+    return {
+      buttons: [...answer.querySelectorAll('.inline')].map((b) => b.textContent.trim()),
+      text: answer.textContent.replace(/\\s+/g, ' ').trim(),
+    };
+    `,
+    300,
+    20
+  );
+  checks.check(
+    'a grouped citation is buttons too, one per number',
+    (grouped?.buttons ?? []).join(',') === want.join(','),
+    () => `buttons=${JSON.stringify(grouped?.buttons)} want=${JSON.stringify(want)}`
+  );
+  checks.check(
+    'and none of the grammar survives in the sentence',
+    !(grouped?.text ?? '').includes('[[') && !(grouped?.text ?? '').includes('Chunk '),
+    () => `text=${grouped?.text}`
+  );
 
   // ── the other ways a turn ends ─────────────────────────────────
   // A model that says the library cannot answer, after searching: its reason *is* the
@@ -993,6 +1035,7 @@ An invented [[Chunk 99]] and a malformed [[chunk 3]] label.`;
     backOff?.checked === 'false' && cleanAgain?.clean === true,
     () => JSON.stringify({ ...backOff, ...cleanAgain })
   );
+
 
   // Everything above is a deliberate failure — a dead server, a stopped stream, a
   // model that refuses to search. None of it may look like a bug in the page.

@@ -154,6 +154,14 @@ func TestStripCitations(t *testing.T) {
 		{"No tags here.", "No tags here."},
 		{"First line [[Chunk 1]].\n\nSecond paragraph.", "First line.\n\nSecond paragraph."},
 		{"trailing tag [[Chunk 3]]", "trailing tag"},
+		// The grouped form a model writes instead of the adjacent one it was asked for.
+		{"Smith measured 4.2 K [[Chunk 6], [Chunk 10]].", "Smith measured 4.2 K."},
+		{"a [[Chunk 1], [Chunk 2]] b", "a b"},
+		// A group with one malformed label inside is not a citation, and deleting part of
+		// it would hide a prompt bug the next turn could otherwise repeat.
+		{"[[Chunk 1], [chunk 2]]", "[[Chunk 1], [chunk 2]]"},
+		// …and with the brackets a model doubles up on the second label. Same citation.
+		{"Smith measured 4.2 K [[Chunk 2], [[Chunk 5]].", "Smith measured 4.2 K."},
 	}
 	for _, c := range cases {
 		if got := StripCitations(c.in); got != c.want {

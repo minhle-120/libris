@@ -13,7 +13,31 @@ import type { Citation, Segment } from './types';
  * contains the literal text `[[Chunk 3]]` inside a code block cites nothing.
  */
 
-const LABEL = /\[\[Chunk (\d+)\]\]/g;
+// A citation is `[[` through the next `]]`, and that is all the pattern decides. What the
+// inside has to be is settled in `attachChips` instead: the one label (`[[Chunk 6]]`), the
+// adjacent form the prompt asks for (`[[Chunk 1]][[Chunk 2]]`), the comma form a model
+// writes anyway (`[[Chunk 6], [Chunk 10]]`), and whatever bracket hygiene arrives with
+// them — `[[Chunk 6], [[Chunk 10]]` is an answer that really arrived, and its reader
+// should get two buttons rather than the grammar.
+//
+// The span is capped because a stray `[[` in prose would otherwise run to the next `]]`
+// five hundred words away before the contents got rejected.
+const GROUP = /\[\[([\s\S]{0,200}?)\]\]/g;
+
+/** One chunk label inside a span, with its number. Case-sensitive on purpose: `chunk` is
+ * a prompt bug, and leaving it visible is how a prompt bug gets noticed. */
+const CHUNK = /Chunk (\d+)/g;
+
+/** Take the labels out of a span and what is left must be brackets and commas. */
+const SEPARATORS = /^[\s[,\]]*$/;
+
+/**
+ * A citation whose closing `]]` has not arrived yet: chunk labels and separators, and at
+ * the end at most one prefix of the word `Chunk`. Anything else — `[[Some note` — is
+ * prose, and prose is shown while it is being written.
+ */
+const HALF_LABEL =
+  /^\[\[(?:(?:Chunk \d+|[\s[,\]])*(?:C(?:h(?:u(?:n(?:k(?: \d*)?)?)?)?)?)?)?$/;
 
 /** Subtrees a label must not become a button in, whatever it says. */
 const OFF_LIMITS = 'code, pre, .katex';
@@ -27,6 +51,9 @@ const OFF_LIMITS = 'code, pre, .katex';
  * with an invented citation is to remove it from the answer and leave the sentence
  * standing. `[[chunk 1]]` is not dropped silently either — it is left as the text it is,
  * because silently deleting a malformed citation would hide a prompt bug.
+ *
+ * In a group both rules apply per number, so `[[Chunk 1], [Chunk 99]]` keeps the one real
+ * button and loses the invented one.
  */
 export function attachChips(
   root: ParentNode,
@@ -45,18 +72,22 @@ export function attachChips(
 
   for (const node of found) {
     const text = node.data;
-    LABEL.lastIndex = 0;
-    if (!LABEL.test(text)) continue;
-    LABEL.lastIndex = 0;
+    if (!text.includes('[[')) continue;
 
     const fragment = document.createDocumentFragment();
     let last = 0;
-    for (const match of text.matchAll(LABEL)) {
-      const at = match.index ?? 0;
+    for (const group of text.matchAll(GROUP)) {
+      const cited = [...group[1].matchAll(CHUNK)];
+      // Brackets around something that is not a list of chunk labels — a parenthetical,
+      // a label spelled wrong — are not a citation, and stay the text they are.
+      if (!cited.length || !SEPARATORS.test(group[1].replace(CHUNK, ''))) continue;
+      const at = group.index ?? 0;
       if (at > last) fragment.append(text.slice(last, at));
-      const citation = byChunk.get(Number(match[1]));
-      if (citation) fragment.append(chip(citation, onCite));
-      last = at + match[0].length;
+      for (const num of cited) {
+        const citation = byChunk.get(Number(num[1]));
+        if (citation) fragment.append(chip(citation, onCite));
+      }
+      last = at + group[0].length;
     }
     if (last < text.length) fragment.append(text.slice(last));
     node.replaceWith(fragment);
@@ -76,15 +107,30 @@ function chip(citation: Citation, onCite: (citation: Citation) => void): HTMLBut
 }
 
 /**
- * A label can straddle two deltas, so mid-stream the buffer may end with `[[Chunk 1`
- * or `[[C`. Rendered as-is that flickers a fragment of the grammar at the reader; a
- * half-written label at the very end of the buffer is therefore held back until its
- * closing bracket lands. Applied only to the text still arriving — a finished answer
- * is shown exactly as it was stored, and dropping a stray there would be a lie.
+ * A label can straddle two deltas, so mid-stream the buffer may end with `[[Chunk 1`,
+ * or `[[C`, or — in a group — `[[Chunk 6], [`. Rendered as-is that flickers a fragment
+ * of the grammar at the reader, and in a group it is worse than a fragment: an
+ * incomplete group never matches, so every label already inside it renders as text and
+ * then re-renders as buttons a delta later. A half-written label at the very end of the
+ * buffer is therefore held back until its closing bracket lands. Applied only to the
+ * text still arriving — a finished answer is shown exactly as it was stored, and
+ * dropping a stray there would be a lie.
  */
 export function trimPartialLabel(text: string): string {
-  const match = /\[\[(?:Chun(?:k(?: \d*)?)?)?]?$/.exec(text);
-  return match ? text.slice(0, match.index) : text;
+  // One pass per label, backwards: a group mid-stream is cut from its own `[[`, and what
+  // remains can hold another unclosed one before it — `…[[Chunk 6], [[Chunk 5` is one
+  // citation waiting for its brackets, not a citation and a stray.
+  let cut = text.length;
+  for (;;) {
+    const at = text.lastIndexOf('[[', cut - 1);
+    // Nothing unclosed before the cut: the rest of the buffer is renderable.
+    if (at === -1) break;
+    const tail = text.slice(at, cut);
+    // A `]]` inside means that citation is closed, so nothing half-written is open.
+    if (tail.includes(']]') || !HALF_LABEL.test(tail)) break;
+    cut = at;
+  }
+  return cut === text.length ? text : text.slice(0, cut);
 }
 
 /**
