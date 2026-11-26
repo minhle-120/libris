@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"libris/internal/config"
@@ -113,6 +114,17 @@ const queueDepth = 64
 // rather than tuned — a large scanned PDF is the case it must not interrupt.
 const jobTimeout = 30 * time.Minute
 
+// embedIdleWindow is how long the embedding model stays on the card after the last upload
+// finishes, and it is a var only so the test does not sleep through it.
+//
+// The release itself is the point; this number is the grace. A person dropping twenty files
+// sends twenty requests, and the queue is drained one at a time, so releasing the moment the
+// queue empties would put the model to sleep between files and pay for its load twenty times —
+// a cost paid entirely by the uploads that were always coming. Long enough to cover the pause
+// between one file's request and the next, short enough that a machine left alone gives the
+// memory back while nobody is looking at it.
+var embedIdleWindow = 60 * time.Second
+
 // Errors the transports map to statuses. Each is wrapped with context by the
 // code that returns it, so errors.Is stays the way to test for them.
 var (
@@ -130,6 +142,16 @@ type Options struct {
 	Settings  Settings
 	Processor ProcessorFor
 	Embedder  EmbedderFor
+
+	// ReleaseEmbedder is optional. It tells the program that runs the model server that no
+	// upload is coming for a while, and it may give back what the embedding model was holding on
+	// the way to an answer.
+	//
+	// It is a function and not a field of some engine type because the app does not know a model
+	// server exists — it knows uploads need embedding, and that the thing which embeds them may
+	// be holding something expensive. Nil means there is nobody to tell: a server somebody else
+	// started is not ours to put to sleep.
+	ReleaseEmbedder func(ctx context.Context) error
 
 	// Chats, Models and Search are the answer path. All three are optional: a
 	// Service wired for ingest alone is a legitimate build, and Ask says plainly
@@ -163,6 +185,14 @@ type Service struct {
 	done      chan struct{}
 	jobCtx    context.Context
 	jobCancel context.CancelFunc
+
+	release func(ctx context.Context) error
+	// idle is guarded by idleMu because it is written by the worker and cleared by the goroutine
+	// the timer fires its callback in — the one place in this file where two goroutines own a
+	// field, and the reason for the lock rather than a comment saying "only the worker touches
+	// this". That comment would be false the day it needed a timer.
+	idleMu sync.Mutex
+	idle   *time.Timer
 }
 
 // New checks the wiring. Nothing is created on disk yet.
@@ -194,6 +224,7 @@ func New(opts Options) (*Service, error) {
 		settings:  opts.Settings,
 		processor: opts.Processor,
 		embedder:  opts.Embedder,
+		release:   opts.ReleaseEmbedder,
 		chats:     opts.Chats,
 		models:    opts.Models,
 		search:    opts.Search,
@@ -232,6 +263,10 @@ func (s *Service) Close() {
 	if s.done == nil {
 		return
 	}
+	// A release still pending is not worth running: it is a courtesy to a machine that is
+	// shutting down, and it would be talking to a server about to be stopped anyway.
+	s.cancelIdleRelease()
+
 	select {
 	case <-s.stop:
 		// Already closed.
@@ -545,11 +580,71 @@ func (s *Service) worker() {
 		case <-s.stop:
 			return
 		case id := <-s.jobs:
+			// The grace period restarts on work, not on completion: the point is that an
+			// upload has arrived, which is known the moment it is taken off the queue.
+			s.cancelIdleRelease()
 			ctx, cancel := context.WithTimeout(s.jobCtx, jobTimeout)
 			s.ingest(ctx, id)
 			cancel()
+			s.armIdleRelease()
 		}
 	}
+}
+
+// armIdleRelease starts the clock on the embedding model's hold on the card, and does nothing
+// while more uploads are waiting. Called by the worker between jobs, which is the one moment
+// "no upload is running" is knowable without a second source of truth.
+func (s *Service) armIdleRelease() {
+	if s.release == nil || len(s.jobs) > 0 {
+		return
+	}
+	s.idleMu.Lock()
+	defer s.idleMu.Unlock()
+	if s.idle != nil {
+		s.idle.Stop()
+	}
+	// Read here, by the goroutine that arms the clock, and handed to the callback: a timer that
+	// went back for the number when it fired would be reading a value that belongs to whatever
+	// happened to the world in between.
+	waited := embedIdleWindow
+	s.idle = time.AfterFunc(waited, func() { s.releaseEmbedder(waited) })
+}
+
+// cancelIdleRelease undoes a pending release: an upload arrived, or the process is going away.
+func (s *Service) cancelIdleRelease() {
+	s.idleMu.Lock()
+	defer s.idleMu.Unlock()
+	if s.idle != nil {
+		s.idle.Stop()
+		s.idle = nil
+	}
+}
+
+// releaseEmbedder tells whoever runs the model server that the uploads are over for now.
+//
+// It runs on the timer's goroutine, deliberately: this is a request to another process, and a
+// worker that blocks on it would be stopping uploads in order to ask for memory back on behalf of
+// those same uploads. A failure is a Warn rather than a shrug because the visible symptom of one
+// is a machine that runs out of memory later, with nothing in the interface to explain it.
+// `waited` is how long the queue stayed empty on the way here — the window as it was when the
+// clock was armed, which is the number worth printing if this is ever the line that explains a
+// machine's memory.
+func (s *Service) releaseEmbedder(waited time.Duration) {
+	s.idleMu.Lock()
+	s.idle = nil
+	release := s.release
+	s.idleMu.Unlock()
+
+	if release == nil {
+		return
+	}
+	// The ingest context, because a release should not outlive the work it was waiting for:
+	// Close cancels it, and a request still in flight to a server being stopped is noise.
+	if err := release(s.jobCtx); err != nil {
+		s.log.Warn("could not hand the memory back after ingest went idle", "err", err)
+		return
+	}
+	s.log.Info("ingest idle; the embedding model is off the device", "idle", waited.String())
 }
 
 // ingest runs the pipeline for one source and records how it ended. A failure

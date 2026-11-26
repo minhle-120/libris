@@ -46,14 +46,30 @@ const MaxAssetBytes = 32 << 20
 type Embedder struct {
 	client  *llm.Client
 	baseURL string // only for error messages that name the server the user must fix
-	model   string
-	wantDim int // from settings; 0 accepts whatever the model returns
+	// model is the name carried on the request, which is how a router with more than one
+	// instance of the same weights is told which one to answer.
+	model string
+	// identity is what every vector this embedder makes is stamped with, and a search filters on
+	// exactly that string. It is usually the same as model. It is not always: the two names can
+	// part when one file is served twice, and a query embedder that stamped the instance it
+	// dialled instead of the model that made the vectors would search for vectors nothing ever
+	// wrote — every notebook reading as empty, with nothing anywhere to say so.
+	identity string
+	wantDim  int // from settings; 0 accepts whatever the model returns
 }
 
 // NewEmbedder wires an embedder to one server. wantDim is the configured
 // embeddingDimensions, checked against every response when non-zero.
 func NewEmbedder(client *llm.Client, baseURL, model string, wantDim int) *Embedder {
-	return &Embedder{client: client, baseURL: baseURL, model: model, wantDim: wantDim}
+	return NewEmbedderStamping(client, baseURL, model, model, wantDim)
+}
+
+// NewEmbedderStamping asks for `dial` and records `stamps` beside what it gets back. It exists
+// for the one case where those are different things: the embedding model is loaded twice, once
+// on the device and once on the host, and a question's vector must be findable next to the
+// vectors an upload made. Both names are libris's own; neither is a setting.
+func NewEmbedderStamping(client *llm.Client, baseURL, dial, stamps string, wantDim int) *Embedder {
+	return &Embedder{client: client, baseURL: baseURL, model: dial, identity: stamps, wantDim: wantDim}
 }
 
 // Probe asks the server for one vector and reports its length. Called at startup
@@ -121,7 +137,7 @@ func (e *Embedder) Embed(ctx context.Context, title string, segments []domain.Se
 			}
 			out = append(out, domain.Embedding{
 				SegmentID: batch[k].ID,
-				Model:     ModelIdentity(e.model),
+				Model:     ModelIdentity(e.identity),
 				Dim:       len(vec),
 				Vector:    vec,
 			})
@@ -170,7 +186,7 @@ func (e *Embedder) EmbedQuery(ctx context.Context, prefix, text string) ([]float
 // side has to ask the same question the write side answered, so the value is read
 // from here rather than rebuilt from settings next door — two places holding a
 // model name is how a search starts filtering for a space nothing was written in.
-func (e *Embedder) Identity() string { return ModelIdentity(e.model) }
+func (e *Embedder) Identity() string { return ModelIdentity(e.identity) }
 
 // checkDim rejects a response that cannot be stored next to the others. Mixing
 // dimensions is silent corruption: cosine over ragged vectors still computes,

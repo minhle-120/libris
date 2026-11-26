@@ -196,6 +196,10 @@ func main() {
 		// Likewise the embedder: a job embeds against the server configured when
 		// that job ran, not the one that was set when libris booted.
 		Embedder: servedEmbedder(&clients, embedders),
+		// And what the embedding model leaves behind when the uploads stop. Read through the same
+		// cache as the embedder itself, so the release cannot be aimed at a router a settings
+		// change has already moved away from.
+		ReleaseEmbedder: embedderReleaser(&clients, settings),
 		// The answer path. Chats and Search are the same database the sources live
 		// in — one process owns the directory — and the models are resolved per
 		// question for the same reason the embedder is.

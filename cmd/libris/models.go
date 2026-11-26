@@ -72,7 +72,10 @@ func modelSource(clients *clientCache, embedders *index.Supplier) app.ModelsFor 
 			return app.Models{}, err
 		}
 
-		probe, err := embedders.For(target.Apply(cfg))
+		// A question asks the instance kept off the card, which is a different name from the one
+		// ingest uses and the same model in the answer. Which of the two is decided by the target,
+		// because the target is what knows whether this is a router libris configured.
+		probe, err := embedders.ForQuery(target.Apply(cfg), target.EmbedQueryModel)
 		if err != nil {
 			return app.Models{}, err
 		}

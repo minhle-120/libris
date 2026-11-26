@@ -80,6 +80,40 @@ func vec(n int) []float32 {
 	return out
 }
 
+// Which instance answers is a fact about the wire. Which model made the vector is a fact about
+// the store, and a search reads the second one when it decides what to show. They are the same
+// string until the same file is served twice — and a request that confuses them returns nothing
+// from every notebook without erroring, so both names are asserted here, at the wire and in the
+// row beside the numbers.
+func TestTheInstanceAskedAndTheModelRecordedAreDifferentThings(t *testing.T) {
+	c := newCapture(t)
+	client, err := llm.New(llm.Config{ChatURL: c.srv.URL, EmbedURL: c.srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := NewEmbedderStamping(client, c.srv.URL, "libris-embed-cpu", "libris-embed", 4)
+
+	vecs, err := e.Embed(context.Background(), docTitle, []domain.Segment{
+		{ID: "s1", Kind: domain.KindText, Text: "a page about rivers"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(vecs) != 1 {
+		t.Fatalf("%d vectors for one segment", len(vecs))
+	}
+	if vecs[0].Model != ModelIdentity("libris-embed") {
+		t.Errorf("the vector is recorded as %q; a search would never find it next to an upload's",
+			vecs[0].Model)
+	}
+	if got, _ := c.bodies[0]["model"].(string); got != "libris-embed-cpu" {
+		t.Errorf("the request named %q, want the instance that was dialled", got)
+	}
+	if e.Identity() != ModelIdentity("libris-embed") {
+		t.Errorf("Identity() = %q, want the model's", e.Identity())
+	}
+}
+
 // inputs returns the "input" array of the nth request.
 func (c *capture) inputs(t *testing.T, call int) []any {
 	t.Helper()

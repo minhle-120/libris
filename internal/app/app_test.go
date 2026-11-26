@@ -179,6 +179,15 @@ func testServiceWith(t *testing.T, proc Ingestor, emb Embedder) (*Service, *sqli
 // their own EmbedderFor.
 func testServiceWired(t *testing.T, proc Ingestor, factory EmbedderFor) (*Service, *sqlite.DB, string) {
 	t.Helper()
+	return wiredService(t, proc, factory, nil)
+}
+
+// wiredService is testServiceWired with one more knob: what the app is told to do when the
+// uploads stop. Only the idle-release tests want it, and every other test should keep getting nil
+// — a test service with a release hook would be a test service doing something its author did not
+// ask for.
+func wiredService(t *testing.T, proc Ingestor, factory EmbedderFor, release func(context.Context) error) (*Service, *sqlite.DB, string) {
+	t.Helper()
 
 	dir := t.TempDir()
 	db, err := sqlite.Open(filepath.Join(dir, "libris.db"))
@@ -194,9 +203,12 @@ func testServiceWired(t *testing.T, proc Ingestor, factory EmbedderFor) (*Servic
 		Processor: func(config.Config, ingest.Sink) (Ingestor, error) {
 			return proc, nil
 		},
-		Embedder:  factory,
-		Originals: filepath.Join(dir, "originals"),
-		Assets:    filepath.Join(dir, "assets"),
+		Embedder: factory,
+		// The app hands a context in, so the hook is checked at compile time against the
+		// signature the worker calls. A test's hook that ignored it would pass.
+		ReleaseEmbedder: release,
+		Originals:       filepath.Join(dir, "originals"),
+		Assets:          filepath.Join(dir, "assets"),
 	})
 	if err != nil {
 		t.Fatal(err)

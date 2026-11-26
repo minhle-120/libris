@@ -38,6 +38,12 @@ func TestEndpointsDerivesManagedMode(t *testing.T) {
 	if got.ChatModel != "libris-chat" || got.EmbedModel != "libris-embed" {
 		t.Errorf("managed models = %q/%q", got.ChatModel, got.EmbedModel)
 	}
+	// A question asks the embedding model's other instance, the one off the card. Two names for
+	// one file is the whole arrangement, and the preset libris wrote is what makes the second one
+	// answerable — which is why it exists only here.
+	if got.EmbedQueryModel != "libris-embed-cpu" {
+		t.Errorf("managed mode asks a question through %q", got.EmbedQueryModel)
+	}
 	if !got.Live || got.Port != 9099 || got.Advertised != "http://127.0.0.1:9099" {
 		t.Errorf("view fields = live:%v port:%d advertised:%q", got.Live, got.Port, got.Advertised)
 	}
@@ -67,6 +73,11 @@ func TestEndpointsIsTheSettingsInExternalMode(t *testing.T) {
 	}
 	if got.ChatModel != cfg.ChatModel || got.EmbedModel != cfg.EmbedModel {
 		t.Errorf("external model names were replaced with aliases: %+v", got)
+	}
+	// One name, because there is one server and libris did not configure it. Inventing a second
+	// alias here would send a question to a name that exists only in a preset nobody wrote.
+	if got.EmbedQueryModel != cfg.EmbedModel {
+		t.Errorf("external mode asks a question through %q, want the name the settings hold", got.EmbedQueryModel)
 	}
 	// libris does not know what runs behind an address it was handed, so it must not
 	// claim "stopped" — a working external install would render as broken.

@@ -237,6 +237,58 @@ func TestPresetWritesTheDraftOnlyWhereTheDraftLives(t *testing.T) {
 	}
 }
 
+// The device is per section because an instance's offload set is fixed when it is allocated:
+// the same file is two instances when it is to be used two ways, one on the card for a thousand
+// chunks and one on the host for one question. Only the second says anything about the device,
+// and it says "none" — which is llama.cpp's own word (common/arg.cpp, LLAMA_ARG_DEVICE: "none =
+// don't offload"), because writing nothing means the backend chooses, and what it chooses is the
+// card. The host copy carries no projector either: a question embeds text.
+func TestPresetPinsOneSectionToTheHost(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "presets", "libris.ini")
+	specs := []Model{
+		{Alias: AliasChat, Kind: KindChat, Path: "/m/c.gguf", MMProj: "/m/c-mmproj.gguf"},
+		{Alias: AliasEmbed, Kind: KindEmbed, Path: "/m/e.gguf", MMProj: "/m/e-mmproj.gguf"},
+		{Alias: AliasEmbedCPU, Kind: KindEmbed, Path: "/m/e.gguf", Device: "none"},
+	}
+	if _, err := refreshPreset(path, "Vulkan0", specs); err != nil {
+		t.Fatal(err)
+	}
+
+	text := string(readFile(t, path))
+	device, host := section(t, text, "libris-embed"), section(t, text, "libris-embed-cpu")
+	if strings.Contains(device, "device =") {
+		t.Errorf("the model on the chosen device should inherit the global, not repeat it:\n%s", device)
+	}
+	if !strings.Contains(host, "device = none") {
+		t.Errorf("the host instance does not say it stays off the card:\n%s", host)
+	}
+	if !strings.Contains(host, "embeddings = on") || !strings.Contains(host, "pooling = mean") {
+		t.Errorf("the host instance is not an embedder:\n%s", host)
+	}
+	if strings.Contains(host, "mmproj") {
+		t.Errorf("a section that only ever embeds text was given a vision projector:\n%s", host)
+	}
+	if strings.Count(text, "device = ") != 2 {
+		t.Errorf("expected the global device and one section pinned to the host, got:\n%s", text)
+	}
+
+	// Read back, because the page reports the file: a section whose device is read back empty is
+	// a machine telling the user the host copy is somewhere it is not.
+	got, err := ReadPreset(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Device != "Vulkan0" {
+		t.Errorf("the file's global device reads back %q", got.Device)
+	}
+	if len(got.Models) != 3 || got.Models[2].Device != "none" || got.Models[2].Kind != KindEmbed {
+		t.Errorf("ReadPreset lost the host instance: %+v", got.Models)
+	}
+	if got.Models[1].Device != "" {
+		t.Errorf("the instance on the chosen device gained a device of its own: %+v", got.Models[1])
+	}
+}
+
 // section cuts one model's block out of the preset text, so a claim about one model cannot be
 // satisfied by another model's line.
 func section(t *testing.T, text, name string) string {

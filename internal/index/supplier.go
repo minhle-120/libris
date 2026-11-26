@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -57,7 +58,31 @@ func NewSupplier(clients ClientSource, log *slog.Logger, onProbe func(dim int)) 
 // For returns an embedder matching cfg. It is safe to call from several ingest
 // jobs at once: only the first job for a given server pays for the probe.
 func (s *Supplier) For(cfg config.Config) (*Embedder, error) {
-	url, model := cfg.EmbedURL, cfg.EmbedModel
+	return s.build(cfg, cfg.EmbedModel, cfg.EmbedModel)
+}
+
+// ForQuery returns the embedder a question's search vector comes from. It asks `dial` — the
+// second instance of the embedding model, the one kept off the card — while stamping what it
+// gets back with the name ingest stamps, because a search reads that name and nothing else.
+//
+// When `dial` is the model's own name this is For. The caller decides, and only the caller knows:
+// in managed mode the router was configured by this program and has both instances; pointed at
+// somebody else's server, it has whatever that server answers to and gets asked by that name.
+func (s *Supplier) ForQuery(cfg config.Config, dial string) (*Embedder, error) {
+	if dial == "" {
+		dial = cfg.EmbedModel
+	}
+	return s.build(cfg, dial, cfg.EmbedModel)
+}
+
+// build is both paths: one client, one probe, and the two names kept apart on the way out.
+//
+// The probe is keyed by what is being dialled, so a second instance of the same weights is
+// probed in its own right. That is not waste: two servers answering with different vector lengths
+// is the one disagreement that turns a notebook into a search that finds nothing, and it is worth
+// one round trip to hear it.
+func (s *Supplier) build(cfg config.Config, dial, stamps string) (*Embedder, error) {
+	url := cfg.EmbedURL
 
 	client, err := s.clients(cfg)
 	if err != nil {
@@ -67,25 +92,61 @@ func (s *Supplier) For(cfg config.Config) (*Embedder, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	key := url + "\x00" + model
+	key := url + "\x00" + dial
 	dim, seen := s.probed[key]
 	if !seen {
-		dim = s.discover(client, cfg, url, model)
+		dim = s.discover(client, cfg, url, dial)
 		s.probed[key] = dim
+		// Asked about a new name at an address this process already knows. Two instances of one
+		// server that answer with different lengths is not a warning worth reading once per
+		// question, so it is said here, where it is said once: what follows is a notebook whose
+		// vectors were made by something else, and a search that finds nothing says so nowhere.
+		if other, ok := s.disagree(url, dial, dim); ok {
+			s.log.Warn("two names on one embedding server answer with different lengths",
+				"url", url, "model", dial, "dimensions", dim,
+				"other", other.model, "otherDimensions", other.dim)
+		}
 	}
 
 	if want := atoi(cfg.EmbedDim); want != 0 && dim != 0 && want != dim {
 		s.log.Warn("configured embedding dimensions disagree with the server",
-			"model", model, "configured", want, "server", dim)
+			"model", dial, "configured", want, "server", dim)
 	}
 	if dim == 0 {
 		// Fall back to whatever the settings claim, so a server we could not
 		// reach still gets a length enforced once we do reach it.
 		dim = atoi(cfg.EmbedDim)
 	}
+	if stamps == "" {
+		stamps = dial
+	}
 	// The client and the URL in its error messages come from one cfg, so a
 	// failure can never name a server it did not dial.
-	return NewEmbedder(client, url, model, dim), nil
+	return NewEmbedderStamping(client, url, dial, stamps, dim), nil
+}
+
+// disagree finds another name already probed at the same address that answers with a different
+// length. Caller holds the lock.
+type probe struct {
+	model string
+	dim   int
+}
+
+func (s *Supplier) disagree(url, dial string, dim int) (probe, bool) {
+	if dim == 0 {
+		return probe{}, false
+	}
+	for k, v := range s.probed {
+		if !strings.HasPrefix(k, url+"\x00") {
+			continue
+		}
+		name := k[len(url)+1:]
+		if name == dial || v == 0 || v == dim {
+			continue
+		}
+		return probe{model: name, dim: v}, true
+	}
+	return probe{}, false
 }
 
 // discover asks the server for one vector. Split out so tests do not have to wait

@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"libris/internal/deviceinfo"
 	"libris/internal/engine"
 )
 
@@ -290,8 +291,42 @@ func Models(statuses []Status) []engine.Model {
 			MMProj: s.MMProjPath,
 			Draft:  s.DraftPath,
 		})
+		if s.Role == RoleEmbed {
+			out = append(out, hostEmbed(s))
+		}
 	}
 	return out
+}
+
+// hostEmbed is the embedding model again, pinned to the host.
+//
+// It is a second instance and not a second model: nothing downloads it, no catalogue entry has
+// its name, and it reads the same file the instance above does. It exists because llama.cpp
+// fixes a model's offload set the moment it allocates it, so a question's one vector and a
+// thousand chunks cannot be asked of the same loaded model on two devices — the only choice is
+// which device that model is bound to, and the card is the one worth keeping for the bulk of
+// the work. This instance is what a question uses, and the other is unloaded while nothing is
+// being ingested, which is the point of the whole arrangement.
+//
+// No projector, because a question embeds text; the raster path belongs to ingest, which asks
+// the instance that has it.
+//
+// Written whenever the embedding model is complete, whatever device the machine chose, so the
+// configuration the file shows is the same shape on every machine. When the choice is already
+// "none" the two embed sections are the same thing twice, and the second costs a process and a
+// slot for no benefit; that is the price of one rule instead of a branch, and it is a small one
+// beside a machine that was never going to free any VRAM.
+//
+// What the caller must not do is stamp vectors with this name. The identity recorded beside a
+// vector is what a search filters on, and a query that dials this alias while recording it would
+// look for vectors no ingest ever wrote and find none, quietly, in every notebook.
+func hostEmbed(s Status) engine.Model {
+	return engine.Model{
+		Alias:  engine.AliasEmbedCPU,
+		Kind:   engine.KindEmbed,
+		Path:   s.Path,
+		Device: deviceinfo.DeviceNone,
+	}
 }
 
 func kindOf(r Role) engine.ModelKind {

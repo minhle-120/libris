@@ -117,6 +117,58 @@ func TestSupplierProbesEachServerOnce(t *testing.T) {
 	}
 }
 
+// A question and an upload use two instances of one embedding model — one on the card, one on
+// the host — and the vector each makes has to be findable by the other. Which instance answers
+// goes on the wire; which model made it is what gets recorded beside the numbers, and a search
+// filters on that recording and nothing else. Get this the wrong way round and every notebook in
+// the store reads as empty, with no error anywhere to say why.
+func TestSupplierAsksTheSecondInstanceAndRecordsTheFirst(t *testing.T) {
+	var probes atomic.Int64
+	srv := embedServer(t, 4, &probes)
+	sup := NewSupplier(supplierClients(t), quietLogger(), nil)
+	cfg := testConfig(srv.URL, "libris-embed", "")
+
+	ingest, err := sup.For(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query, err := sup.ForQuery(cfg, "libris-embed-cpu")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if query.model != "libris-embed-cpu" {
+		t.Errorf("a question dials %q, want the instance kept off the card", query.model)
+	}
+	if query.identity != ingest.identity {
+		t.Errorf("ingest records %q while a question records %q", ingest.identity, query.identity)
+	}
+	if query.Identity() != ingest.Identity() {
+		t.Errorf("a search would look for %q among vectors recorded as %q",
+			query.Identity(), ingest.Identity())
+	}
+
+	// Two names on one address, so two questions asked. Not waste: two instances answering with
+	// different lengths is the disagreement that makes a corpus unfindable, and each one gets
+	// asked in its own right.
+	if got := probes.Load(); got != 2 {
+		t.Errorf("%d probes for two instances of one server, want each asked once", got)
+	}
+
+	// No second name means the model's own, which is what a server libris does not run looks
+	// like: there is no second instance there to ask for.
+	plain, err := sup.ForQuery(cfg, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.model != "libris-embed" || plain.identity != "libris-embed" {
+		t.Errorf("an unnamed second instance is %+v", plain)
+	}
+	if got := probes.Load(); got != 2 {
+		t.Errorf("%d probes; asking a name already asked should not ask again", got)
+	}
+}
+
 // The probed length is the one enforced. A setting that disagrees is a stale
 // number from a previous server, not a reason to reject good vectors.
 func TestSupplierEnforcesTheServerLengthNotTheSetting(t *testing.T) {

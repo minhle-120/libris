@@ -146,6 +146,12 @@ func Preset(path string, device string, models []Model) error {
 		if m.MMProj != "" {
 			fmt.Fprintf(&b, "mmproj = %s\n", m.MMProj)
 		}
+		// Spelled out rather than left out, because the two mean different things: no device key
+		// lets llama.cpp choose, and what it chooses is the fastest device it can find. A section
+		// that exists precisely so that it does not touch the card has to say so.
+		if m.Device != "" {
+			fmt.Fprintf(&b, "device = %s\n", m.Device)
+		}
 		switch m.Kind {
 		case KindEmbed:
 			fmt.Fprintf(&b, "embeddings = on\npooling = mean\nctx-size = %d\ncache-ram = %d\n", embedCtx, smallCacheRAMMiB)
@@ -264,7 +270,7 @@ func ReadPreset(path string) (*PresetFile, error) {
 	return &out, nil
 }
 
-// observeKey records the five keys libris cares about inside a model section. Everything else
+// observeKey records the keys libris cares about inside a model section. Everything else
 // in the file is a key for llama.cpp and is left alone — that is what "the file is the
 // configuration" means in code: this package reads the parts it must agree about and passes the
 // rest through untouched.
@@ -280,6 +286,8 @@ func observeKey(cur *Model, key, value string) {
 		if truthy(value) {
 			cur.Kind = KindEmbed
 		}
+	case "device":
+		cur.Device = value
 	}
 }
 

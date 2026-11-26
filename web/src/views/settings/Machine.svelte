@@ -257,6 +257,11 @@
                   <li title={m}>{m}</li>
                 {/each}
               </ul>
+              <p class="line">
+                One model answers to two names: the embedding model is served on {serve.device ||
+                  'the device'} for uploads and on the host for questions, because a model cannot
+                change device between them.
+              </p>
             {:else}
               <p class="line">
                 Nothing loaded yet — the server reads a model the first time a question asks for

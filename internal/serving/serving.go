@@ -71,6 +71,15 @@ type Target struct {
 	ChatModel  string
 	EmbedModel string
 
+	// EmbedQueryModel is the name a question's search vector asks for. Usually EmbedModel. In
+	// managed mode it is not: the embedding model is loaded twice there, once on the chosen device
+	// for the thousand vectors of an upload and once on the host for the one vector of a question,
+	// and a loaded model cannot be asked to change device between the two.
+	//
+	// Nothing else about the embedding model changes. The vectors an upload makes and the vector a
+	// question makes are recorded under the same model, because that is what a search filters on.
+	EmbedQueryModel string
+
 	// Live means a process is answering right now. False in external mode always —
 	// libris does not know what runs behind an address a person typed, and guessing
 	// would turn a working external install into a page that says "stopped".
@@ -104,14 +113,23 @@ type Target struct {
 func Endpoints(server Server, cfg config.Config) (Target, error) {
 	if cfg.EngineMode != config.EngineManaged {
 		return Target{
-			ChatURL:    cfg.ChatURL,
-			EmbedURL:   cfg.EmbedURL,
-			ChatModel:  cfg.ChatModel,
-			EmbedModel: cfg.EmbedModel,
+			ChatURL:         cfg.ChatURL,
+			EmbedURL:        cfg.EmbedURL,
+			ChatModel:       cfg.ChatModel,
+			EmbedModel:      cfg.EmbedModel,
+			EmbedQueryModel: cfg.EmbedModel,
 		}, nil
 	}
 
-	t := Target{ChatModel: string(engine.AliasChat), EmbedModel: string(engine.AliasEmbed)}
+	t := Target{
+		ChatModel:  string(engine.AliasChat),
+		EmbedModel: string(engine.AliasEmbed),
+		// A second instance of the embedding model, the one kept off the card, which is what a
+		// question asks. Nothing about it is a model of its own: it is this file again, and it
+		// exists only in a preset libris wrote — hence the external answer above, which is the
+		// same name twice because somebody else's server has no second instance to offer.
+		EmbedQueryModel: string(engine.AliasEmbedCPU),
+	}
 
 	port := 0
 	if server != nil {
@@ -157,6 +175,11 @@ func (t Target) Apply(cfg config.Config) config.Config {
 // names it sends. Listed once, in role order, because the settings page shows them
 // as "what the router answers to" and a page that retypes them is a page that can
 // drift from the preset that was written.
+//
+// One name per role, which is not every name the router answers to: the embedding model is
+// served twice, and the second instance has no role because it has no download, no catalogue
+// entry and nothing a person could choose. A page that listed it beside the other two would be
+// offering a third something to configure when there are two things.
 func Aliases() []string {
 	return []string{string(engine.AliasChat), string(engine.AliasEmbed)}
 }

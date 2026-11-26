@@ -236,6 +236,61 @@ func TestRolesAndModelsFollowCompleteness(t *testing.T) {
 	}
 }
 
+// The embedding model arrives twice, because one loaded model has one device and libris wants
+// the same weights on both: on the card for the thousand vectors of an ingest, and on the host
+// for the one vector of a question, which is what lets the card copy be unloaded in between.
+// The second is derived from the first and never from the catalogue — no entry has its name, no
+// button downloads it, and its files are the same bytes.
+func TestModelsServeTheEmbeddingModelTwice(t *testing.T) {
+	dir := t.TempDir()
+	e := entry()
+	e.ID = "test-embed"
+	e.Role = models.RoleEmbed
+	e.Draft = models.Part{}
+
+	empty := []models.Status{models.StatusOf(dir, e)}
+	if got := models.Models(empty); got != nil {
+		t.Errorf("Models on an empty disk = %+v; the instance nobody has downloaded should not be in the preset either", got)
+	}
+
+	touch(t, e.Path(dir, e.Model), int(e.Model.Bytes))
+	touch(t, e.Path(dir, e.MMProj), int(e.MMProj.Bytes))
+
+	got := models.Models([]models.Status{models.StatusOf(dir, e)})
+	if len(got) != 2 {
+		t.Fatalf("Models = %+v, want the device instance and the host instance", got)
+	}
+
+	onDevice, onHost := got[0], got[1]
+	if onDevice.Alias != engine.AliasEmbed || onDevice.MMProj == "" || onDevice.Device != "" {
+		t.Errorf("the instance that keeps the card is wrong: %+v", onDevice)
+	}
+	if onHost.Alias != engine.AliasEmbedCPU || onHost.Kind != engine.KindEmbed {
+		t.Errorf("the host instance is not the host embedder: %+v", onHost)
+	}
+	if onHost.Path != onDevice.Path {
+		t.Errorf("the host instance loads %q while the device instance loads %q; they are meant to be one file",
+			onHost.Path, onDevice.Path)
+	}
+	if onHost.Device != "none" {
+		t.Errorf("the host instance says device %q; only llama.cpp's word for do-not-offload stops the backend choosing the card", onHost.Device)
+	}
+	if onHost.MMProj != "" || onHost.Draft != "" {
+		t.Errorf("a section that only ever embeds text was given extra files: %+v", onHost)
+	}
+
+	// A chat model gains no twin. There is no second way to want the answer model, and a preset
+	// with a chat model twice would be two cards' worth of weights for one question.
+	chatEntry := entry()
+	touch(t, chatEntry.Path(dir, chatEntry.Model), int(chatEntry.Model.Bytes))
+	touch(t, chatEntry.Path(dir, chatEntry.MMProj), int(chatEntry.MMProj.Bytes))
+	touch(t, chatEntry.Path(dir, chatEntry.Draft), int(chatEntry.Draft.Bytes))
+	chat := models.Models([]models.Status{models.StatusOf(dir, chatEntry)})
+	if len(chat) != 1 {
+		t.Errorf("a chat entry became %+v; only the embedding model is served twice", chat)
+	}
+}
+
 // The migration one build carries: a folder for a model this catalogue no longer has. Nothing
 // can delete it from the settings page, because the page lists the catalogue — so a machine that
 // installed the old model keeps the bytes forever, and shows them as free space nothing owns.

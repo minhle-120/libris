@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"strconv"
 	"strings"
 	"sync"
@@ -8,6 +9,7 @@ import (
 
 	"libris/internal/app"
 	"libris/internal/config"
+	"libris/internal/engine"
 	"libris/internal/index"
 	"libris/internal/llm"
 	"libris/internal/serving"
@@ -63,6 +65,63 @@ func servedEmbedder(clients *clientCache, embedders *index.Supplier) func(config
 			return nil, err
 		}
 		return embedders.For(target.Apply(cfg))
+	}
+}
+
+// settingsSource is the part of the settings this file reads: the values in force right now.
+// Named here rather than taken as *config.Store so the wiring does not depend on how they are
+// stored — the same reason the app's own Settings interface is one method wide.
+type settingsSource interface {
+	Get() config.Config
+}
+
+// embedderReleaser is what the app calls when the uploads stop: a chance for the model server to
+// give back what the embedding model was holding on the card, which is the memory a question's
+// own model would rather have.
+//
+// It asks before it tells. The router is asked what is resident, and the unload is sent only for
+// an instance that is actually up — because "stop the thing that is already stopped" is an error
+// at the wire, and an idle machine that empties its queue every hour would fill its log with a
+// message about a model that was never loaded.
+//
+// External mode does nothing at all. An address a person typed is somebody else's process, and
+// putting one of their models to sleep is not a thing this app should do to a server it does not
+// run.
+func embedderReleaser(clients *clientCache, settings settingsSource) func(context.Context) error {
+	return func(ctx context.Context) error {
+		cfg := settings.Get()
+		if cfg.EngineMode != config.EngineManaged {
+			return nil
+		}
+
+		// No target means no router of ours is running, which is the same outcome as releasing:
+		// nothing is being held. The error is swallowed for that reason and no other — the client
+		// cache and the router's own answers are reported to the caller.
+		if _, err := clients.target(cfg); err != nil {
+			return nil
+		}
+
+		client, err := clients.For(cfg)
+		if err != nil {
+			return err
+		}
+
+		name := string(engine.AliasEmbed)
+		residents, err := client.RouterModels(ctx)
+		if err != nil {
+			return err
+		}
+		for _, m := range residents {
+			if m.Name != name {
+				continue
+			}
+			if !m.Running() {
+				return nil
+			}
+			return client.UnloadModel(ctx, name)
+		}
+		// Not in the list at all: nothing to stop, and nothing to say about it.
+		return nil
 	}
 }
 

@@ -41,6 +41,14 @@ type Alias string
 const (
 	AliasChat  Alias = "libris-chat"
 	AliasEmbed Alias = "libris-embed"
+
+	// AliasEmbedCPU is the same file as AliasEmbed, loaded the other way: pinned to the host
+	// instead of the device. It is a second name because it is a second instance — llama.cpp
+	// fixes a model's offload set when it allocates it, so "the embedder on the GPU for a
+	// thousand chunks and on the CPU for one question" cannot be one loaded model with two
+	// settings. It is a name and not a model: nothing downloads it, nothing in the catalogue
+	// has it, and the vectors it makes are stamped with the identity of the file it shares.
+	AliasEmbedCPU Alias = "libris-embed-cpu"
 )
 
 // ErrAlreadyServing means a start was asked for while libris's own server was up. It is a
@@ -72,6 +80,12 @@ type Model struct {
 	Path   string
 	MMProj string
 	Draft  string
+
+	// Device overrides the file's offload device for this one section. Empty inherits the
+	// global, which is the point: the absence of a device key means llama.cpp chooses, so a
+	// section that must not touch the card says so in words ("none") rather than by saying
+	// nothing.
+	Device string
 }
 
 // What each kind of model is given. These are not settings and not per-request: they are what
@@ -159,8 +173,16 @@ type ServeOptions struct {
 	Preset string
 	Log    string
 
-	// ModelsMax caps how many model instances the router keeps. Three is every model libris
-	// knows about; the cap exists so a preset with more sections is not a memory incident.
+	// ModelsMax caps how many model instances the router keeps resident. Two, which is one fewer
+	// than the preset declares: the chat model and one embedder fit together, and the third
+	// instance is the one that gets to be cold.
+	//
+	// It is a cap and not a refusal. When there is no room, llama.cpp picks a victim among the
+	// instances that are idle — a model with a request in flight is never a victim — and if none
+	// can be evicted the request joins a queue rather than failing (server-models-sched.cpp,
+	// pick_victim and try_claim). So a question that arrives in the middle of an embedding batch
+	// waits for that batch, then takes the slot and evicts whichever embed instance was touched
+	// least. That is the memory behaviour wanted, paid for with a reload.
 	ModelsMax int
 	// Device is the --device value for every model in the preset, already resolved against
 	// what this build reports. Empty means write no device key at all.
@@ -172,7 +194,7 @@ func (o ServeOptions) withDefaults() ServeOptions {
 		o.Host = "127.0.0.1"
 	}
 	if o.ModelsMax <= 0 {
-		o.ModelsMax = 3
+		o.ModelsMax = 2
 	}
 	return o
 }
