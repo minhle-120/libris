@@ -284,7 +284,7 @@ func excluded(t *testing.T, db *sqlite.DB, id int64) bool {
 // A question is two calls to one server, so both must name the same model — and in managed
 // mode that name is a fact about the router process, derived when Models is built.
 // Read from the settings instead, the research turn was refused by the very server the answer
-// eventually came from: `model 'LFM3-VL-2B' not found`, for a model the router lists as
+// eventually came from: `model 'qwen2.5-7b-instruct' not found`, for a model the router lists as
 // `libris-chat`. The stored name is what someone typed while pointing libris at a different
 // machine, and it is legitimately still there; it is simply not what to ask this one for.
 func TestBothCallsNameTheServedModel(t *testing.T) {
@@ -294,7 +294,7 @@ func TestBothCallsNameTheServedModel(t *testing.T) {
 	)
 
 	stored := config.Default()
-	stored.ChatModel = "LFM3-VL-2B"
+	stored.ChatModel = "qwen2.5-7b-instruct"
 	svc.settings = constSettings(stored)
 	svc.models = func(config.Config) (Models, error) {
 		return Models{ChatModel: "libris-chat", Chat: model, Probe: &askProbe{}}, nil

@@ -9,6 +9,7 @@
 package models
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -57,8 +58,8 @@ type Part struct {
 	SHA256 string
 }
 
-// Entry is one model in the catalogue: what it is called, what it is for, and the two files
-// that make it run.
+// Entry is one model in the catalogue: what it is called, what it is for, and the files that
+// make it run.
 type Entry struct {
 	ID    string
 	Role  Role
@@ -74,6 +75,12 @@ type Entry struct {
 
 	Model  Part
 	MMProj Part // empty for a model with no vision tower
+
+	// Draft is the extra model file that drives speculative decoding — the small pass whose
+	// guess the real model verifies. It is a part rather than a setting because it is a
+	// download: it needs the same pin, digest and resume as the weights, and an answer that
+	// was guessed at by a file libris never verified is not the same answer.
+	Draft Part // empty when nothing drafts for this model
 }
 
 // catalog is everything libris offers. Two models, one chat and one embedding, because that
@@ -82,22 +89,27 @@ type Entry struct {
 // similarity and by nothing else, so a third model would have to earn its download.
 var catalog = []Entry{
 	{
-		ID:    "lfm3-vl-2b",
+		ID:    "gemma4-e2b",
 		Role:  RoleChat,
-		Label: "LFM3-VL 2B",
-		Quant: "Q4_0 (QAD)",
-		Note:  "Chat and synthesis. Vision-language, so it reads a page raster as well as its text.",
-		Repo:  "LiquidAI/LFM3-VL-2B-GGUF",
-		Rev:   "1add221a5ea6c047fcf1eaaf2d247939d7cf8849",
+		Label: "Gemma 4 E2B",
+		Quant: "Q4_K_XL (UD, QAT)",
+		Note:  "Chat and synthesis. Vision-language, so it reads a page raster as well as its text, and it ships its own draft layer, so answering costs fewer forward passes.",
+		Repo:  "unsloth/gemma-4-E2B-it-qat-GGUF",
+		Rev:   "66a399f68ddd113b06dff02fca9523e55465d11d",
 		Model: Part{
-			Name:   "LFM3-VL-2B-QAD-Q4_0.gguf",
-			Bytes:  1049615648,
-			SHA256: "621c455376cb96a20891697deb9975c6fb47dd5ea98ed3ad1f3b7e8f24f0b1e6",
+			Name:   "gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf",
+			Bytes:  2620370976,
+			SHA256: "e531007218dfab990486a5de7676a6932d6ea8dea233d1f698d7c21cf8a16889",
 		},
 		MMProj: Part{
-			Name:   "mmproj-LFM3-VL-2B-BF16.gguf",
-			Bytes:  378996032,
-			SHA256: "8e75a88afc0e6a3bcd637becbe720447ea0794934b7b417a1f42d5cfe0d9c288",
+			Name:   "mmproj-BF16.gguf",
+			Bytes:  986833728,
+			SHA256: "38b33846f56426cd650e0e574d78de125abdfcedf35c0d7f6929f6ffe26efe02",
+		},
+		Draft: Part{
+			Name:   "mtp-gemma-4-E2B-it.gguf",
+			Bytes:  59235648,
+			SHA256: "586f2460b909008640981ec34060aa864e03c144fbabfb3173c4335087e4aae0",
 		},
 	},
 	{
@@ -135,13 +147,18 @@ func Look(id string) (Entry, bool) {
 	return Entry{}, false
 }
 
-// Parts returns the files an entry needs, model first and projector second — the order a
-// download goes in, because the projector is useless without the model beside it.
+// Parts returns the files an entry needs, weights first, then whatever is only useful beside
+// them — the order a download goes in, because the projector and the draft are useless without
+// the model they belong to.
 func (e Entry) Parts() []Part {
-	if e.MMProj.Name == "" {
-		return []Part{e.Model}
+	parts := []Part{e.Model}
+	if e.MMProj.Name != "" {
+		parts = append(parts, e.MMProj)
 	}
-	return []Part{e.Model, e.MMProj}
+	if e.Draft.Name != "" {
+		parts = append(parts, e.Draft)
+	}
+	return parts
 }
 
 // Bytes is everything the entry costs on disk.
@@ -178,6 +195,7 @@ type Status struct {
 	Folder     string `json:"folder"`
 	Path       string `json:"path"`
 	MMProjPath string `json:"mmprojPath,omitempty"`
+	DraftPath  string `json:"draftPath,omitempty"`
 
 	// Have and Missing are part names, so a page can say "the model is here, its projector is
 	// not" rather than "incomplete".
@@ -189,7 +207,7 @@ type Status struct {
 	// Verified says every present file was written by libris and hashed on the way in. A
 	// file a person copied here with the right name and size is present but unverified —
 	// which is true and worth showing, because the alternative is claiming a digest libris
-	// never computed. Hashing 1.4 GB to find that out is not a page load.
+	// never computed. Hashing gigabytes to find that out is not a page load.
 	Verified bool
 	// Complete is true when every part is present at the right size.
 	Complete bool
@@ -198,11 +216,19 @@ type Status struct {
 // StatusOf reports one entry for a given models directory. It stats; it never hashes.
 func StatusOf(modelsDir string, e Entry) Status {
 	st := Status{
-		Entry:      e,
-		Folder:     e.Dir(modelsDir),
-		Path:       e.Path(modelsDir, e.Model),
-		MMProjPath: e.Path(modelsDir, e.MMProj),
-		Verified:   true,
+		Entry:    e,
+		Folder:   e.Dir(modelsDir),
+		Path:     e.Path(modelsDir, e.Model),
+		Verified: true,
+	}
+	// Only for parts that exist: a path built from an empty part name is the folder itself,
+	// and a folder handed to the preset as a model file — or to a page as a file — is a lie
+	// that only the router would notice, loudly, at start.
+	if e.MMProj.Name != "" {
+		st.MMProjPath = e.Path(modelsDir, e.MMProj)
+	}
+	if e.Draft.Name != "" {
+		st.DraftPath = e.Path(modelsDir, e.Draft)
 	}
 	for _, p := range e.Parts() {
 		path := e.Path(modelsDir, p)
@@ -247,8 +273,8 @@ func MarkVerified(path, sum string) error {
 	return os.WriteFile(path+verifiedSuffix, []byte(sum+"\n"), 0o600)
 }
 
-// Models turns statuses into what the router needs: an alias, a path, and the projector beside
-// it. An incomplete entry is skipped rather than half-served, because a preset naming a
+// Models turns statuses into what the router needs: an alias, a path, and whatever belongs
+// beside it. An incomplete entry is skipped rather than half-served, because a preset naming a
 // missing file is a server that refuses to start, and the sentence llama.cpp prints is worse
 // than the one this app can print.
 func Models(statuses []Status) []engine.Model {
@@ -262,6 +288,7 @@ func Models(statuses []Status) []engine.Model {
 			Kind:   kindOf(s.Role),
 			Path:   s.Path,
 			MMProj: s.MMProjPath,
+			Draft:  s.DraftPath,
 		})
 	}
 	return out
@@ -284,6 +311,37 @@ func Delete(modelsDir string, e Entry) error {
 		return err
 	}
 	return nil
+}
+
+// retiredDirs are folders an older build downloaded and this one cannot run: the model they
+// hold is no longer in the catalogue, so nothing names those files any more, and they are
+// gigabytes a person is paying rent for out of habit. Named by folder rather than by entry
+// because an entry that is gone cannot be looked up.
+//
+// This is a migration, not a feature: it exists for machines that installed the model this
+// build replaced, and the day it stops finding anything is the day it can come out. Until then
+// it is cheaper than a release note asking somebody to hunt down a folder by hand, and much
+// cheaper than the settings page showing a disk full of a model no screen can name.
+var retiredDirs = []string{
+	"lfm3-vl-2b",
+}
+
+// RemoveRetired deletes the folders of models this build no longer offers, and reports which
+// names it actually removed so the caller can say so in a log line. A folder that is not there
+// is the normal case, not an error.
+func RemoveRetired(modelsDir string) ([]string, error) {
+	var gone []string
+	for _, name := range retiredDirs {
+		dir := filepath.Join(modelsDir, name)
+		if _, err := os.Stat(dir); err != nil {
+			continue // nothing there, and nothing worth logging
+		}
+		if err := os.RemoveAll(dir); err != nil {
+			return gone, fmt.Errorf("models: remove the retired %s folder: %w", name, err)
+		}
+		gone = append(gone, name)
+	}
+	return gone, nil
 }
 
 // statFile returns the size of a finished file and the size of its partial twin. A part file

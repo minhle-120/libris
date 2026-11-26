@@ -598,6 +598,7 @@ type ModelView struct {
 	Path   string `json:"path"`
 	Bytes  int64  `json:"bytes"`
 	MMProj string `json:"mmproj,omitempty"`
+	Draft  string `json:"draft,omitempty"`
 }
 
 // modelViews is what the router would load right now: one row per complete entry. A directory
@@ -614,13 +615,14 @@ func (h *Host) modelViews() []ModelView {
 		}
 		out = append(out, ModelView{
 			Role: string(st.Role), Alias: string(st.Role.Alias()), File: filepath.Base(st.Path),
-			Path: st.Path, Bytes: st.Bytes(), MMProj: st.MMProjPath,
+			Path: st.Path, Bytes: st.Bytes(), MMProj: st.MMProjPath, Draft: st.DraftPath,
 		})
 	}
 	return out
 }
 
-// ModelPartView is one file of an entry: the weights, or the vision projector beside them.
+// ModelPartView is one file of an entry: the weights, or what belongs beside them — a vision
+// projector, a draft model.
 type ModelPartView struct {
 	Name    string `json:"name"`
 	Bytes   int64  `json:"bytes"`
@@ -673,7 +675,7 @@ type ModelsView struct {
 	NeedsRestart bool `json:"needsRestart"`
 }
 
-// ModelCatalog reads the disk and reports. It is a stat over four files, so it is a page load
+// ModelCatalog reads the disk and reports. It is a stat over a handful of files, so it is a page load
 // rather than a job: nothing here hashes, and nothing here asks a server anything.
 func (h *Host) ModelCatalog() *ModelsView {
 	statuses := models.Statuses(h.modelsDir)
@@ -729,7 +731,7 @@ var ErrNoModelsDir = errors.New("app: this build has no models directory")
 
 // ModelInstall starts a download and answers immediately, with the state it just caused.
 //
-// It does not hold the request open for the length of the download. A 1.4 GB body over a
+// It does not hold the request open for the length of the download. A gigabyte body over a
 // hotel wifi is an hour, and an hour is longer than any proxy, browser tab or HTTP/2 idle
 // timeout is patient about — and a dropped request must not be what stops the bytes, because
 // that would make closing a tab the same act as pressing Cancel. So the page polls the

@@ -2,10 +2,10 @@ package models
 
 // Downloading a model is not downloading a program.
 //
-// The engine is 35 MB and gets replaced wholesale; these are 1.4 GB files whose whole purpose
+// The engine is 35 MB and gets replaced wholesale; these are gigabyte files whose whole purpose
 // is to be *the same weights twice*. So the three properties that matter here are: a stopped
 // download keeps its bytes (starting a gigabyte again is not what "not now" means), every byte
-// is hashed on the way in rather than re-read afterwards (a second pass over 1.4 GB is a page
+// is hashed on the way in rather than re-read afterwards (a second pass over gigabytes is a page
 // that spins), and a file that fails its digest is thrown away rather than retried forever.
 // Resume is honest only because Hugging Face answers Range requests — verified: 206 with
 // accept-ranges: bytes on the pinned URLs.
@@ -26,7 +26,7 @@ import (
 )
 
 // ErrBusy means something is already downloading. One at a time is not politeness toward the
-// CDN: two 1.4 GB writes to the same disk make both slower, and one progress bar cannot
+// CDN: two gigabyte writes to the same disk make both slower, and one progress bar cannot
 // describe both without lying about one of them.
 var ErrBusy = errors.New("models: a model download is already running")
 
@@ -40,8 +40,8 @@ const (
 	StateFailed      State = "failed"
 )
 
-// Progress is one download as the page sees it. Total and Done cover the whole entry —
-// weights and projector together — because a bar that restarts when the projector begins reads
+// Progress is one download as the page sees it. Total and Done cover the whole entry — every
+// file it needs together — because a bar that restarts when the second file begins reads
 // as a download that failed and started over.
 type Progress struct {
 	ID      string    `json:"id"`
@@ -89,7 +89,7 @@ func NewFetcher(dir string, seams Seams) *Fetcher {
 }
 
 // Start begins fetching an entry and returns immediately. The caller's page polls State — a
-// request that held a 1.4 GB download open would be a request a proxy or a browser tab is
+// request that held a multi-gigabyte download open would be a request a proxy or a browser tab is
 // free to drop, and a dropped request must not be what cancels the download.
 func (f *Fetcher) Start(e Entry) error {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -371,7 +371,7 @@ func (f *Fetcher) url(e Entry, p Part) string {
 }
 
 // counter is the progress source and the cancel point: a stopped download notices within a
-// chunk rather than at the end of a 1.4 GB body.
+// chunk rather than at the end of a gigabyte body.
 type counter struct {
 	w     io.Writer
 	ctx   context.Context

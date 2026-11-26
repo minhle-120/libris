@@ -416,7 +416,7 @@ func historyRole(r domain.Role) (llm.Role, bool) {
 // derived when Models is built — from the router's aliases — so `Models` is the only place it
 // is correct. From the settings, the research call sent whatever a person had typed as a chat
 // model's name while pointing libris at somebody else's machine, and the router answered
-// `model 'LFM3-VL-2B' not found` for a model it lists as `libris-chat` — while the synthesis
+// `model 'qwen2.5-7b-instruct' not found` for a model it lists as `libris-chat` — while the synthesis
 // call, which reads `Models.ChatModel`, kept working. Two calls, one server, one of them
 // reading the wrong side.
 func chatConfig(cfg config.Config, models Models) chat.Config {

@@ -153,7 +153,7 @@ func configured(t *testing.T) (config.Config, *clientCache, *index.Supplier) {
 func TestTheEmbedderIsNamedForTheRouterItDials(t *testing.T) {
 	cfg, clients, supplier := configured(t)
 	cfg.EngineMode = config.EngineManaged
-	cfg.EmbedModel = "LFM3-VL-2B"
+	cfg.EmbedModel = "qwen2.5-7b-instruct"
 	clients.server = fakeRouter{engine.Serving{Running: true, Port: 41234}}
 
 	got, err := servedEmbedder(clients, supplier)(cfg)
@@ -167,7 +167,7 @@ func TestTheEmbedderIsNamedForTheRouterItDials(t *testing.T) {
 	if !strings.Contains(ident.Identity(), "libris-embed") {
 		t.Errorf("identity = %q, want the alias this router answers to", ident.Identity())
 	}
-	if strings.Contains(ident.Identity(), "LFM3-VL-2B") {
+	if strings.Contains(ident.Identity(), "qwen2.5-7b-instruct") {
 		t.Errorf("identity = %q, still carries the stored name", ident.Identity())
 	}
 }

@@ -154,6 +154,8 @@ func main() {
 	}
 
 	modelsDir := models.Dir(*dataDir)
+	clearRetiredModels(log, modelsDir)
+
 	host, err := app.NewHost(app.HostOptions{
 		Programs:    programs,
 		Engine:      engine.Open(filepath.Join(*dataDir, "bin"), log),
@@ -267,6 +269,22 @@ func main() {
 		}
 	}
 	service.Close()
+}
+
+// clearRetiredModels deletes the folders of models this build no longer offers. A model that
+// left the catalogue cannot be run, cannot be downloaded, and cannot be deleted by the button
+// that lists the catalogue — nothing in the program has its name any more — so what it left is
+// gigabytes nobody can ask for back. The moment to take them is on the way up, before anything
+// reads the directory. A folder that will not delete is a log line, not a reason to stop.
+func clearRetiredModels(log *slog.Logger, modelsDir string) {
+	gone, err := models.RemoveRetired(modelsDir)
+	if err != nil {
+		log.Warn("could not clear a model this version no longer uses", "err", err)
+		return
+	}
+	if len(gone) > 0 {
+		log.Info("cleared a model this version no longer uses", "folders", strings.Join(gone, ", "))
+	}
 }
 
 // warmClient builds the client the first job would use, so a settings file that cannot

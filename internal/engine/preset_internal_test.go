@@ -70,7 +70,7 @@ func TestRefreshPresetWritesWhetherOrNotAnythingMoved(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := writePreset(t, "Vulkan0", oneChat())
-			edited := strings.Replace(string(readFile(t, path)), "cache-ram = 2048", "cache-ram = 4096", 1)
+			edited := strings.Replace(string(readFile(t, path)), "cache-ram = "+strconv.Itoa(chatCacheRAMMiB), "cache-ram = 4096", 1)
 			if edited == string(readFile(t, path)) {
 				t.Fatal("fixture: no cache-ram line to edit")
 			}
@@ -86,7 +86,7 @@ func TestRefreshPresetWritesWhetherOrNotAnythingMoved(t *testing.T) {
 			if strings.Contains(after, "cache-ram = 4096") {
 				t.Errorf("%s: the hand edit outlived the start, so nothing was written:\n%s", tc.name, after)
 			}
-			if !strings.Contains(after, "cache-ram = 2048") {
+			if !strings.Contains(after, "cache-ram = "+strconv.Itoa(chatCacheRAMMiB)) {
 				t.Errorf("%s: the new file does not say what libris derives:\n%s", tc.name, after)
 			}
 
@@ -186,4 +186,68 @@ func readFile(t *testing.T, path string) []byte {
 		t.Fatal(err)
 	}
 	return raw
+}
+
+// The draft is a file that belongs to one model, so the keys naming it belong to one section.
+// An MTP layer is trained against the network it drafts for, so a section that has none must
+// not be told to guess — and a section that has one must name it, because the default
+// speculative type is lookup, which is not what the file is.
+//
+// These five keys are checked against common/arg.cpp rather than remembered: three tag the
+// server as their example, and the two cache types inherit it from llama.cpp's common set.
+// That check matters because a key the server does not know is not ignored — the process exits,
+// and the only place it says so is a log file nobody opens.
+func TestPresetWritesTheDraftOnlyWhereTheDraftLives(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "presets", "libris.ini")
+	if _, err := refreshPreset(path, "", []Model{
+		{Alias: AliasChat, Kind: KindChat, Path: "/m/c.gguf", Draft: "/m/mtp.gguf"},
+		{Alias: AliasEmbed, Kind: KindEmbed, Path: "/m/e.gguf"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	text := string(readFile(t, path))
+	chat, embed := section(t, text, "libris-chat"), section(t, text, "libris-embed")
+	for _, want := range []string{
+		"spec-type = draft-mtp",
+		"spec-draft-model = /m/mtp.gguf",
+		"spec-draft-n-max = " + specDraftNMax,
+		"spec-draft-type-k = " + specDraftType,
+		"spec-draft-type-v = " + specDraftType,
+	} {
+		if !strings.Contains(chat, want) {
+			t.Errorf("the drafting model's section is missing %q:\n%s", want, chat)
+		}
+	}
+	if strings.Contains(embed, "spec-") {
+		t.Errorf("a model with no draft was told to speculate:\n%s", embed)
+	}
+
+	// Read back, because the settings page reports what the file says rather than what the code
+	// hoped to write, and a key read back as nothing is a file the page lies about.
+	got, err := ReadPreset(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Models) != 2 || got.Models[0].Draft != "/m/mtp.gguf" {
+		t.Errorf("ReadPreset lost the draft: %+v", got.Models)
+	}
+	if got.Models[1].Draft != "" {
+		t.Errorf("the embedder gained a draft it was never given: %+v", got.Models[1])
+	}
+}
+
+// section cuts one model's block out of the preset text, so a claim about one model cannot be
+// satisfied by another model's line.
+func section(t *testing.T, text, name string) string {
+	t.Helper()
+	marker := "[" + name + "]"
+	i := strings.Index(text, marker)
+	if i < 0 {
+		t.Fatalf("no %s section in:\n%s", marker, text)
+	}
+	if j := strings.Index(text[i+len(marker):], "\n["); j >= 0 {
+		return text[i : i+len(marker)+j]
+	}
+	return text[i:]
 }

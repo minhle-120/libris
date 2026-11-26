@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -87,16 +88,30 @@ func TestPresetWritesOneSectionPerModel(t *testing.T) {
 	}
 
 	// Sampling on the chat model, because sampling belongs to the server and this file is
-	// the server. A research turn has to answer with a tool call, so the distribution is cold;
-	// the numbers are not settings and must not appear in the settings UI.
-	for _, want := range []string{"temp = 0.1", "top-k = 50", "top-p = 1.0", "min-p = 0.0", "repeat-penalty = 1.1"} {
+	// the server. The numbers are the model's own rather than a preference: a QAT checkpoint is
+	// tuned against one distribution, and cooling it samples weights that were quantised to
+	// behave under another. They are not settings and must not appear in the settings UI.
+	for _, want := range []string{"temp = 1.0", "top-k = 64", "top-p = 0.95"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("preset is missing %q:\n%s", want, got)
 		}
 	}
-	// The embedder holds no KV cache in host memory; the chat model is allowed 2 GiB.
-	if strings.Count(got, "cache-ram = 0") != 1 || !strings.Contains(got, "cache-ram = 2048") {
-		t.Errorf("cache-ram is not per kind:\n%s", got)
+	// And the section stops there. A penalty is a shift in the same distribution the weights
+	// were tuned against, and one inherited from a model this build no longer ships is a key
+	// nobody tuned for the model that is here.
+	for _, absent := range []string{"min-p", "repeat-penalty"} {
+		if strings.Contains(got, absent) {
+			t.Errorf("preset writes %q, which nothing tuned for this model:\n%s", absent, got)
+		}
+	}
+	// Host KV cache is per kind: the embedder holds none, the chat model holds some. The size of
+	// that some is a trade against the rest of the machine rather than a contract, so this pins
+	// that the two differ and leaves the number to the one place that derives it.
+	if n := strings.Count(got, "cache-ram = 0"); n != 1 {
+		t.Errorf("cache-ram = 0 appears %d times, want the embedder alone:\n%s", n, got)
+	}
+	if !regexp.MustCompile(`(?m)^cache-ram = [1-9]`).MatchString(got) {
+		t.Errorf("no model is allowed any host KV cache:\n%s", got)
 	}
 
 	// Asked for no device, the preset says nothing. The absence is the behaviour: llama.cpp

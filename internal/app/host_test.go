@@ -1460,31 +1460,40 @@ func TestAlreadyRunningSaysWhatToStop(t *testing.T) {
 	}
 }
 
-// completeModel puts one complete catalogue entry on disk, because EngineServeStart refuses to
+// completeModel puts the catalogue's chat entry on disk, because EngineServeStart refuses to
 // start a router with nothing to run — and that refusal is worth more than what these tests
 // would otherwise see. "Complete" means each part is exactly the size the manifest says and
 // has its hash sibling, so these files are sparse: truncate costs no blocks and no time, and
 // the app's only question is whether the sizes agree and the digest was ever checked.
+//
+// The files come from the catalogue rather than from names typed out here, because what these
+// tests need is "a model that could be started" — a fixture repeating the manifest would break
+// for reasons belonging to the fixture, which is how a model swap becomes a merge conflict in
+// a test that was never about a filename.
 func completeModel(t *testing.T, modelsDir string) {
 	t.Helper()
 
-	md := filepath.Join(modelsDir, "lfm3-vl-2b")
-	if err := os.MkdirAll(md, 0o755); err != nil {
+	var e models.Entry
+	for _, c := range models.Catalog() {
+		if c.Role == models.RoleChat {
+			e = c
+			break
+		}
+	}
+	if e.ID == "" {
+		t.Fatal("the catalogue offers no chat model to complete")
+	}
+
+	if err := os.MkdirAll(e.Dir(modelsDir), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range []struct {
-		name  string
-		bytes int64
-	}{
-		{"LFM3-VL-2B-QAD-Q4_0.gguf", 1_049_615_648},
-		{"mmproj-LFM3-VL-2B-BF16.gguf", 378_996_032},
-	} {
-		path := filepath.Join(md, p.name)
+	for _, p := range e.Parts() {
+		path := e.Path(modelsDir, p)
 		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o644)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := f.Truncate(p.bytes); err != nil {
+		if err := f.Truncate(p.Bytes); err != nil {
 			f.Close()
 			t.Fatal(err)
 		}

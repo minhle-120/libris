@@ -289,6 +289,7 @@ export type EngineModel = {
   path: string;
   bytes: number;
   mmproj?: string;
+  draft?: string;
 };
 
 export type EngineView = {

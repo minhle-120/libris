@@ -511,8 +511,11 @@ func TestModelsGETIsTheCard(t *testing.T) {
 		Dir:        "/data/models",
 		BytesTotal: 2586360320,
 		Entries: []app.ModelEntryView{
-			{ID: "lfm3-vl-2b", Label: "LFM3-VL 2B", Bytes: 1428611680, Complete: true, Verified: true,
-				Parts: []app.ModelPartView{{Name: "LFM3-VL-2B-QAD-Q4_0.gguf", Bytes: 1049615648, Present: true}}},
+			{ID: "gemma4-e2b", Label: "Gemma 4 E2B", Bytes: 3666440352, Complete: true, Verified: true,
+				Parts: []app.ModelPartView{
+					{Name: "gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf", Bytes: 2620370976, Present: true},
+					{Name: "mtp-gemma-4-E2B-it.gguf", Bytes: 59235648, Present: false},
+				}}, {ID: "embeddinggemma-2", Label: "EmbeddingGemma 2", Bytes: 1157748736},
 		},
 		NeedsRestart: true,
 	}
@@ -526,8 +529,11 @@ func TestModelsGETIsTheCard(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &v); err != nil {
 		t.Fatalf("body is not a ModelsView: %v\n%s", err, body)
 	}
-	if v.BytesTotal != 2586360320 || !v.NeedsRestart || len(v.Entries) != 1 || !v.Entries[0].Verified {
+	if v.BytesTotal != 2586360320 || !v.NeedsRestart || len(v.Entries) != 2 || !v.Entries[0].Verified {
 		t.Errorf("the card lost something: %+v", v)
+	}
+	if n := len(v.Entries[0].Parts); n != 2 || v.Entries[0].Parts[1].Present {
+		t.Errorf("a row that says which files are here lost the ones that are not: %d parts %+v", n, v.Entries[0].Parts)
 	}
 }
 
@@ -594,11 +600,11 @@ func TestModelStopDiscardRemove(t *testing.T) {
 		t.Errorf("stop reached the fetcher %d times", h.modelStops)
 	}
 
-	code, _ = hostCall(t, srv, http.MethodPost, "/api/host/models/discard", `{"id":"lfm3-vl-2b"}`)
+	code, _ = hostCall(t, srv, http.MethodPost, "/api/host/models/discard", `{"id":"gemma4-e2b"}`)
 	if code != http.StatusOK {
 		t.Errorf("discard: %d", code)
 	}
-	if len(h.discarded2) != 1 || h.discarded2[0] != "lfm3-vl-2b" {
+	if len(h.discarded2) != 1 || h.discarded2[0] != "gemma4-e2b" {
 		t.Errorf("discard went to %v", h.discarded2)
 	}
 

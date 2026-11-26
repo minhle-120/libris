@@ -64,13 +64,14 @@ const (
 	KindEmbed ModelKind = "embed"
 )
 
-// Model is one entry in the preset. MMProj is the vision projector for a multimodal model,
-// and empty when there is none.
+// Model is one entry in the preset. MMProj is the vision projector for a multimodal model, and
+// Draft is the extra file that guesses tokens for it; both are empty when the model has neither.
 type Model struct {
 	Alias  Alias
 	Kind   ModelKind
 	Path   string
 	MMProj string
+	Draft  string
 }
 
 // What each kind of model is given. These are not settings and not per-request: they are what
@@ -86,15 +87,35 @@ type Model struct {
 // the size of the paragraph it shows. The pool is where concurrent segments collide, so the pool
 // is sized for the largest of them and the others.
 //
-// The five sampling numbers are on the chat model because the chat model is the one thing that
-// plans. A research turn that must answer with a tool call wants a cold distribution — temp
-// 0.1 and top-k 50 keep it from inventing a fifth search, while top-p 1.0 and min-p 0.0 leave
-// the vocabulary open for a real answer once the evidence is in. repeat-penalty 1.1 is enough
-// to break a small model out of quoting the same chunk twice and not enough to make it
-// paraphrase a citation it should copy.
+// The three sampling numbers are on the chat model because the chat model is the one thing that
+// plans — and they are that model's own recipe, not a taste. A QAT checkpoint was tuned against
+// exactly this distribution, so cooling it to a temperature somebody preferred samples a network
+// whose weights were quantised to behave under another one.
+//
+// That is also why nothing else is written. The old section carried min-p and a repeat-penalty;
+// penalties are absent because a tuned sampling set is one joint thing and a penalty inherited
+// from a model this one replaced is a sixth key nobody tuned. What used to be argued for by a
+// cold distribution — that a research turn should not invent a fifth search — is held by the
+// tool contract and by the message history instead, which is where a wrong search can actually
+// be corrected.
+//
+// They are strings because they are pasted into an INI: %v of 1.0 would write "1", and the file
+// is meant to be read by a person as well as by llama.cpp.
+//
+// The draft numbers bound what speculation costs. n-max 3 caps how many tokens one guess may
+// contribute — a guess that runs long and misses wastes the pass that made it — and the draft's
+// KV cache is kept at q8_0 for the same reason the real model's is, for less memory per token
+// at a cost the draft model can afford.
 const (
 	chatCtx  = 32768
 	embedCtx = 8192
+
+	chatTemp = "1.0"
+	chatTopK = "64"
+	chatTopP = "0.95"
+
+	specDraftNMax = "3"
+	specDraftType = "q8_0"
 )
 
 // Serving is the truth about libris's own llama-server, as the settings page shows it.

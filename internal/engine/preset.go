@@ -18,12 +18,17 @@ import (
 	"strings"
 )
 
-// cacheRAMMiB is how much of the KV cache a model may hold in host memory. The chat model gets
-// a real allowance because its context is long and a reload of it is the slowest thing a
-// question can pay for; the two small models are told to hold none, because an embedding pass
-// does not reuse a cache and 2 GiB of it would be memory the chat model cannot use.
+// cacheRAMMiB is the ceiling on how much of the KV cache a model may keep in host memory. A
+// ceiling and not a target: what does not fit is recomputed rather than lost, so the number is
+// a trade and not a requirement.
+//
+// The chat model gets one because its context is long and reloading that context is the slowest
+// thing a question can pay for. It gets a modest one because host RAM is not libris's alone: it
+// is what the browser, the ingest queue and a page raster at full resolution are also asking
+// for. The two small models are told to hold none, because an embedding pass does not reuse a
+// cache and any of it would be memory the chat model cannot use.
 const (
-	chatCacheRAMMiB  = 2048
+	chatCacheRAMMiB  = 512
 	smallCacheRAMMiB = 0
 )
 
@@ -37,8 +42,9 @@ const RouterID = "libris"
 //
 // The engine directory is what the "Remove" button deletes, and this file describes the models
 // and the device rather than the program that reads them — a file naming
-// <data>/models/lfm3.gguf does not belong under a tree a button can make go away, and it would
-// have to sit there for removing the engine to also delete the record of what was last served.
+// <data>/models/gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf does not belong under a tree a button can
+// make go away, and it would have to sit there for removing the engine to also delete the record
+// of what was last served.
 // So it is a sibling of the engine, and "where is my model server's configuration" keeps one
 // answer for every file libris keeps.
 func PresetsDir(dataDir string) string { return filepath.Join(dataDir, "presets") }
@@ -145,7 +151,23 @@ func Preset(path string, device string, models []Model) error {
 			fmt.Fprintf(&b, "embeddings = on\npooling = mean\nctx-size = %d\ncache-ram = %d\n", embedCtx, smallCacheRAMMiB)
 		default:
 			fmt.Fprintf(&b, "ctx-size = %d\n", chatCtx)
-			b.WriteString("temp = 0.1\ntop-k = 50\ntop-p = 1.0\nmin-p = 0.0\nrepeat-penalty = 1.1\n")
+			fmt.Fprintf(&b, "temp = %s\ntop-k = %s\ntop-p = %s\n", chatTemp, chatTopK, chatTopP)
+			// Speculative decoding, and it is per-section because the draft is a file belonging
+			// to one model: an MTP layer is trained against the network it drafts for, so a
+			// section without a draft has nothing to guess with and asks for nothing.
+			//
+			// draft-mtp rather than the default lookup-and-draft is what the file is: a model
+			// file named mtp-*.gguf, published beside the weights for exactly this purpose.
+			// Each of these five keys resolves inside the server's argument set — three name
+			// themselves as server arguments, and the two cache types inherit them from
+			// llama.cpp's common set (common/arg.cpp, add_opt's example filter) — which matters
+			// because a key the server does not know is not ignored: the process exits.
+			if m.Draft != "" {
+				b.WriteString("spec-type = draft-mtp\n")
+				fmt.Fprintf(&b, "spec-draft-model = %s\n", m.Draft)
+				fmt.Fprintf(&b, "spec-draft-n-max = %s\nspec-draft-type-k = %s\nspec-draft-type-v = %s\n",
+					specDraftNMax, specDraftType, specDraftType)
+			}
 		}
 		// Off, and written as `false` rather than left out, so the choice is visible to whoever
 		// opens this file (the same reason `reasoning-preserve` is written out below its own
@@ -156,9 +178,9 @@ func Preset(path string, device string, models []Model) error {
 		// Empty at start is what makes opening libris cheap, and it is not a risk: the router
 		// loads a model on the request that names it (`--models-autoload`, default enabled — not
 		// passed, so not turned off), reports `GET /models` before anything has loaded, and
-		// and `--models-max` still caps how many may be resident at once. The chat
-		// model is 1.3 GB and most questions ask for one model; loading both at boot was a
-		// startup cost — and on a 4 GB card, the two of them plus a 2 GiB KV cache were a
+		// `--models-max` still caps how many may be resident at once. The chat model's weights
+		// alone are 2.6 GB and most questions ask for one model; loading both at boot was a startup
+		// cost — and on a 4 GB card, the two of them plus the host KV cache they were allowed were a
 		// measurement neither model survives.
 		b.WriteString("load-on-startup = false\n\n")
 	}
@@ -242,7 +264,7 @@ func ReadPreset(path string) (*PresetFile, error) {
 	return &out, nil
 }
 
-// observeKey records the four keys libris cares about inside a model section. Everything else
+// observeKey records the five keys libris cares about inside a model section. Everything else
 // in the file is a key for llama.cpp and is left alone — that is what "the file is the
 // configuration" means in code: this package reads the parts it must agree about and passes the
 // rest through untouched.
@@ -252,6 +274,8 @@ func observeKey(cur *Model, key, value string) {
 		cur.Path = value
 	case "mmproj":
 		cur.MMProj = value
+	case "spec-draft-model":
+		cur.Draft = value
 	case "embeddings":
 		if truthy(value) {
 			cur.Kind = KindEmbed

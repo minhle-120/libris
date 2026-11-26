@@ -320,7 +320,7 @@ func TestDownloadRestartsWhenRangeIsIgnored(t *testing.T) {
 	}
 }
 
-// A model is 1.4 GB, so "resume" has to mean two different things depending on which file is
+// A model is gigabytes, so "resume" has to mean two different things depending on which file is
 // where: a part file is continued, and a file already in its final place is left alone.
 // Without the second half a stop in the middle re-fetched the gigabyte it had already placed,
 // and overwrote a file whose digest it had checked with whatever upstream served that day.
