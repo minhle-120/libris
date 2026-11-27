@@ -4,6 +4,7 @@
     ask,
     canAsk,
     draftKey,
+    liveTurn,
     openCitation,
     stopTurn
   } from '../lib/store.svelte';
@@ -26,7 +27,9 @@
   const nothingToAnswerFrom = $derived(readyCount === 0);
   const draft = $derived(app.drafts[draftKey()] ?? '');
 
-  const live = $derived(app.live);
+  /** The answer this conversation is waiting for. Another conversation answering elsewhere is
+   *  not shown here, and does not stop this one from asking. */
+  const live = $derived(liveTurn());
   const running = $derived(!!live);
   const sendTitle = $derived(running ? 'Stop this answer' : 'Ask');
 
@@ -114,15 +117,33 @@
     }
   };
 
+  /**
+   * The turn in flight is painted by the live bubble, question and all — and the server stores
+   * that question the moment the turn starts. So while it runs the stored copy of it is hidden:
+   * walking out mid-answer and back would otherwise show the question twice, once from the row
+   * and once from the bubble that was never cancelled.
+   *
+   * Matched on the text rather than on position: until the server has written it there is no row
+   * to hide, and the previous turn's question must stay on screen.
+   */
+  const listed = $derived.by(() => {
+    if (!live) return app.messages;
+    for (let i = app.messages.length - 1; i >= 0; i--) {
+      const m = app.messages[i];
+      if (m.role === 'user' && m.content === live.question) return app.messages.slice(0, i);
+    }
+    return app.messages;
+  });
+
   /** The verdict is decided once per row, so the template never asks a question twice. */
   const rows = $derived(
-    app.messages.map((m) => ({
+    listed.map((m) => ({
       m,
       v: m.status && m.status !== 'answered' ? VERDICT[m.status] : null
     }))
   );
 
-  const empty = $derived(app.messages.length === 0 && !live);
+  const empty = $derived(listed.length === 0 && !live);
 </script>
 
 <section class="chat">

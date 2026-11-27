@@ -72,7 +72,10 @@ export const app = $state({
 
   messages: [] as Message[],
   messagesLoading: false,
-  live: null as Live | null,
+  /** Answers in flight, one per conversation — see `turnKey`. A single slot here is what made
+   *  leaving the page cancel an answer: every navigation had to clear it, and clearing it meant
+   *  hanging up the request. */
+  turns: {} as Record<string, Live>,
   /** Half-typed questions, kept per conversation so a rename or a switch does not eat one. */
   drafts: {} as Record<string, string>,
 
@@ -306,7 +309,6 @@ export async function openNotebook(id: string) {
   app.viewer = null;
   app.crumbNotebook = id;
   app.error = '';
-  clearLive();
   stopSourcesPoll();
 
   const [chats, sources] = await Promise.all([api.listChats(id), api.listSources(id)]);
@@ -325,7 +327,6 @@ export function openSettings() {
   // as the crumb, and leaving settings returns to the notebook the reader came out of.
   app.notebookId = null;
   app.viewer = null;
-  clearLive();
   stopSourcesPoll();
   app.error = '';
 }
@@ -352,7 +353,6 @@ export function goHome() {
   app.messages = [];
   app.sources = [];
   app.viewer = null;
-  clearLive();
   stopSourcesPoll();
   app.error = '';
 }
@@ -370,6 +370,8 @@ export async function renameNotebook(id: string, name: string) {
 }
 
 export async function deleteNotebook(id: string) {
+  // The notebook's conversations go with it, and so does an answer still being written into one.
+  cancelTurns(`${id}\u0000`);
   await api.deleteNotebook(id);
   const rest = await refreshNotebooks();
   if (app.notebookId !== id) return;
@@ -381,15 +383,15 @@ export async function deleteNotebook(id: string) {
 
 export async function openChat(id: string) {
   if (id === app.chatId) return;
-  // A streaming answer belongs to the conversation it was asked in, not the one now on screen.
-  clearLive();
+  // Leaving a conversation with an answer running leaves the answer alone. It belongs to the
+  // conversation, and `liveTurn` only shows it where it was asked — coming back finds it still
+  // writing, or already filed.
   app.chatId = id;
   await loadMessages(id);
 }
 
 /** `+` creates nothing. A conversation begins at its first question. */
 export function newConversation() {
-  clearLive();
   app.chatId = null;
   app.messages = [];
   app.error = '';
@@ -433,6 +435,8 @@ export async function renameChat(id: string, title: string) {
 
 export async function deleteChat(id: string) {
   if (!app.notebookId) return;
+  // Its messages are deleted with it, so an answer on its way there has nowhere to arrive.
+  cancelTurns(turnKey(app.notebookId, id));
   await api.deleteChat(app.notebookId, id);
   app.chats = await api.listChats(app.notebookId);
   if (app.chatId !== id) return;
@@ -682,12 +686,31 @@ export function setPanel(p: Panel) {
 
 // ── asking ────────────────────────────────────────────────────────
 
-let abort: AbortController | null = null;
+/**
+ * Where a running answer is filed: the notebook it was asked in and the conversation it
+ * belongs to. `''` is a conversation that does not exist yet — the server names it after the
+ * first question, so the answer waits there until it does.
+ *
+ * `\0` because both halves are opaque ids the server generated, and neither can contain it.
+ */
+function turnKey(notebook: string, chat: string | null) {
+  return `${notebook}\u0000${chat ?? ''}`;
+}
+
+/** The request behind each turn, so Stop can hang up one conversation's answer and nothing else's. */
+const controllers = new Map<string, AbortController>();
+
+/** The answer the conversation on screen is waiting for. Null when nothing is running *here*.
+ *  A turn elsewhere keeps running; it is simply not this screen's to show. */
+export function liveTurn(): Live | null {
+  if (!app.notebookId) return null;
+  return app.turns[turnKey(app.notebookId, app.chatId)] ?? null;
+}
 
 export function canAsk(question: string) {
   return (
     !!app.notebookId &&
-    !app.live &&
+    !liveTurn() &&
     question.trim().length > 0 &&
     app.sources.some((s) => s.status === 'ready')
   );
@@ -697,14 +720,25 @@ export function draftKey() {
   return app.chatId ?? '__new__';
 }
 
-export function clearLive() {
-  abort?.abort();
-  abort = null;
-  app.live = null;
+/** Stop the answer in the conversation on screen. It is the only thing that ends an answer
+ *  early: navigating away, opening another conversation, or settings does not. */
+export function stopTurn() {
+  if (!app.notebookId) return;
+  controllers.get(turnKey(app.notebookId, app.chatId))?.abort();
 }
 
-export function stopTurn() {
-  abort?.abort();
+/**
+ * Hang up and forget the turns whose key begins with `prefix`. Only a deletion earns this: the
+ * rows an answer would write are gone with the conversation, so its request is not worth
+ * keeping. Leaving is not a deletion, and leaves the answer running.
+ */
+function cancelTurns(prefix: string) {
+  for (const key of Object.keys(app.turns)) {
+    if (!key.startsWith(prefix)) continue;
+    controllers.get(key)?.abort();
+    controllers.delete(key);
+    delete app.turns[key];
+  }
 }
 
 /** One answer delta folded into the live turn.
@@ -725,9 +759,13 @@ function fold(live: Live, text: string, reasoning: string) {
 
 export async function ask(question: string) {
   const notebook = app.notebookId;
-  if (!notebook || app.live) return;
+  if (!notebook) return;
+  const known = app.chatId ?? '';
+  const key = turnKey(notebook, known);
+  // One answer at a time *in this conversation*. Another conversation answering is not a reason
+  // to refuse a question here.
+  if (app.turns[key]) return;
   const asked = question.trim();
-  const known = app.chatId;
   app.error = '';
   app.drafts[draftKey()] = '';
 
@@ -742,31 +780,33 @@ export async function ask(question: string) {
     citations: [],
     streaming: true
   };
-  app.live = turn;
-  // `app.live` is the proxy `$state` made of the turn, and it is a different identity from
+  app.turns[key] = turn;
+  // `app.turns[key]` is the proxy `$state` made of the turn, and it is a different identity from
   // `turn`. The callbacks below compare against, and write through, the proxy: against the
   // raw object the comparison is never true, and every delta would be dropped in silence.
-  const live = app.live as Live;
+  const live = app.turns[key] as Live;
 
   const controller = new AbortController();
-  abort = controller;
+  controllers.set(key, controller);
   let saved: Message | null = null;
   let failed = '';
 
   try {
     await api.ask(
       notebook,
-      known ?? '',
+      known,
       asked,
       {
+        // "Still the turn filed here" rather than "still on screen": a reader who left keeps
+        // accumulating, so coming back mid-sentence finds the answer where they left it.
         onStatus: (text) => {
-          if (app.live === live) live.status = text;
+          if (app.turns[key] === live) live.status = text;
         },
         onCitations: (citations) => {
-          if (app.live === live) live.citations = citations;
+          if (app.turns[key] === live) live.citations = citations;
         },
         onDelta: (text, reasoning) => {
-          if (app.live === live) fold(live, text, reasoning);
+          if (app.turns[key] === live) fold(live, text, reasoning);
         },
         onDone: (message) => {
           saved = message;
@@ -777,7 +817,7 @@ export async function ask(question: string) {
   } catch (e) {
     failed = errorMessage(e);
   } finally {
-    if (abort === controller) abort = null;
+    if (controllers.get(key) === controller) controllers.delete(key);
   }
 
   const cancelled = controller.signal.aborted;
@@ -788,7 +828,19 @@ export async function ask(question: string) {
   // only copy of a stopped answer until it arrives, so the turn comes down all at once,
   // *after* the row — blanking it first blinks the answer out for a frame and back.
   const done = saved as Message | null;
-  const chat = done?.chat_id ?? known ?? '';
+  const chat = done?.chat_id ?? known;
+  // Where the reader is now, which an answer that outlived the page it was asked from has to
+  // ask. `app.messages` and `app.chatId` belong to whatever is on screen, and writing a finished
+  // answer into them from elsewhere would put it in front of somebody who did not ask for it.
+  const askedHere = app.notebookId === notebook && (app.chatId ?? '') === known;
+  if (!askedHere) {
+    // The row is already stored — the server files one however a turn ends, answered, stopped,
+    // or interrupted — so there is nothing to carry. Opening the conversation fetches it.
+    delete app.turns[key];
+    app.drafts[chat || '__new__'] = '';
+    return;
+  }
+
   let refreshed = false;
   if (chat) {
     try {
@@ -806,24 +858,22 @@ export async function ask(question: string) {
   }
   app.drafts[chat || '__new__'] = '';
 
-  if (refreshed) app.live = null;
-  else if (written || !done) {
-    // Nothing arrived, so what is on screen stands, labelled as it ended.
-    if (!written && !failed) app.live = null;
-    else {
-      app.messages = [
-        ...app.messages,
-        {
-          id: -Date.now(),
-          chat_id: chat,
-          role: 'assistant',
-          content: written,
-          status: cancelled ? 'canceled' : 'interrupted',
-          created_at: Math.floor(Date.now() / 1000)
-        }
-      ];
-      app.live = null;
-    }
+  if (refreshed || !written) delete app.turns[key];
+  else {
+    // The poll failed with text on screen: keep it, labelled as it ended, and let the stored row
+    // replace it the next time the conversation is opened.
+    app.messages = [
+      ...app.messages,
+      {
+        id: -Date.now(),
+        chat_id: chat,
+        role: 'assistant',
+        content: written,
+        status: cancelled ? 'canceled' : 'interrupted',
+        created_at: Math.floor(Date.now() / 1000)
+      }
+    ];
+    delete app.turns[key];
   }
   if (failed) app.error = failed;
 }

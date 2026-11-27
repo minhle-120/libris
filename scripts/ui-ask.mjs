@@ -880,7 +880,7 @@ An invented [[Chunk 99]] and a malformed [[chunk 3]] label.`;
   // that the button is reachable mid-sentence. The marker is what proves the row read
   // below is *this* turn and not one still on screen from earlier.
   const marker = 'Nine zero four seven two six one eight. ';
-  const long = marker.repeat(90) + '[[Chunk 1]]';
+  const long = `${marker.repeat(90)}[[Chunk 1]]`;
   await control({ reset: true, answer: long });
   const turnsBeforeStop = await ui.eval(`return document.querySelectorAll('.turn.assistant').length`);
   await send(ui, 'Tell me everything about it');
@@ -935,6 +935,174 @@ An invented [[Chunk 99]] and a malformed [[chunk 3]] label.`;
     () => `${stopped?.text.length} of ${long.length} chars`
   );
   checks.check('and says that it was stopped', /Stopped/.test(stopped?.note ?? ''), where);
+
+  // ── leaving is not stopping ──────────────────────────────────────
+  // Only the Stop button ends an answer early. Walking out of a conversation — to another one,
+  // to another notebook, into Settings — used to hang up its request with it, so an answer two
+  // thirds written arrived as nothing at all and the reader came back to a question with no
+  // reply beside it. Long enough to walk out, look around, and come back while it is still
+  // writing: the fake sends a piece every 12ms and ~750 characters a second, so 350 repeats of
+  // this sentence is about twenty seconds of answer.
+  // Created, and the page reloaded to see it, *before* the question is asked: the rail lists
+  // what the client fetched, and a reload after the answer starts is the one way to actually
+  // cancel it. `away` has no sources, which is the point — nothing is asked in it.
+  const awayName = `away ${Date.now()}`;
+  await fetch(`${api}/api/notebooks`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name: awayName })
+  });
+  await ui.reload(app);
+  const awayOk = await openNotebook(ui, awayName);
+  checks.check(
+    'the notebook to walk out to is on the rail',
+    awayOk.ok,
+    () => JSON.stringify(awayOk)
+  );
+  const walked = 'Seven five one eight three zero nine four. ';
+  await control({ reset: true, answer: walked.repeat(350) });
+  await openNotebook(ui, name);
+  await openAskTab(ui);
+  await send(ui, 'Walk me through all of it');
+  await ui.settle(60);
+  await ask(ui);
+  const flowing = await ui.until(
+    `
+    const live = document.querySelector('.turn.live .answer:not(.pulse)');
+    const text = (live?.textContent ?? '').trim();
+    return text.startsWith(${JSON.stringify(walked.slice(0, 16))}) && text.length > 120
+      ? text.length : null;
+    `,
+    200,
+    100
+  );
+  checks.check(
+    'the answer is streaming when the reader walks out',
+    typeof flowing === 'number',
+    () => `chars=${flowing}`
+  );
+
+  // Out to a blank conversation, where none of it is for showing, and back.
+  const threadName = await ui.eval(`
+    const row = document.querySelector('.chat-row.active .chat-open');
+    document.querySelector('.sidebar .chat-new').click();
+    return row?.textContent.trim() ?? '';
+  `);
+  const blank = await ui.eval(`
+    return {
+      live: !!document.querySelector('.turn.live'),
+      ask: document.querySelector('.composer button')?.title,
+      turns: document.querySelectorAll('.turn.assistant').length
+    };
+  `);
+  checks.check(
+    'a new conversation shows none of the answer running elsewhere',
+    blank.live === false && blank.turns === 0,
+    () => JSON.stringify(blank)
+  );
+  checks.check(
+    'and its composer asks, rather than offering to stop somebody else\u2019s answer',
+    blank.ask === 'Ask',
+    () => `title=${blank.ask}`
+  );
+
+  // A beat away, so "further along" below is a fact about the stream rather than about how fast
+  // the two reads happen to land: frames reach the browser coalesced, so reads close together
+  // can honestly see the same character count.
+  await ui.settle(1500);
+
+  const further = await ui.eval(`
+    const row = [...document.querySelectorAll('.chat-open')]
+      .find((r) => r.textContent.trim() === ${JSON.stringify(threadName)});
+    if (row) row.click();
+    return !!row;
+  `);
+  checks.check('the conversation is found again by its title', further === true, `title=${threadName}`);
+  const midReturn = await ui.until(
+    `
+    const live = document.querySelector('.turn.live .answer:not(.pulse)');
+    const text = (live?.textContent ?? '').trim();
+    if (!text.startsWith(${JSON.stringify(walked.slice(0, 16))})) return null;
+    return {
+      chars: text.length,
+      // The live bubble shows the question, and the server has already stored it: two of them
+      // is the same sentence on screen twice.
+      asked: [...document.querySelectorAll('.turn.user')]
+        .filter((t) => t.textContent.trim() === 'Walk me through all of it').length
+    };
+    `,
+    60,
+    100
+  );
+  checks.check(
+    'coming back mid-answer finds the same answer still writing',
+    typeof midReturn?.chars === 'number' && midReturn.chars - flowing > 300,
+    () => `left at ${flowing}, back at ${midReturn?.chars}`
+  );
+  checks.check(
+    'with its question on screen once',
+    midReturn?.asked === 1,
+    () => `count=${midReturn?.asked}`
+  );
+
+  // Out of the notebook entirely, through Settings, and back.
+  const moved = await openNotebook(ui, awayName);
+  checks.check(
+    'another notebook opens while the first is still answering',
+    moved.ok,
+    () => JSON.stringify(moved)
+  );
+  await ui.eval(
+    `const b = [...document.querySelectorAll('button')].find((x) => x.title === 'Settings'); b.click(); return true;`
+  );
+  await ui.settle(200);
+  await ui.eval(
+    `const b = [...document.querySelectorAll('button')].find((x) => x.title === 'Settings'); b.click(); return true;`
+  );
+  await ui.settle(200);
+  const homeAgain = await openNotebook(ui, name);
+  checks.check(
+    'and the notebook that was asked in is the one on screen again',
+    homeAgain.ok,
+    () => JSON.stringify(homeAgain)
+  );
+  // Opening a notebook shows its newest conversation, so the one that was answered is clicked
+  // up by its title — the same way the reader gets back to it.
+  const backAgain = await ui.eval(`
+    const row = [...document.querySelectorAll('.chat-open')]
+      .find((r) => r.textContent.trim() === ${JSON.stringify(threadName)});
+    if (row) row.click();
+    return !!row;
+  `);
+  checks.check('the answered conversation opens again', backAgain === true, `title=${threadName}`);
+
+  const finished = await ui.until(
+    `
+    if (document.querySelector('.turn.live')) return null;
+    const last = [...document.querySelectorAll('.turn.assistant')].at(-1);
+    const text = (last?.querySelector('.answer')?.textContent ?? '').trim();
+    // The marker is what proves this row is the turn that was walked out on, and not one of
+    // the earlier turns still sitting in the thread.
+    if (!text.startsWith(${JSON.stringify(walked.slice(0, 16))})) return null;
+    return {
+      chars: text.length,
+      note: last.querySelector('.note')?.textContent.replace(/\\s+/g, ' ').trim() ?? '',
+      banner: document.querySelector('.banner')?.textContent.replace(/\\s+/g, ' ').trim() ?? ''
+    };
+    `,
+    400,
+    100
+  );
+  checks.check(
+    'the answer arrived, past the point where the reader left it',
+    typeof finished?.chars === 'number' && finished.chars > flowing,
+    () => `left at ${flowing}, arrived ${finished?.chars}`
+  );
+  checks.check(
+    'and is not labelled as anything less than an answer',
+    finished?.note === '' && finished?.banner === '',
+    () => `note=${finished?.note} banner=${finished?.banner}`
+  );
 
   // ── the thinking switch, from the row in Settings to the request body ──
   // Off by default and proven on the wire above. This is the other half: that the row

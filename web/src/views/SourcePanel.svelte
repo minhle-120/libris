@@ -1,6 +1,7 @@
 <script lang="ts">
   import {
     app,
+    liveTurn,
     openViewer,
     removeSource,
     reingest,
@@ -49,7 +50,9 @@
   const width = $derived(app.sideOpen ? app.sideW : SIDE.rail);
   const sources = $derived(app.sources);
   const running = $derived(sources.some((s) => s.status === 'processing'));
-  const uploading = $derived(app.live === null && running);
+  // An answer streaming in another conversation is not this panel's business; the one in this
+  // one is the activity the reader is watching.
+  const uploading = $derived(!liveTurn() && running);
 
   const filter = $state({ value: '' });
   const shown = $derived(
