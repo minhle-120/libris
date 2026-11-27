@@ -16,6 +16,7 @@ export type Notebook = {
   name: string;
   created_at: number; // unix seconds
   source_count: number; // read from the database, so it is 0 on a brand-new notebook
+  chat_count: number; // conversations inside it; the delete confirm must not promise otherwise
 };
 
 export type SourceKind = "pdf" | "image" | "audio" | "video" | "text" | "unsupported";

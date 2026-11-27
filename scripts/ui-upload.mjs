@@ -164,7 +164,7 @@ const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ui-pr
   // The text chunk straddles a page break, which is what page_end is for.
   checks.check('provenance shows the page span', /p1[^0-9]2/.test((view?.prov ?? [])[0] ?? ''), JSON.stringify(view?.prov));
   checks.check('the text chunk shows its passage', /Page one says the sky/.test(view?.text ?? ''), view?.text);
-  checks.check('a lone chunk reports no overlap', /no chunk repeats/.test(view?.legend ?? ''), view?.legend);
+  checks.check('a lone chunk reports no overlap', /Nothing here repeats another chunk/.test(view?.legend ?? ''), view?.legend);
 
   const imgs = await ui.until(`
     const list = [...document.querySelectorAll('.viewer img')];
@@ -255,8 +255,7 @@ const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ui-pr
     return {
       open: d?.open === true,
       names: /two-page/.test(d?.querySelector('h2')?.textContent ?? ''),
-      saysLast: /No other notebook uses it/.test(d?.textContent ?? ''),
-      saysDerived: /page image/.test(d?.textContent ?? ''),
+      lead: d?.querySelector('.lead')?.textContent.trim().replace(/\s+/g, ' ') ?? '',
       focused: document.activeElement?.textContent.trim(),
       danger: [...(d?.querySelectorAll('button') ?? [])].some(
         (b) => b.textContent.trim() === 'Delete file' && b.className.includes('btn-danger')
@@ -264,10 +263,13 @@ const code = await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ui-pr
     };
   `);
   checks.check('delete asks before it takes a file', ask.open && ask.names, JSON.stringify(ask));
+  // One line, in the user's words: what happens to the file. It is safe to be that blunt because
+  // the dialog only opens for the last notebook using the file — isLast() routes a shared file
+  // out of it entirely — so nothing has to be explained alongside it.
   checks.check(
-    'the box says which file goes and what was derived from it',
-    ask.saysLast && ask.saysDerived,
-    JSON.stringify(ask)
+    'the box says the file will be deleted, and says nothing about storage',
+    /will be deleted/.test(ask.lead) && !/chunk|page image|notebook/.test(ask.lead),
+    ask.lead
   );
   checks.check(
     'the destructive button is red and Cancel has the focus',

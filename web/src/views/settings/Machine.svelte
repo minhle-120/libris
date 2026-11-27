@@ -258,23 +258,22 @@
                 {/each}
               </ul>
               <p class="line">
-                One model answers to two names: the embedding model is served on {serve.device ||
-                  'the device'} for uploads and on the host for questions, because a model cannot
-                change device between them.
+                The embedding model runs twice — on {serve.device || 'the device'} for uploads, on
+                the host for questions — because it cannot switch device between them.
               </p>
             {:else}
               <p class="line">
-                Nothing loaded yet — the server reads a model the first time a question asks for
-                one. See <a href="#models">Models</a>.
+                Nothing is loaded yet. A model loads the first time a question needs it. See
+                <a href="#models">Models</a>.
               </p>
             {/if}
             {#if app.settings.engineDevice && serve.device && app.settings.engineDevice !== serve.device}
               <p class="line">
-                The form is holding {app.settings.engineDevice}; the process is on{' '}
-                {serve.device}. Saving and restarting switches it.
+                Saved: {app.settings.engineDevice}. Running: {serve.device}. Restart the server to
+                switch.
               </p>
             {/if}
-            <p class="line">Applies on the next start, and is saved with the rest of this page.</p>
+            <p class="line">Takes effect the next time the server starts.</p>
           {/if}
           {#if serve?.error}
             <p class="line error" role="alert">{serve.error}</p>
@@ -382,7 +381,7 @@
     {#if polling}
       <Button
         size="sm"
-        title="Stop the download. The bytes so far are kept, and the next attempt resumes where they stopped."
+        title="Stop. Progress is kept and the download resumes where it stopped."
         onclick={() => act(api.stopEngine)}
       >
         Stop
@@ -395,7 +394,7 @@
     {#if !polling && engine?.parts_bytes}
       <Button
         size="sm"
-        title="Throw the partial download away and free the space"
+        title="Discard the partial download"
         onclick={() => act(api.discardEngineParts)}
       >
         Discard {formatBytes(engine.parts_bytes)}
@@ -434,8 +433,7 @@
   </div>
 
   <p class="footnote">
-    The model server is a separate program, libris's own llama.cpp, downloaded from upstream and
-    run here. Its sampling and context sizes are fixed by that build, not by these settings.
+    The model server is llama.cpp, downloaded and run on this machine.
   </p>
 </section>
 
@@ -458,7 +456,7 @@
       modalError = errorMessage(e);
     }
   }}
-  keeps="Nothing else is touched: your notebooks, sources and answers stay. Re-downloading takes about a minute."
+  keeps="Nothing else is touched. Re-downloading takes about a minute."
 >
   <p class="lead">
     The engine files are deleted from this disk, and questions stop until it is downloaded again.

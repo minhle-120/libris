@@ -99,17 +99,24 @@
     }
   }
 
+  /** Set while a drag has over-dragged past the floor: the column fades to say it is about to go. */
+  let folding = $state(false);
+
   const handle = (node: HTMLElement) =>
     dragHandle(node, {
       spec: SIDE,
       get: () => app.sideW,
-      set: (n) => setWidth(SIDE, n)
+      set: (n) => setWidth(SIDE, n),
+      open: () => app.sideOpen,
+      setOpen: (v) => setOpen(SIDE, v),
+      pending: (armed) => (folding = armed)
     });
 </script>
 
 <aside
   class="sidepanel"
   class:closed={!open}
+  class:pending={folding}
   style="width: {width}px"
   aria-label="Sources and activity"
 >
@@ -133,16 +140,6 @@
       >
         Activity{#if running}<span class="dot pulse" title="Work in progress"></span>{/if}
       </button>
-      <Button
-        variant="ghost"
-        klass="rail-toggle"
-        shape="icon"
-        title="Hide panel"
-        ariaLabel="Hide panel"
-        onclick={() => setOpen(SIDE, false)}
-      >
-        <Icon name="collapse" size={14} />
-      </Button>
     </div>
 
     {#if app.viewer}
@@ -227,32 +224,117 @@
 
                   <div class="body">
                     <p class="name truncate" title={s.name}>{s.name}</p>
-                    <p class="facts">
-                      <Badge
-                        tone={s.status === 'ready'
-                          ? 'success'
-                          : s.status === 'processing'
-                            ? 'attention'
-                            : s.status === 'failed'
-                            ? 'danger'
-                            : s.status === 'stopped'
+                    <div class="factsline">
+                      <p class="facts">
+                        <Badge
+                          tone={s.status === 'ready'
+                            ? 'success'
+                            : s.status === 'processing'
                               ? 'attention'
-                              : 'neutral'}>{s.status}</Badge>
-                      <span class="chip">{s.kind}</span>
-                      <span>{formatBytes(s.bytes)}</span>
-                      {#if s.status === 'ready'}
-                        <span>{s.segment_count} {s.segment_count === 1 ? 'chunk' : 'chunks'}</span>
-                      {:else if s.status === 'processing' || s.status === 'stopped'}
-                        <!-- Chunks with vectors, against the chunks the file has. Extraction
-                             writes a source's chunks once and embedding writes thousands, so
-                             this is the number that moves — and on a stopped row it is the
-                             part still to do that `resume` is about. -->
-                        <span title="chunks vectorised so far, out of the chunks this file has">
-                          {s.embedded_count} / {s.segment_count}
-                          {s.segment_count === 1 ? 'chunk' : 'chunks'}
-                        </span>
-                      {/if}
-                    </p>
+                              : s.status === 'failed'
+                              ? 'danger'
+                              : s.status === 'stopped'
+                                ? 'attention'
+                                : 'neutral'}>{s.status}</Badge>
+                        <span class="chip">{s.kind}</span>
+                        <span>{formatBytes(s.bytes)}</span>
+                        {#if s.status === 'ready'}
+                          <span>{s.segment_count} {s.segment_count === 1 ? 'chunk' : 'chunks'}</span>
+                        {:else if s.status === 'processing' || s.status === 'stopped'}
+                          <!-- Chunks with vectors, against the chunks the file has. Extraction
+                               writes a source's chunks once and embedding writes thousands, so
+                               this is the number that moves — and on a stopped row it is the
+                               part still to do that `resume` is about. -->
+                          <span title="chunks vectorised so far, out of the chunks this file has">
+                            {s.embedded_count} / {s.segment_count}
+                            {s.segment_count === 1 ? 'chunk' : 'chunks'}
+                          </span>
+                        {/if}
+                      </p>
+                      <span class="row-actions">
+                        {#if s.status === 'stopped'}
+                          <Button
+                            variant="ghost"
+                            shape="icon"
+                            size="sm"
+                            title="Continue where it stopped — chunks already vectorised are kept"
+                            ariaLabel="Resume {s.name}"
+                            onclick={() => resume(s)}
+                          >
+                            <Icon name="play" size={14} />
+                          </Button>
+                        {/if}
+                        {#if s.status === 'processing'}
+                          <Button
+                            variant="ghost"
+                            shape="icon"
+                            size="sm"
+                            title="Stop this file where it stands — what is built so far is kept"
+                            ariaLabel="Stop {s.name}"
+                            onclick={() => stop(s)}
+                          >
+                            <Icon name="stop" size={14} />
+                          </Button>
+                        {/if}
+                        {#if s.status !== 'processing'}
+                          <Button
+                            variant="ghost"
+                            shape="icon"
+                            size="sm"
+                            title="Run this file again — its chunks, page images and vectors are replaced"
+                            ariaLabel="Run {s.name} again"
+                            onclick={() => reingest(s)}
+                          >
+                            <Icon name="retry" size={14} />
+                          </Button>
+                        {/if}
+                        {#if s.status === 'ready' || s.status === 'failed' || s.status === 'stopped'}
+                          <Button
+                            variant="ghost"
+                            shape="icon"
+                            size="sm"
+                            title="See how this source was chunked"
+                            ariaLabel="See how {s.name} was chunked"
+                            onclick={() => void openViewer(s.id)}
+                          >
+                            <Icon name="layers" size={14} />
+                          </Button>
+                        {/if}
+                        {#if s.status === 'ready' || s.status === 'unsupported' || s.status === 'failed'}
+                          <a
+                            class="iconlink"
+                            href={hasTimeline(s.kind) ? playerURL(s.id) : originalURL(s.id)}
+                            target="_blank"
+                            rel="noopener"
+                            title={hasTimeline(s.kind)
+                              ? "Play it in a new tab"
+                              : "Open the original file in a new tab"}
+                            aria-label="Open {s.name}"
+                          >
+                            <Icon name="open" size={14} />
+                          </a>
+                        {/if}
+                        <Button
+                          variant="ghost"
+                          shape="icon"
+                          size="sm"
+                          title={isLast(s)
+                            ? 'Delete — no other notebook uses this file, so it and everything derived from it go'
+                            : `Remove from this notebook — ${s.notebooks_using} notebooks use this file, so it stays`}
+                          ariaLabel={isLast(s) ? `Delete ${s.name}` : `Remove ${s.name} from this notebook`}
+                          onclick={() => {
+                            if (!isLast(s)) {
+                              void removeSource(s);
+                              return;
+                            }
+                            doomed = s;
+                            error = '';
+                          }}
+                        >
+                          <Icon name={isLast(s) ? 'trash' : 'x'} size={14} />
+                        </Button>
+                      </span>
+                    </div>
 
                     {#if s.detail}
                       <p class="note" class:hard={s.status === 'failed'}>{s.detail}</p>
@@ -267,89 +349,6 @@
                     {/if}
                   </div>
 
-                  <span class="row-actions">
-                    {#if s.status === 'stopped'}
-                      <Button
-                        variant="ghost"
-                        shape="icon"
-                        size="sm"
-                        title="Continue where it stopped — chunks already vectorised are kept"
-                        ariaLabel="Resume {s.name}"
-                        onclick={() => resume(s)}
-                      >
-                        <Icon name="play" size={14} />
-                      </Button>
-                    {/if}
-                    {#if s.status === 'processing'}
-                      <Button
-                        variant="ghost"
-                        shape="icon"
-                        size="sm"
-                        title="Stop this file where it stands — what is built so far is kept"
-                        ariaLabel="Stop {s.name}"
-                        onclick={() => stop(s)}
-                      >
-                        <Icon name="stop" size={14} />
-                      </Button>
-                    {/if}
-                    {#if s.status !== 'processing'}
-                      <Button
-                        variant="ghost"
-                        shape="icon"
-                        size="sm"
-                        title="Run this file again — its chunks, page images and vectors are replaced"
-                        ariaLabel="Run {s.name} again"
-                        onclick={() => reingest(s)}
-                      >
-                        <Icon name="retry" size={14} />
-                      </Button>
-                    {/if}
-                    {#if s.status === 'ready' || s.status === 'failed' || s.status === 'stopped'}
-                      <Button
-                        variant="ghost"
-                        shape="icon"
-                        size="sm"
-                        title="See how this source was chunked"
-                        ariaLabel="See how {s.name} was chunked"
-                        onclick={() => void openViewer(s.id)}
-                      >
-                        <Icon name="layers" size={14} />
-                      </Button>
-                    {/if}
-                    {#if s.status === 'ready' || s.status === 'unsupported' || s.status === 'failed'}
-                      <a
-                        class="iconlink"
-                        href={hasTimeline(s.kind) ? playerURL(s.id) : originalURL(s.id)}
-                        target="_blank"
-                        rel="noopener"
-                        title={hasTimeline(s.kind)
-                          ? "Play it in a new tab"
-                          : "Open the original file in a new tab"}
-                        aria-label="Open {s.name}"
-                      >
-                        <Icon name="open" size={14} />
-                      </a>
-                    {/if}
-                    <Button
-                      variant="ghost"
-                      shape="icon"
-                      size="sm"
-                      title={isLast(s)
-                        ? 'Delete — no other notebook uses this file, so it and everything derived from it go'
-                        : `Remove from this notebook — ${s.notebooks_using} notebooks use this file, so it stays`}
-                      ariaLabel={isLast(s) ? `Delete ${s.name}` : `Remove ${s.name} from this notebook`}
-                      onclick={() => {
-                        if (!isLast(s)) {
-                          void removeSource(s);
-                          return;
-                        }
-                        doomed = s;
-                        error = '';
-                      }}
-                    >
-                      <Icon name={isLast(s) ? 'trash' : 'x'} size={14} />
-                    </Button>
-                  </span>
                 </li>
               {/each}
             </ul>
@@ -359,32 +358,18 @@
             <Empty
               icon="inbox"
               title="Nothing in this notebook yet"
-              body="Drop a file here, or add one. PDFs, images and text all work."
+              body="Drop a file here, or add one. Documents, images, audio and video all work."
             />
           {/if}
         </div>
       </div>
     {/if}
 
-    <button
-      class="resizer"
-      style="left: -4px"
-      tabindex="0"
-      aria-label="Source panel width"
-      use:handle
-    ></button>
   {:else}
+    <!-- The rail's own icon opens the panel by click; the seam beside it opens it by drag, and is
+         the only thing that folds the panel away — the same edge the notebook list uses, so the
+         two borders do not have to be learned twice. -->
     <div class="rail">
-      <Button
-        variant="ghost"
-        klass="rail-toggle"
-        shape="icon"
-        title="Show sources"
-        ariaLabel="Show sources"
-        onclick={() => setOpen(SIDE, true)}
-      >
-        <Icon name="expand" size={14} />
-      </Button>
       {#if sources.length}
         <button class="rail-item" title="Sources" aria-label="Sources" onclick={() => setOpen(SIDE, true)}>
           <Icon name="layers" />
@@ -394,6 +379,16 @@
       {#if running}<span class="dot pulse" title="Work in progress"></span>{/if}
     </div>
   {/if}
+
+  <button
+    class="resizer"
+    style="left: -4px"
+    tabindex="0"
+    aria-expanded={open}
+    title={open ? 'Source panel width — over-drag right to hide' : 'Sources — drag left to show'}
+    aria-label={open ? 'Source panel width' : 'Show sources'}
+    use:handle
+  ></button>
 </aside>
 
 <Modal
@@ -405,12 +400,11 @@
   variant="danger"
   {error}
   onconfirm={confirmDelete}
-  keeps="No other notebook uses it, so its file, its page images and its chunks go with it. Nothing else you uploaded is touched."
 >
-  <p class="lead">
-    This was the last notebook listing it, so the file is deleted with
-    {doomed ? `${doomed.segment_count} ${doomed.segment_count === 1 ? 'chunk' : 'chunks'}` : 'its chunks'}.
-  </p>
+  <!-- "This file will be deleted" is true every time it is read: isLast() opens this dialog only
+       when no other notebook uses the file, and a shared file is removed from the one notebook
+       without a dialog at all. -->
+  <p class="lead">This file will be deleted.</p>
 </Modal>
 
 <style>
@@ -464,8 +458,14 @@
     padding: 0;
   }
 
-  .seg :global(.rail-toggle) {
-    margin-left: auto;
+  /* Held at the floor of a drag: the handle keeps travelling and the column fades, so the fold
+     reads as the end of the resize rather than as something that fell off. */
+  .sidepanel > :not(.resizer) {
+    transition: opacity 120ms ease;
+  }
+
+  .sidepanel.pending > :not(.resizer) {
+    opacity: 0.4;
   }
 
   .tools {
@@ -560,6 +560,14 @@
     color: var(--muted);
   }
 
+  /* The verbs share the second line with the state they act on, which is what the first line
+     is left entirely to the filename for. */
+  .factsline {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
   .facts {
     display: flex;
     align-items: center;
@@ -567,6 +575,8 @@
     gap: 6px;
     font-size: var(--fs-xs);
     color: var(--muted);
+    flex: 1;
+    min-width: 0;
   }
 
   .note {
@@ -579,12 +589,13 @@
     color: var(--danger);
   }
 
+  /* In the flow, not floating over the card: the space is held whether or not the buttons are
+     shown, so revealing them never moves anything and never covers the chunk count. */
   .row-actions {
-    position: absolute;
-    top: 5px;
-    right: 5px;
     display: flex;
+    flex: none;
     gap: 1px;
+    margin-inline-start: auto;
     opacity: 0;
     pointer-events: none;
   }

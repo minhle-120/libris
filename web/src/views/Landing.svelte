@@ -13,8 +13,8 @@
   <div class="inner">
     <h1>Nothing open</h1>
     <p>
-      A notebook is a set of sources you ask questions about. Add PDFs, images or text, and every
-      answer comes back from them, citing the page.
+      A notebook is a set of sources you ask questions about. Add documents, images, audio or
+      video, and every answer cites where it came from.
     </p>
     <p class="muted">It all stays on this machine.</p>
     <Button variant="primary" onclick={() => (app.newNotebook = true)}>New notebook</Button>

@@ -246,6 +246,12 @@ type Notebook struct {
 	// Source.SegmentCount is: it is what the sidebar shows beside a notebook.
 	// It is 0 on a notebook that was just created, before any query reads it.
 	SourceCount int `json:"source_count"`
+
+	// ChatCount is here for one sentence in the delete confirm. Deleting a notebook
+	// deletes its conversations, so a notebook with no files can still be holding
+	// something a person wrote — and the dialog may only say "nothing else is touched"
+	// when it has checked both.
+	ChatCount int `json:"chat_count"`
 }
 
 func (s Segment) String() string {

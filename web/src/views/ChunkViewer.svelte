@@ -108,8 +108,8 @@
 
   const legend = $derived(
     marked.reps.size
-      ? 'The shaded text repeats the tail of the chunk before it, so a sentence is never cut in half where the search reads it.'
-      : 'One chunk, or none of them overlaps: no chunk repeats any other.'
+      ? 'Shaded text repeats the end of the previous chunk, so no sentence is cut in half.'
+      : 'Nothing here repeats another chunk.'
   );
 
   let list = $state<HTMLElement>();

@@ -33,8 +33,29 @@
   // which can still fail to come up. Reading the empty step as "engine" would send that person
   // back to a step they finished, with nothing left to click, so the blocking list decides
   // where they are. The fallback name is the first step, not a blank panel.
-  const active = $derived(NAMES[setup?.step ?? setup?.blocking?.[0] ?? 'engine']);
+  // Where the wizard lands by itself: the first step the server cannot get past on its own.
+  const blocking = $derived(NAMES[setup?.step ?? setup?.blocking?.[0] ?? 'engine']);
+  /**
+   * A step the person clicked back to. A finished step stays changeable — a device picked by
+   * mistake is still the wrong device once the models step is in front of them — so which step
+   * is showing is theirs to decide, and nothing about looking back at one undoes it. It is
+   * dropped the moment the blocking step moves, because then there is a new one to land on.
+   */
+  let chosen = $state<string | null>(null);
+  let landed = $state<string | null>(null);
+  $effect(() => {
+    if (landed !== blocking) {
+      landed = blocking;
+      chosen = null;
+    }
+  });
+  const active = $derived(chosen ?? blocking);
   const stepIndex = $derived(steps.indexOf(active as (typeof steps)[number]));
+  // Behind the blocking step is revisitable; ahead of it is a step whose prerequisite is
+  // still missing, so there is nothing there to do yet.
+  const reach = (name: string) =>
+    steps.indexOf(name as (typeof steps)[number]) <=
+    steps.indexOf(blocking as (typeof steps)[number]);
 
   const entries = $derived(models?.entries ?? []);
   const wanted = $derived(entries.filter((e) => !e.complete));
@@ -49,13 +70,32 @@
   const downloading = $derived(BUSY.has(engine?.progress?.state ?? ''));
   const failed = $derived(engine?.progress?.state === 'failed');
 
-  const progress = $derived(
-    ['downloading', 'verifying', 'unpacking'].includes(engine?.progress?.state ?? '')
-      ? engine?.progress
-      : models?.progress?.state === 'downloading' || models?.progress?.state === 'verifying'
-        ? models.progress
-        : undefined
+  /** A model transfer in flight, from the server's facts rather than from the button that
+   *  started it: the POST is long gone while the bytes are still arriving. */
+  const modelRunning = $derived(
+    entries.some((e) => e.downloading) ||
+      models?.progress?.state === 'downloading' ||
+      models?.progress?.state === 'verifying'
   );
+
+  /**
+   * One bar for the step, not one per transfer. A model download reports the bytes of the file
+   * it is carrying, so a bar built on it sweeps to 100% and starts again for the second model;
+   * across the models step the fraction is every model's bytes instead, which crosses once.
+   */
+  const progress = $derived.by(() => {
+    if (modelRunning) {
+      return {
+        state: models?.progress?.state ?? 'downloading',
+        total: entries.reduce((n, e) => n + e.bytes, 0),
+        done: entries.reduce((n, e) => n + (e.complete ? e.bytes : e.partialBytes), 0)
+      };
+    }
+    const p = engine?.progress;
+    return p && ['downloading', 'verifying', 'unpacking'].includes(p.state)
+      ? { state: p.state, done: p.done, total: p.total }
+      : undefined;
+  });
   const pct = $derived(
     progress?.total
       ? Math.min(100, Math.round((progress.done / progress.total) * 100))
@@ -116,15 +156,23 @@
   }
 
   let installing = false;
+  /**
+   * Whether the queue is allowed to ask for anything: set when a download is stopped or a
+   * request fails, cleared by the button. Without it the poll restarts a download the person
+   * just stopped, and a server that keeps refusing one gets asked again every two seconds.
+   */
+  let paused = false;
 
   /**
    * One button means both models, so something has to ask for the second. The queue runs only
    * while the screen is showing the step that started it — a stale queue from a previous session
-   * once fired while the person was still downloading the engine — and a refused request is not
-   * a download in progress, so it is dropped rather than retried.
+   * once fired while the person was still downloading the engine. What it waits for is the end
+   * of the transfer in flight, not the end of the request that started it: the POST answers as
+   * soon as the bytes are underway, so a resolved request means nothing yet, and asking for the
+   * second model early is a refusal the server is obliged to make.
    */
   function drain() {
-    if (!queue.length || active !== 'Models' || installing) return;
+    if (!queue.length || active !== 'Models' || installing || paused || modelRunning) return;
     const next = queue.find((id) => entries.some((e) => e.id === id && !e.complete));
     if (!next) {
       write([]);
@@ -138,12 +186,22 @@
         write(queue.filter((id) => id !== next));
       })
       .catch((e) => {
+        // A refusal is not a cancelled plan: what is queued is still missing, and throwing the
+        // queue away would make one busy answer the end of the second model. It stops the queue
+        // and says so, and the button starts it again.
         error = errorMessage(e);
-        write([]);
+        paused = true;
       })
       .finally(() => {
         installing = false;
       });
+  }
+
+  /** Stop is "not now": the bytes stay, and the same button that started the download is what
+   *  resumes it — the queue still holds whatever is missing. */
+  async function stopModels() {
+    paused = true;
+    await act(api.stopModelDownload);
   }
 
   /** The wizard unmounts the moment the gate opens, which is while this function is still
@@ -245,11 +303,20 @@
   }
 
   function getModels() {
+    paused = false;
     write(wanted.map((e) => e.id));
-    return act(() => api.installModel(wanted[0]?.id ?? '').then((view) => {
-      models = view;
-      write(queue.filter((id) => id !== wanted[0]?.id));
-    }));
+    return act(() =>
+      api
+        .installModel(wanted[0]?.id ?? '')
+        .then((view) => {
+          models = view;
+          write(queue.filter((id) => id !== wanted[0]?.id));
+        })
+        .catch((e) => {
+          error = errorMessage(e);
+          paused = true;
+        })
+    );
   }
 </script>
 
@@ -259,12 +326,6 @@
     <span class="word">libris</span>
     <h1>Set up Libris</h1>
     <span class="stepcount">{stepIndex + 1} of {steps.length}</span>
-    <Button
-      klass="skip"
-      variant="ghost"
-      size="sm"
-      title="Go in without a model server. This configures nothing and starts nothing: asking a question will fail until a server answers, and the setup screen is here again the next time libris opens."
-      onclick={skipSetup}>Skip for now</Button>
   </header>
 
   <div class="column">
@@ -276,12 +337,15 @@
             : name === 'Inference device'
               ? setup?.device
               : setup?.models && setup?.serving}
+        {@const back = reach(name)}
         <li class:active={active === name} class:done={done === true}>
-          <span class="dot" aria-hidden="true">
-            {#if done}<Icon name="check" size={12} />{:else}{steps.indexOf(name) + 1}{/if}
-          </span>
-          <span class="name">{name}</span>
-          <span class="detail">{detail[name]}</span>
+          <button class="step" disabled={!back} onclick={() => (chosen = name)}>
+            <span class="step-dot" aria-hidden="true">
+              {#if done}<Icon name="check" size={12} />{:else}{steps.indexOf(name) + 1}{/if}
+            </span>
+            <span class="name">{name}</span>
+            <span class="detail">{detail[name]}</span>
+          </button>
         </li>
       {/each}
     </ol>
@@ -290,9 +354,8 @@
       {#if active === 'Engine'}
         <h2>Get the model server</h2>
         <p>
-          Libris runs one model server, on this machine only. It is fetched from llama.cpp's
-          upstream releases when it is needed rather than installed by hand, and checked against
-          the digest upstream publishes before it is unpacked.
+          Answers run on llama.cpp, on this machine. Libris downloads the official build, verifies
+          it, and starts it when needed.
         </p>
         <div class="verbs">
           <Button
@@ -335,9 +398,10 @@
         {/if}
 
       {:else if active === 'Inference device'}
-        <h2>Where does it run?</h2>
+        <h2>Which device should run the models?</h2>
         <p>
-          These are the slots the engine itself reported. This can be changed later in Settings.
+          Pick your graphics card if one is listed, otherwise CPU. You can change this later in
+          Settings.
         </p>
         {#if !report}
           <p class="quiet">Asking the engine what it can run on…</p>
@@ -369,15 +433,19 @@
       {:else}
         <h2>Get the models</h2>
         {#if !modelsOnDisk}
-          <p>
-            One model answers, one embeds. Both are pinned downloads, checked as they arrive, and
-            a different embedder would silently invalidate every vector already stored.
-          </p>
           <div class="verbs">
-            <Button variant="primary" disabled={busy || !wanted.length} onclick={getModels}>
-              Download {formatBytes(missingBytes)}
+            <Button
+              variant="primary"
+              disabled={busy || (!modelRunning && !wanted.length)}
+              title={modelRunning
+                ? 'Stop. Progress is kept and the download resumes where it stopped.'
+                : undefined}
+              onclick={modelRunning ? stopModels : getModels}>
+              {modelRunning ? 'Stop' : 'Download'}
             </Button>
-            {#if !wanted.length && entries.length}
+            {#if modelRunning}
+              <span class="quiet">{formatBytes(missingBytes)} left to fetch</span>
+            {:else if !wanted.length && entries.length}
               <span class="quiet">Both are on disk.</span>
             {/if}
           </div>
@@ -403,10 +471,7 @@
           </ul>
           <p class="quiet">A stopped download keeps its bytes and resumes where it left off.</p>
         {:else}
-          <p>
-            Both models are on disk. Nothing is serving them yet — start the server, and it loads
-            a model the first time a question asks for one.
-          </p>
+          <p>Both models are on disk. The server loads one the first time a question needs it.</p>
           <div class="verbs">
             <Button variant="primary" disabled={busy} onclick={() => act(api.startEngineServe)}>
               Start the server
@@ -439,6 +504,15 @@
       {#if error}
         <p class="error" role="alert">{error}</p>
       {/if}
+
+      <div class="escape">
+        <Button
+          klass="skip"
+          variant="ghost"
+          size="sm"
+          title="Go in without a model server. This configures nothing and starts nothing: asking a question will fail until a server answers, and the setup screen is here again the next time libris opens."
+          onclick={skipSetup}>Skip for now</Button>
+      </div>
     </section>
   </div>
 </div>
@@ -462,10 +536,12 @@
     background: var(--chrome);
   }
 
-  /* The way out of the wizard is the far end of its own header, so it reads as an
-     escape and never as the next step. */
-  .skip {
-    margin-inline-start: auto;
+  /* The way out sits under the step's own verbs rather than in the header, where it read as
+     app chrome next to the step counter. Here it is one more thing you can do about this
+     screen — the least inviting of them. */
+  .escape {
+    display: flex;
+    margin-block-start: 2px;
   }
 
   .mark {
@@ -515,37 +591,70 @@
     gap: 4px;
   }
 
+  /* The whole row is the control, since the row is what you go back to. */
   .steps li {
+    display: block;
+  }
+
+  .step {
     display: grid;
     grid-template-columns: 22px 1fr auto;
     align-items: center;
     gap: 10px;
+    width: 100%;
     padding: 9px 12px;
     border: 1px solid transparent;
     border-radius: var(--r);
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: start;
+    cursor: pointer;
+  }
+
+  /* Ahead of the blocking step, a row does not answer a click. */
+  .step:disabled {
+    cursor: default;
+    opacity: 0.55;
+  }
+
+  .step:not(:disabled):hover {
+    background: var(--hover);
   }
 
   /* The active step is raised; a finished one is a tick and nothing else. */
-  .steps li.active {
+  .steps li.active .step {
     border-color: var(--border);
     background: var(--raised);
     box-shadow: var(--shadow);
   }
 
-  .dot {
+  /* Named apart from the global `.dot` in app.css. That one is the 7px amber panel indicator,
+     and it painted these circles: neither rule set a background, so the amber showed through
+     whatever border and glyph this one asked for. */
+  .step-dot {
     display: grid;
     place-items: center;
     width: 20px;
     height: 20px;
     border: 1px solid var(--border);
     border-radius: 50%;
+    background: transparent;
     font-size: 11px;
     color: var(--muted);
   }
 
-  .done .dot {
+  /* Three states, told apart without reading a word: done is a filled tick, current is the
+     accent on the raised row, and a step not reached is an outline around a number. */
+  .done .step-dot {
     border-color: var(--success);
+    background: var(--success-bg);
     color: var(--success);
+  }
+
+  .active .step-dot {
+    border-color: var(--accent);
+    color: var(--accent-text);
   }
 
   .name {

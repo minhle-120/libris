@@ -83,7 +83,7 @@ type Config struct {
 	// One group, because it is one question. The engine and the endpoints are not two
 	// topics a user has to reconcile: which mode is set decides which half of the group is
 	// shown, and the fields that are hidden are the ones libris derives.
-	EngineMode EngineMode `key:"engineMode" group:"servers" label:"Who runs them" help:"Libris can download llama.cpp, run it, and derive the addresses itself — or talk to servers you started. Not both." kind:"enum" enum:"engineModes" required:"true"`
+	EngineMode EngineMode `key:"engineMode" group:"servers" label:"Who runs them" help:"Libris can download and run llama.cpp, or connect to servers you start yourself." kind:"enum" enum:"engineModes" required:"true"`
 
 	// The port libris binds its own server to. A setting because libris is the thing that
 	// binds it (a setting is an ability the app can apply), and a loopback port
@@ -97,7 +97,7 @@ type Config struct {
 	//
 	// The floor is 1024 and 0 is legal anyway, because ports below 1024 need root on Linux and
 	// setting one would produce a failure about permissions rather than about the choice.
-	EnginePort int `key:"enginePort" group:"servers" label:"Server port" help:"0 lets libris take a free port each time the server starts. A number asks for that exact port, and the start fails if something else already holds it. Chat and embeddings share whatever port is chosen." min:"1024" max:"65535" autoZero:"true" mode:"managed"`
+	EnginePort int `key:"enginePort" group:"servers" label:"Server port" help:"0 uses a free port each time. A number uses that port, and the server fails to start if something else holds it." min:"1024" max:"65535" autoZero:"true" mode:"managed"`
 
 	// Which device llama.cpp offloads to, written into the preset as --device. A setting
 	// because libris is the thing that writes it, and a string rather than an enum
@@ -113,7 +113,7 @@ type Config struct {
 	// a text field would ask someone to type a name they can only learn by running a command.
 	// The CPU is one of the choices rather than a fallback sentence: its name is llama.cpp's own
 	// "none", so the value the row carries is the value the preset needs.
-	EngineDevice string `key:"engineDevice" group:"servers" label:"Run models on" help:"Which device llama.cpp offloads to. The choices are the slots the installed engine reports, CPU among them." mode:"managed" noview:"true"`
+	EngineDevice string `key:"engineDevice" group:"servers" label:"Run models on" help:"Which device runs the models. The list comes from the installed engine." mode:"managed" noview:"true"`
 	// EngineDeviceAck records that a person has looked at the device choice for this engine
 	// build on this machine. It is not a preference and no form should offer it: it is the
 	// difference between “libris picked a device” and “nobody was ever asked”, which only the
@@ -123,9 +123,9 @@ type Config struct {
 	// was never shown the row.
 	EngineDeviceAck string `key:"engineDeviceAck" group:"servers" label:"Device choice confirmed" help:"Written by the setup screen when the device row is confirmed. Blank means nobody has been asked yet." mode:"managed" noview:"true"`
 
-	ChatURL        string `key:"chatURL" group:"servers" label:"Chat server" help:"Text and image input." kind:"url" required:"true" mode:"external"`
-	EmbedURL       string `key:"embedURL" group:"servers" label:"Embedding server" help:"Multimodal embeddings for text and page images." kind:"url" required:"true" mode:"external"`
-	TimeoutSeconds int    `key:"timeoutSeconds" group:"servers" label:"Request timeout" help:"Local CPU inference is slow. Lower it for GPU." min:"5" max:"3600" unit:"s"`
+	ChatURL        string `key:"chatURL" group:"servers" label:"Chat server" help:"The address of your chat server." kind:"url" required:"true" mode:"external"`
+	EmbedURL       string `key:"embedURL" group:"servers" label:"Embedding server" help:"The address of your embedding server." kind:"url" required:"true" mode:"external"`
+	TimeoutSeconds int    `key:"timeoutSeconds" group:"servers" label:"Request timeout" help:"How long to wait for a model server before a request fails." min:"5" max:"3600" unit:"s"`
 
 	// ── models ───────────────────────────────────────────────────
 	// Model names are what the server answers to. They are settings in external mode only:
@@ -136,9 +136,9 @@ type Config struct {
 	// way: a default that names a model nobody downloaded is a field that looks correct and
 	// fails anyway. Capacity is not here either — n_ctx and the GPU layer count belong to
 	// the server's command line, and in managed mode to its preset file.
-	ChatModel  string `key:"chatModel" group:"models" label:"Chat model" help:"The name your chat server answers to. Must support tool calls for the research loop." mode:"external"`
+	ChatModel  string `key:"chatModel" group:"models" label:"Chat model" help:"The name your chat server answers to. It must support tool calls." mode:"external"`
 	EmbedModel string `key:"embedModel" group:"models" label:"Embedding model" help:"The name your embedding server answers to." mode:"external"`
-	EmbedDim   string `key:"embedDimensions" group:"models" label:"Embedding dimensions" help:"Probed once at startup and recorded with every segment." readonly:"true"`
+	EmbedDim   string `key:"embedDimensions" group:"models" label:"Embedding dimensions" help:"Detected at startup. Cannot be set here." readonly:"true"`
 
 	// ── retrieval ────────────────────────────────────────────────
 	// One budget, counted across every kind of chunk: a search's text, a PDF's page
@@ -149,8 +149,8 @@ type Config struct {
 	//
 	// The key stayed "finalTopK" when the second k went away: a saved settings file
 	// holds that name, and renaming it would reset whatever was saved.
-	TopK          int `key:"finalTopK" group:"retrieval" label:"Chunks per search" help:"How many chunks one search returns. Every kind counts: text, page images and pictures share this budget." min:"1" max:"50" unit:"chunks"`
-	MaxIterations int `key:"maxIterations" group:"retrieval" label:"Max iterations" help:"Deeper multi-hop research; diminishing returns past 3." min:"1" max:"10"`
+	TopK          int `key:"finalTopK" group:"retrieval" label:"Chunks per search" help:"How many chunks one search returns." min:"1" max:"50" unit:"chunks"`
+	MaxIterations int `key:"maxIterations" group:"retrieval" label:"Max iterations" help:"How many search rounds the researcher may make. Each one costs time." min:"1" max:"10"`
 
 	// The research turn's only output is a tool call, so what a model wrote to itself
 	// before naming that search is thrown away the moment the call lands — paid for in
@@ -158,16 +158,16 @@ type Config struct {
 	// because its deliberation is shown to the reader, which is why there is one setting
 	// here and not two. Sent explicitly rather than left to the server's default: a switch
 	// that works only when llama.cpp was started the same way is not a switch.
-	ResearchThinking bool `key:"researchThinking" group:"retrieval" label:"Think before searching" help:"Off sends the search request straight away. On lets the model reason first, which costs time each iteration and sometimes picks a better search. The answer's own thinking is unaffected."`
-	HistoryMessages  int  `key:"historyMessages" group:"retrieval" label:"History window" help:"Recent turns given to the synthesizer." min:"0" max:"64" unit:"messages"`
-	ChunkWords       int  `key:"chunkWords" group:"retrieval" label:"Chunk size" help:"Target words per text chunk." min:"10" max:"1000" unit:"words"`
-	ChunkOverlap     int  `key:"chunkOverlap" group:"retrieval" label:"Chunk overlap" help:"Words carried into the next chunk." min:"0" max:"999" unit:"words"`
+	ResearchThinking bool `key:"researchThinking" group:"retrieval" label:"Think before searching" help:"Lets the model reason before it searches. Slower each round, sometimes a better search."`
+	HistoryMessages  int  `key:"historyMessages" group:"retrieval" label:"History window" help:"How many earlier messages the answer sees." min:"0" max:"64" unit:"messages"`
+	ChunkWords       int  `key:"chunkWords" group:"retrieval" label:"Chunk size" help:"Words per chunk of text." min:"10" max:"1000" unit:"words"`
+	ChunkOverlap     int  `key:"chunkOverlap" group:"retrieval" label:"Chunk overlap" help:"Words repeated at the start of the next chunk." min:"0" max:"999" unit:"words"`
 
 	// A recording is cut into clips the way text is cut into chunks, and the same two
 	// questions apply: how big, and how much the neighbours share. The units differ
 	// because a clip has no words to count.
-	AudioClipSeconds int `key:"audioClipSeconds" group:"retrieval" label:"Recording clip length" help:"Seconds of a recording per clip. Longer is worse: a clip's vector is the average of everything in it, so one sentence in a long clip is diluted by the rest of it. Measured on real recordings, 15 s is the shortest window that still holds a whole sentence, and it beat 30 s and 60 s on every query." min:"5" max:"60" unit:"seconds"`
-	AudioClipOverlap int `key:"audioClipOverlap" group:"retrieval" label:"Recording clip overlap" help:"Percent of each clip repeated at the start of the next, so a sentence that straddles a boundary survives whole in at least one clip." min:"0" max:"95" unit:"%"`
+	AudioClipSeconds int `key:"audioClipSeconds" group:"retrieval" label:"Recording clip length" help:"Seconds of a recording per clip. Shorter clips search better." min:"5" max:"60" unit:"seconds"`
+	AudioClipOverlap int `key:"audioClipOverlap" group:"retrieval" label:"Recording clip overlap" help:"Percent of each clip repeated at the start of the next." min:"0" max:"95" unit:"%"`
 
 	// The same two questions again, in the same units, because a clip of a video is a
 	// window of time exactly as a clip of a recording is. What differs is the ceiling, and
@@ -175,22 +175,22 @@ type Config struct {
 	// server holds one clip's frames in a single batch. Thirty seconds is what that batch
 	// holds at one frame a second — ask for more and the row is not slower to embed, it is
 	// a row the server refuses to embed at all.
-	VideoClipSeconds int `key:"videoClipSeconds" group:"retrieval" label:"Video clip length" help:"Seconds of a video per clip. Same reason as a recording: a clip's vector is the average of everything in it. The maximum is not a preference — a longer window is more frames than the model server can hold at once, and the clip cannot be embedded." min:"5" max:"30" unit:"seconds"`
-	VideoClipOverlap int `key:"videoClipOverlap" group:"retrieval" label:"Video clip overlap" help:"Percent of each clip repeated at the start of the next, so an event that straddles a boundary survives whole in at least one clip." min:"0" max:"95" unit:"%"`
+	VideoClipSeconds int `key:"videoClipSeconds" group:"retrieval" label:"Video clip length" help:"Seconds of video per clip. 30 is the most the server can embed in one go." min:"5" max:"30" unit:"seconds"`
+	VideoClipOverlap int `key:"videoClipOverlap" group:"retrieval" label:"Video clip overlap" help:"Percent of each clip repeated at the start of the next." min:"0" max:"95" unit:"%"`
 
 	// ── ingest ───────────────────────────────────────────────────
-	PDFMode   PDFMode `key:"pdfPageImages" group:"ingest" label:"PDF embeddings" help:"A PDF becomes two documents: page text and page rasters." kind:"enum" enum:"pdfModes"`
-	PDFDPI    int     `key:"pdfDPI" group:"ingest" label:"PDF raster DPI" help:"Resolution for page images. Only affects how legible a cited page looks: the embedding cost per image is fixed." min:"50" max:"600" unit:"dpi"`
-	MaxFileMB int     `key:"maxFileMB" group:"ingest" label:"Max file size" help:"Larger files are refused at the door, not mid-job." min:"1" max:"102400" unit:"MB"`
+	PDFMode   PDFMode `key:"pdfPageImages" group:"ingest" label:"PDF embeddings" help:"Whether every page also gets an image, or only the pages with no text." kind:"enum" enum:"pdfModes"`
+	PDFDPI    int     `key:"pdfDPI" group:"ingest" label:"PDF raster DPI" help:"Resolution of the page images shown beside a citation." min:"50" max:"600" unit:"dpi"`
+	MaxFileMB int     `key:"maxFileMB" group:"ingest" label:"Max file size" help:"Files larger than this are not accepted." min:"1" max:"102400" unit:"MB"`
 }
 
 // Group titles and copy. Presentation only; the fields themselves are above.
 func groups() []struct{ ID, Label, Help string } {
 	return []struct{ ID, Label, Help string }{
-		{"servers", "Model servers", "Either libris runs llama.cpp for you, or it talks to servers you started. The switch decides which of these fields exist — libris does not ask for an address it is about to compute."},
-		{"models", "Models", "The model that answers, and the one that finds. Changing the embedder re-indexes every source."},
-		{"retrieval", "Retrieval", "Research loop budget. Every extra iteration costs one search round trip."},
-		{"ingest", "Ingest", "Extraction is a background job. An original is kept until no notebook uses it."},
+		{"servers", "Model servers", "Either libris runs llama.cpp here, or it connects to servers you started."},
+		{"models", "Models", "The model that answers, and the one that finds. Changing the embedding model means re-embedding every source."},
+		{"retrieval", "Retrieval", "What a search returns, and how files are cut up before they are searched."},
+		{"ingest", "Ingest", "How an uploaded file becomes searchable text and images."},
 	}
 }
 

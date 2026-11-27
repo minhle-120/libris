@@ -205,7 +205,7 @@ await withBrowser({ port: cdpPort, app, profile: '/tmp/libris-ui-profile-drop' }
     JSON.stringify(overlap?.shaded) === JSON.stringify([0, 50, 50]), JSON.stringify(overlap?.shaded));
   checks.check('the shading is literally the previous chunk tail', overlap?.honest === true,
     () => 'shading does not match the text around it');
-  checks.check('the legend explains the shading', /shaded text repeats/.test(overlap?.legend ?? ''), overlap?.legend);
+  checks.check('the legend explains the shading', /repeats the end of the previous chunk/.test(overlap?.legend ?? ''), overlap?.legend);
 
   await ui.eval(`document.querySelector('.viewer [aria-label="Back to sources"]').click(); return true;`);
 

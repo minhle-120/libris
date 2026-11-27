@@ -83,10 +83,7 @@
 <div class="page">
   <div class="head">
     <h1>Settings</h1>
-    <p>
-      Values live on this machine, served by <code>GET /api/settings</code> and saved by
-      <code>PUT</code>. Nothing here is sent anywhere else.
-    </p>
+    <p>Everything here stays on this machine.</p>
   </div>
 
   <div class="grid">
@@ -220,14 +217,6 @@
     padding-top: 2px;
   }
 
-  code {
-    font-family: var(--mono);
-    font-size: 11px;
-    padding: 1px 4px;
-    border: 1px solid var(--border-soft);
-    border-radius: 3px;
-    background: var(--chrome);
-  }
 
   .grid {
     display: grid;

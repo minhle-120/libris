@@ -105,8 +105,7 @@
 
   {#if view?.needsRestart}
     <p class="line note">
-      A model arrived while the server was running, and it reads its models at start — restart
-      the server above to use it.
+      A model arrived while the server was running. Restart it to use the new model.
     </p>
   {/if}
 
@@ -194,7 +193,7 @@
           {#if e.downloading}
             <Button
               size="sm"
-              title="Stop this download. The bytes so far are kept, and the next attempt resumes where they stopped."
+              title="Stop. Progress is kept and the download resumes where it stopped."
               disabled={busy}
               onclick={() => act(api.stopModelDownload)}
             >
@@ -235,9 +234,8 @@
   </ul>
 
   <p class="footnote">
-    Pinned to one commit of each repository, and checked against its digest on
-    arrival, because a model that changed silently would invalidate every vector already stored.
-    They live in {view?.dir ?? 'the model directory'}, beside the engine's own files.
+    Each model is a fixed download, checked when it arrives. The files live in
+    {view?.dir ?? 'the model directory'}.
   </p>
 </section>
 
@@ -261,11 +259,11 @@
       if (alive) modalError = errorMessage(e);
     }
   }}
-  keeps="Your notebooks, sources and answers stay. Re-downloading takes as long as the download did — and a corpus embedded with this model would have to be re-embedded."
+  keeps="Your notebooks, sources and answers stay. The model would download again, and every source would have to be re-embedded."
 >
   <p class="lead">
     {doomed ? `${formatBytes(doomed.bytes)} of weights are deleted from this machine.` : ''} This
-    is the one action here that pressing the button again does not undo.
+    cannot be undone.
   </p>
 </Modal>
 

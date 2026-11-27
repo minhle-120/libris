@@ -97,17 +97,24 @@
     }
   }
 
+  /** Set while a drag has over-dragged past the floor: the column fades to say it is about to go. */
+  let folding = $state(false);
+
   const handle = (node: HTMLElement) =>
     dragHandle(node, {
       spec: NOTEBOOKS,
       get: () => app.sidebarW,
-      set: (n) => setWidth(NOTEBOOKS, n)
+      set: (n) => setWidth(NOTEBOOKS, n),
+      open: () => app.sidebarOpen,
+      setOpen: (v) => setOpen(NOTEBOOKS, v),
+      pending: (armed) => (folding = armed)
     });
 </script>
 
 <aside
   class="sidebar"
   class:closed={!open}
+  class:pending={folding}
   style="width: {width}px"
   aria-label="Notebooks"
 >
@@ -121,16 +128,6 @@
       onclick={() => (app.newNotebook = true)}
     >
       <Icon name="plus" />
-    </Button>
-    <Button
-      variant="ghost"
-      klass="rail-toggle"
-      shape="icon"
-      title={open ? 'Hide notebooks' : 'Show notebooks'}
-      ariaLabel={open ? 'Hide notebooks' : 'Show notebooks'}
-      onclick={() => setOpen(NOTEBOOKS, !open)}
-    >
-      <Icon name={open ? 'collapse' : 'expand'} size={14} />
     </Button>
   </div>
 
@@ -270,16 +267,20 @@
     </ul>
   {/if}
 
-  {#if open}
-    <!-- Arrows mean wider and narrower, never "move the border right". -->
-    <button
-      class="resizer"
-      style="right: -4px"
-      tabindex="0"
-      aria-label="Notebook list width"
-      use:handle
-    ></button>
-  {/if}
+  <!-- The edge is the whole control: drag it to resize, over-drag past the floor and the column
+       folds away, pull it out of the rail and it returns at the width it had. A button of its own
+       would have to sit either in a 44px head — where it overflowed the border onto the panel
+       beside it — or on the border, floating over what it covers.
+       Arrows mean wider and narrower, never "move the border right"; Enter folds and opens. -->
+  <button
+    class="resizer"
+    style="right: -4px"
+    tabindex="0"
+    aria-expanded={open}
+    title={open ? 'Notebook list width — over-drag left to hide' : 'Notebooks — drag right to show'}
+    aria-label={open ? 'Notebook list width' : 'Show notebooks'}
+    use:handle
+  ></button>
 </aside>
 
 <Modal
@@ -293,10 +294,13 @@
   onconfirm={confirmDelete}
 >
   <p class="lead">
-    {#if target?.source_count}
+    <!-- The empty branch has to be empty of both. A notebook can hold no files and still hold
+         conversations, and deleting the notebook deletes them with it — so the promise that
+         nothing else is touched is only allowed once both counts are checked. -->
+    {#if target?.source_count || target?.chat_count}
       The notebook and everything asked in it are deleted.
     {:else}
-      This notebook is empty, so only the notebook goes.
+      It is empty, so nothing else is touched.
     {/if}
   </p>
 </Modal>
@@ -344,12 +348,21 @@
     color: var(--muted);
   }
 
-  .section-head :global(.btn.rail-toggle) {
-    margin-left: auto;
+  /* Closed, the head holds the one thing the rail can still use — a new notebook — so it is
+     simply centred in what the rail gives it. */
+  .closed .section-head {
+    justify-content: center;
+    padding: 0 4px;
   }
 
-  .closed .section-head :global(.btn.rail-toggle) {
-    margin: 0 auto;
+  /* Held at the floor of a drag: the handle keeps travelling and the column fades, so the fold
+     reads as the end of the resize rather than as something that fell off. */
+  .sidebar > :not(.resizer) {
+    transition: opacity 120ms ease;
+  }
+
+  .sidebar.pending > :not(.resizer) {
+    opacity: 0.4;
   }
 
   .list {

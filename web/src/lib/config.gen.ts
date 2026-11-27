@@ -50,12 +50,12 @@ export const settingGroups: SettingGroup[] = [
 	{
 		"id": "servers",
 		"label": "Model servers",
-		"help": "Either libris runs llama.cpp for you, or it talks to servers you started. The switch decides which of these fields exist — libris does not ask for an address it is about to compute.",
+		"help": "Either libris runs llama.cpp here, or it connects to servers you started.",
 		"fields": [
 			{
 				"key": "engineMode",
 				"label": "Who runs them",
-				"help": "Libris can download llama.cpp, run it, and derive the addresses itself — or talk to servers you started. Not both.",
+				"help": "Libris can download and run llama.cpp, or connect to servers you start yourself.",
 				"kind": "enum",
 				"options": [
 					{
@@ -71,7 +71,7 @@ export const settingGroups: SettingGroup[] = [
 			{
 				"key": "enginePort",
 				"label": "Server port",
-				"help": "0 lets libris take a free port each time the server starts. A number asks for that exact port, and the start fails if something else already holds it. Chat and embeddings share whatever port is chosen.",
+				"help": "0 uses a free port each time. A number uses that port, and the server fails to start if something else holds it.",
 				"kind": "number",
 				"min": 1024,
 				"max": 65535,
@@ -80,7 +80,7 @@ export const settingGroups: SettingGroup[] = [
 			{
 				"key": "engineDevice",
 				"label": "Run models on",
-				"help": "Which device llama.cpp offloads to. The choices are the slots the installed engine reports, CPU among them.",
+				"help": "Which device runs the models. The list comes from the installed engine.",
 				"kind": "text",
 				"hidden": true,
 				"mode": "managed"
@@ -96,21 +96,21 @@ export const settingGroups: SettingGroup[] = [
 			{
 				"key": "chatURL",
 				"label": "Chat server",
-				"help": "Text and image input.",
+				"help": "The address of your chat server.",
 				"kind": "url",
 				"mode": "external"
 			},
 			{
 				"key": "embedURL",
 				"label": "Embedding server",
-				"help": "Multimodal embeddings for text and page images.",
+				"help": "The address of your embedding server.",
 				"kind": "url",
 				"mode": "external"
 			},
 			{
 				"key": "timeoutSeconds",
 				"label": "Request timeout",
-				"help": "Local CPU inference is slow. Lower it for GPU.",
+				"help": "How long to wait for a model server before a request fails.",
 				"kind": "number",
 				"unit": "s",
 				"min": 5,
@@ -121,12 +121,12 @@ export const settingGroups: SettingGroup[] = [
 	{
 		"id": "models",
 		"label": "Models",
-		"help": "The model that answers, and the one that finds. Changing the embedder re-indexes every source.",
+		"help": "The model that answers, and the one that finds. Changing the embedding model means re-embedding every source.",
 		"fields": [
 			{
 				"key": "chatModel",
 				"label": "Chat model",
-				"help": "The name your chat server answers to. Must support tool calls for the research loop.",
+				"help": "The name your chat server answers to. It must support tool calls.",
 				"kind": "text",
 				"mode": "external"
 			},
@@ -140,7 +140,7 @@ export const settingGroups: SettingGroup[] = [
 			{
 				"key": "embedDimensions",
 				"label": "Embedding dimensions",
-				"help": "Probed once at startup and recorded with every segment.",
+				"help": "Detected at startup. Cannot be set here.",
 				"kind": "text",
 				"readonly": true
 			}
@@ -149,12 +149,12 @@ export const settingGroups: SettingGroup[] = [
 	{
 		"id": "retrieval",
 		"label": "Retrieval",
-		"help": "Research loop budget. Every extra iteration costs one search round trip.",
+		"help": "What a search returns, and how files are cut up before they are searched.",
 		"fields": [
 			{
 				"key": "finalTopK",
 				"label": "Chunks per search",
-				"help": "How many chunks one search returns. Every kind counts: text, page images and pictures share this budget.",
+				"help": "How many chunks one search returns.",
 				"kind": "number",
 				"unit": "chunks",
 				"min": 1,
@@ -163,7 +163,7 @@ export const settingGroups: SettingGroup[] = [
 			{
 				"key": "maxIterations",
 				"label": "Max iterations",
-				"help": "Deeper multi-hop research; diminishing returns past 3.",
+				"help": "How many search rounds the researcher may make. Each one costs time.",
 				"kind": "number",
 				"min": 1,
 				"max": 10
@@ -171,13 +171,13 @@ export const settingGroups: SettingGroup[] = [
 			{
 				"key": "researchThinking",
 				"label": "Think before searching",
-				"help": "Off sends the search request straight away. On lets the model reason first, which costs time each iteration and sometimes picks a better search. The answer's own thinking is unaffected.",
+				"help": "Lets the model reason before it searches. Slower each round, sometimes a better search.",
 				"kind": "bool"
 			},
 			{
 				"key": "historyMessages",
 				"label": "History window",
-				"help": "Recent turns given to the synthesizer.",
+				"help": "How many earlier messages the answer sees.",
 				"kind": "number",
 				"unit": "messages",
 				"min": 0,
@@ -186,7 +186,7 @@ export const settingGroups: SettingGroup[] = [
 			{
 				"key": "chunkWords",
 				"label": "Chunk size",
-				"help": "Target words per text chunk.",
+				"help": "Words per chunk of text.",
 				"kind": "number",
 				"unit": "words",
 				"min": 10,
@@ -195,7 +195,7 @@ export const settingGroups: SettingGroup[] = [
 			{
 				"key": "chunkOverlap",
 				"label": "Chunk overlap",
-				"help": "Words carried into the next chunk.",
+				"help": "Words repeated at the start of the next chunk.",
 				"kind": "number",
 				"unit": "words",
 				"min": 0,
@@ -204,7 +204,7 @@ export const settingGroups: SettingGroup[] = [
 			{
 				"key": "audioClipSeconds",
 				"label": "Recording clip length",
-				"help": "Seconds of a recording per clip. Longer is worse: a clip's vector is the average of everything in it, so one sentence in a long clip is diluted by the rest of it. Measured on real recordings, 15 s is the shortest window that still holds a whole sentence, and it beat 30 s and 60 s on every query.",
+				"help": "Seconds of a recording per clip. Shorter clips search better.",
 				"kind": "number",
 				"unit": "seconds",
 				"min": 5,
@@ -213,7 +213,7 @@ export const settingGroups: SettingGroup[] = [
 			{
 				"key": "audioClipOverlap",
 				"label": "Recording clip overlap",
-				"help": "Percent of each clip repeated at the start of the next, so a sentence that straddles a boundary survives whole in at least one clip.",
+				"help": "Percent of each clip repeated at the start of the next.",
 				"kind": "number",
 				"unit": "%",
 				"min": 0,
@@ -222,7 +222,7 @@ export const settingGroups: SettingGroup[] = [
 			{
 				"key": "videoClipSeconds",
 				"label": "Video clip length",
-				"help": "Seconds of a video per clip. Same reason as a recording: a clip's vector is the average of everything in it. The maximum is not a preference — a longer window is more frames than the model server can hold at once, and the clip cannot be embedded.",
+				"help": "Seconds of video per clip. 30 is the most the server can embed in one go.",
 				"kind": "number",
 				"unit": "seconds",
 				"min": 5,
@@ -231,7 +231,7 @@ export const settingGroups: SettingGroup[] = [
 			{
 				"key": "videoClipOverlap",
 				"label": "Video clip overlap",
-				"help": "Percent of each clip repeated at the start of the next, so an event that straddles a boundary survives whole in at least one clip.",
+				"help": "Percent of each clip repeated at the start of the next.",
 				"kind": "number",
 				"unit": "%",
 				"min": 0,
@@ -242,12 +242,12 @@ export const settingGroups: SettingGroup[] = [
 	{
 		"id": "ingest",
 		"label": "Ingest",
-		"help": "Extraction is a background job. An original is kept until no notebook uses it.",
+		"help": "How an uploaded file becomes searchable text and images.",
 		"fields": [
 			{
 				"key": "pdfPageImages",
 				"label": "PDF embeddings",
-				"help": "A PDF becomes two documents: page text and page rasters.",
+				"help": "Whether every page also gets an image, or only the pages with no text.",
 				"kind": "enum",
 				"options": [
 					{
@@ -263,7 +263,7 @@ export const settingGroups: SettingGroup[] = [
 			{
 				"key": "pdfDPI",
 				"label": "PDF raster DPI",
-				"help": "Resolution for page images. Only affects how legible a cited page looks: the embedding cost per image is fixed.",
+				"help": "Resolution of the page images shown beside a citation.",
 				"kind": "number",
 				"unit": "dpi",
 				"min": 50,
@@ -272,7 +272,7 @@ export const settingGroups: SettingGroup[] = [
 			{
 				"key": "maxFileMB",
 				"label": "Max file size",
-				"help": "Larger files are refused at the door, not mid-job.",
+				"help": "Files larger than this are not accepted.",
 				"kind": "number",
 				"unit": "MB",
 				"min": 1,

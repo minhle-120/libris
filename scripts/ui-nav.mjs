@@ -197,7 +197,7 @@ const code = await withBrowser(
       return {
         open: d?.open === true,
         names: /Doomed Book/.test(d?.querySelector('h2')?.textContent ?? ''),
-        scope: /only the notebook goes/.test(d?.textContent ?? ''),
+        scope: /nothing else is touched/.test(d?.textContent ?? ''),
         focused: document.activeElement?.textContent.trim(),
         danger: [...(d?.querySelectorAll('button') ?? [])]
           .some((b) => b.textContent.trim() === 'Delete notebook' && b.className.includes('btn-danger'))
@@ -213,6 +213,7 @@ const code = await withBrowser(
       confirm.scope,
       "the box states its own scope: an empty notebook loses the notebook and nothing else",
     );
+
     checks.check(
       "the destructive button is red and Cancel has the focus",
       confirm.danger && confirm.focused === "Cancel",
@@ -245,6 +246,35 @@ const code = await withBrowser(
       survived.some((nb) => nb.name === "Doomed Book"),
       survived.map((nb) => nb.name).join(","),
     );
+
+    // The empty promise is only true of a notebook empty of *both*. One that holds no files but
+    // real conversations must take the other branch, because deleting a notebook deletes its
+    // conversations with it — which is why the count of them rides along with the list.
+    // The conversation notebook is created by ui-ask, so this asserts nothing when ui-nav runs
+    // alone; the detail says so.
+    const chatsOnly = await ui.eval(`
+      const btn = [...document.querySelectorAll('.delete-open')]
+        .find((b) => (b.getAttribute('aria-label') ?? '').startsWith('Delete ask '));
+      if (!btn) return { found: false };
+      btn.click();
+      return { found: true };
+    `);
+    await ui.settle(300);
+    const chatsScope = await ui.eval(`
+      const t = document.querySelector('dialog.delete-notebook')?.textContent ?? '';
+      return { takes: /everything asked in it/.test(t), claimsEmpty: /nothing else is touched/.test(t) };
+    `);
+    checks.check(
+      "a notebook whose only contents are conversations says what it takes",
+      !chatsOnly.found || (chatsScope.takes && !chatsScope.claimsEmpty),
+      chatsOnly.found ? JSON.stringify(chatsScope) : "no conversation notebook in this run",
+    );
+    await ui.eval(`
+      [...document.querySelectorAll('dialog.delete-notebook button')]
+        .find((b) => b.textContent.trim() === 'Cancel')?.click();
+      return true;
+    `);
+    await ui.settle(300);
 
     // Delete the one being looked at, so the selection has to move somewhere.
     await ui.eval(`
@@ -282,12 +312,39 @@ const code = await withBrowser(
       JSON.stringify(after),
     );
 
+    // The seam is the whole control on both panels: drag it to resize, over-drag it past the
+    // floor and the column folds away, pull it out of the rail and it returns. There is no
+    // button left to click, so these two gestures are how the harness folds and opens anything.
+    const dragSeam = async (sel, dx) => {
+      await ui.eval(`
+        const el = document.querySelector('${sel}');
+        const r = el.getBoundingClientRect();
+        const at = (x) => ({ bubbles: true, cancelable: true, clientX: x, clientY: r.top + 60,
+                             pointerId: 1, isPrimary: true, button: 0, buttons: 1 });
+        el.dispatchEvent(new PointerEvent('pointerdown', at(r.left + 3)));
+        window.dispatchEvent(new PointerEvent('pointermove', at(r.left + 3 + ${dx})));
+        window.dispatchEvent(new PointerEvent('pointerup', at(r.left + 3 + ${dx})));
+        return true;
+      `);
+      await ui.settle(250);
+    };
+    const seamKey = async (sel, key) => {
+      await ui.eval(`
+        const el = document.querySelector('${sel}');
+        el.focus();
+        el.dispatchEvent(new KeyboardEvent('keydown', { key: '${key}', bubbles: true }));
+        return true;
+      `);
+      await ui.settle(250);
+    };
+
     // A deleted notebook is gone from the rail too: the collapsed sidebar draws the same
     // list, and a stale id there would be a button for nothing.
-    await ui.eval(
-      `document.querySelector('.sidebar .section-head .rail-toggle').click(); return true`,
+    await seamKey('.sidebar .resizer', 'Enter');
+    checks.check(
+      "the seam tells assistive tech which way it opens",
+      (await ui.eval(`return document.querySelector('.sidebar .resizer')?.getAttribute('aria-expanded')`)) === 'false',
     );
-    await ui.settle(300);
     checks.check(
       "the rail forgets it as well",
       (
@@ -296,10 +353,7 @@ const code = await withBrowser(
         )
       ).includes("Doomed Book") === false,
     );
-    await ui.eval(
-      `document.querySelector('.sidebar .rail-toggle').click(); return true`,
-    );
-    await ui.settle(300);
+    await seamKey('.sidebar .resizer', 'Enter');
 
     // ── resize ───────────────────────────────────────────────────
     // Width is measured in a call of its own: Svelte has not flushed the DOM when
@@ -350,18 +404,51 @@ const code = await withBrowser(
     );
 
     // ── collapse and reopen ──────────────────────────────────────
-    await ui.eval(`
-      const el = document.querySelector('.resizer');
-      const r = el.getBoundingClientRect();
-      const at = (x) => ({ bubbles: true, cancelable: true, clientX: x, clientY: r.top + 60,
-                           pointerId: 1, isPrimary: true, button: 0, buttons: 1 });
-      el.dispatchEvent(new PointerEvent('pointerdown', at(r.left + 3)));
-      window.dispatchEvent(new PointerEvent('pointermove', at(r.left - 77)));
-      window.dispatchEvent(new PointerEvent('pointerup', at(r.left - 77)));
-      return true;
-    `);
-    await width();
-    await ui.click("Hide notebooks");
+    // A shrink stops at the floor (min 200) without folding: the fold is the same drag taken
+    // 56px further, so the handle keeps travelling while the column only fades. 80px of travel
+    // from 288 lands it on 208.
+    await dragSeam(".sidebar .resizer", -80);
+    const atFloor = await width();
+    checks.check(
+      "a shrink stops at the floor and does not fold on the way",
+      atFloor === 208,
+      `width=${atFloor}`,
+    );
+
+    // The cue the whole design rests on: held past the floor the column fades *before* the
+    // release does anything, so the fold is seen coming. The drag is held open across the read —
+    // the seam's own x is stashed because the column narrows out from under it mid-drag.
+    const holdSeam = async (dx) => {
+      await ui.eval(`
+        const el = document.querySelector('.sidebar .resizer');
+        window.__seam = el.getBoundingClientRect().left + 3;
+        const at = (x) => ({ bubbles: true, cancelable: true, clientX: x, clientY: 200,
+                             pointerId: 1, isPrimary: true, button: 0, buttons: 1 });
+        el.dispatchEvent(new PointerEvent('pointerdown', at(window.__seam)));
+        window.dispatchEvent(new PointerEvent('pointermove', at(window.__seam + ${dx})));
+        return true;
+      `);
+    };
+    const releaseSeam = async (dx) => {
+      await ui.eval(`
+        window.dispatchEvent(new PointerEvent('pointerup', {
+          bubbles: true, cancelable: true, clientX: window.__seam + ${dx}, clientY: 200,
+          pointerId: 1, isPrimary: true, button: 0, buttons: 1 }));
+        return true;
+      `);
+      await ui.settle(250);
+    };
+    await holdSeam(-400);
+    const fading = await ui.eval(
+      `return document.querySelector('.sidebar').classList.contains('pending')`,
+    );
+    await releaseSeam(-400);
+    checks.check(
+      "the column fades while the drag is past the floor, before the release",
+      fading === true,
+      `pending=${fading}`,
+    );
+
     const closed = await ui.until(`
       return document.querySelector('.sidebar .rail') ? {
         width: ${WIDTH},
@@ -371,7 +458,7 @@ const code = await withBrowser(
       } : null;
     `);
     checks.check(
-      "collapse leaves a rail",
+      "over-dragging the edge past the floor folds the list away",
       closed?.width === 44 && closed?.items >= 1,
       JSON.stringify(closed),
     );
@@ -381,14 +468,53 @@ const code = await withBrowser(
       `named=${closed?.titled}`,
     );
 
-    await ui.click("Show notebooks");
-    const reopened = await ui.until(`
+    checks.check(
+      "folding hides the list rather than resizing it, so the width it had survives",
+      (await ui.eval(`return localStorage.getItem('libris.sidebar.width')`)) === "208",
+    );
+
+    // The folded rail is a draggable edge, not a switch: a nudge must not be an open, or the
+    // panel would arrive whenever the pointer brushed past the border on the way to something.
+    await dragSeam(".sidebar .resizer", 12);
+    checks.check(
+      "a short pull out of the rail is not an open",
+      (await ui.eval(`return !!document.querySelector('.sidebar .list .item')`)) === false,
+    );
+
+    // Out of the rail the edge grows out of the rail itself, one pixel of panel per pixel of
+    // pull. The alternative — arriving at the width it folded at the instant the drag starts —
+    // puts the whole panel on the far side of the cursor in a single frame.
+    await holdSeam(140);
+    const growing = await ui.eval(`
+      return {
+        width: ${WIDTH},
+        faded: document.querySelector('.sidebar').classList.contains('pending'),
+      };
+    `);
+    await releaseSeam(140);
+    checks.check(
+      "out of the rail the edge follows the cursor instead of jumping to the remembered width",
+      growing?.width === 164 && growing?.faded === true,
+      JSON.stringify(growing),
+    );
+    checks.check(
+      "letting go under the floor puts it back, because mid-air is not a place to rest a panel",
+      (await ui.eval(`return ${WIDTH}`)) === 44,
+    );
+    checks.check(
+      "and the width it folded at is still the one it remembers",
+      (await ui.eval(`return localStorage.getItem('libris.sidebar.width')`)) === "208",
+    );
+
+    // Past the floor it is an ordinary resize, and it stays where the cursor let go.
+    await dragSeam(".sidebar .resizer", 300);
+    const grown = await ui.until(`
       return document.querySelector('.sidebar .list .item') ? ${WIDTH} : null;
     `);
     checks.check(
-      "reopening restores the width it collapsed at",
-      reopened === 208,
-      `width=${reopened}`,
+      "pulling past the floor leaves it the width under the cursor",
+      grown === 324,
+      `width=${grown}`,
     );
 
     await ui.reload(app);
@@ -398,15 +524,15 @@ const code = await withBrowser(
     `);
     checks.check(
       "the width and the open state survive a reload",
-      remembered.width === 208 && remembered.open,
+      remembered.width === 324 && remembered.open,
       JSON.stringify(remembered),
     );
 
-    await ui.click("Hide notebooks");
+    await seamKey(".sidebar .resizer", "Enter");
     await ui.reload(app);
     await ui.settle();
     checks.check(
-      "a collapsed sidebar stays collapsed across a reload",
+      "a folded sidebar stays folded across a reload",
       (
         await ui.eval(
           `return { width: ${WIDTH}, rail: !!document.querySelector('.sidebar .rail') }`,
@@ -415,12 +541,16 @@ const code = await withBrowser(
     );
     await ui.eval(`localStorage.clear(); return true`);
 
-    // ── breadcrumb ───────────────────────────────────────────────
+    // ── breadcrumb ───────────────────────────────────────────
     const crumbTexts = `
       return [...document.querySelectorAll('.crumbs .crumb')].map((c) => c.textContent.trim());
     `;
 
-    await ui.click("Show notebooks");
+    await seamKey(".sidebar .resizer", "Enter");
+    checks.check(
+      "Enter on the seam opens the list again",
+      (await ui.eval(`return !!document.querySelector('.sidebar .list .item')`)) === true,
+    );
     await ui.eval(`
       [...document.querySelectorAll('.sidebar .list .item')]
         .find((b) => b.textContent.includes('Renamed Notes'))?.click();
@@ -526,7 +656,7 @@ const code = await withBrowser(
     );
     checks.check("and remembers it", saved === "420", `saved=${saved}`);
 
-    await ui.click("Hide panel");
+    await dragSeam(".sidepanel .resizer", 500);
     const closedPanel = await ui.until(`
       return document.querySelector('.sidepanel.closed')
         ? { width: Math.round(document.querySelector('.sidepanel').getBoundingClientRect().width) }
@@ -540,13 +670,15 @@ const code = await withBrowser(
       `${closedPanel?.width} · ${shutCrumbs.join(" / ")}`,
     );
 
-    await ui.click("Show sources");
+    // 420 + the rail's own 44 + the dead zone: the edge has to travel that far before the panel
+    // is wide enough to be worth leaving open.
+    await dragSeam(".sidepanel .resizer", -420);
     const reopenedPanel = await ui.until(
       `return document.querySelector('.sidepanel .seg') ? Math.round(document.querySelector('.sidepanel').getBoundingClientRect().width) : null`,
     );
     checks.check(
-      "the panel opens back at the width it closed at",
-      reopenedPanel === 420,
+      "the panel follows the cursor out of its rail, and stays at the width under it",
+      reopenedPanel === 444,
       `width=${reopenedPanel}`,
     );
 
@@ -599,13 +731,13 @@ const code = await withBrowser(
     const restored = await panelState();
     checks.check(
       "the panel comes back at its own width when there is room again",
-      restored?.rail === false && restored?.w === 420,
+      restored?.rail === false && restored?.w === 444,
       () => JSON.stringify(restored),
     );
 
     await ui.setViewport(980, 900);
     await ui.settle(400);
-    await ui.click("Show sources");
+    await seamKey(".sidepanel .resizer", "Enter");
     await ui.settle(300);
     await ui.setViewport(1000, 900);
     await ui.settle(300);
@@ -620,7 +752,7 @@ const code = await withBrowser(
 
     await ui.setViewport(1400, 900);
     await ui.settle(300);
-    await ui.click("Hide panel");
+    await dragSeam(".sidepanel .resizer", 500);
     await ui.settle(300);
     await ui.setViewport(980, 900);
     await ui.settle(300);
@@ -633,8 +765,8 @@ const code = await withBrowser(
       () => JSON.stringify(shutByHand),
     );
 
-    // Back to the state the rest of the harness expects: panel open, default width.
-    await ui.click("Show sources");
+    // Back to the state the rest of the harness expects: the panel open again.
+    await seamKey(".sidepanel .resizer", "Enter");
     await ui.setViewport(wide, 900);
     await ui.settle(300);
 
@@ -775,8 +907,7 @@ const code = await withBrowser(
       `${(await chatRows()).join(" | ")} · ${(await crumbTail()).join(" / ")}`,
     );
 
-    await ui.click("Hide notebooks");
-    await ui.settle(200);
+    await seamKey(".sidebar .resizer", "Enter");
     checks.check(
       "the rail is notebooks only, and the header still says which chat is open",
       (await ui.eval(
@@ -788,8 +919,7 @@ const code = await withBrowser(
         (await crumbTail()).at(-1) === "Why the tail is long",
       `${await ui.eval(`return document.querySelectorAll('.sidebar .rail-item').length`)} rail items · ${(await crumbTail()).join(" / ")}`,
     );
-    await ui.click("Show notebooks");
-    await ui.settle(200);
+    await seamKey(".sidebar .resizer", "Enter");
 
     await ui.until(`
       const btn = [...document.querySelectorAll('.chat-delete-open')]
@@ -898,11 +1028,7 @@ const code = await withBrowser(
     await ui.settle(300);
     await ui.setViewport(1800, 900);
     await ui.settle(400);
-    await ui.eval(`
-      [...document.querySelectorAll('.rail-toggle')].find((b) => b.title === 'Hide panel')?.click();
-      return true;
-    `);
-    await ui.settle(400);
+    await dragSeam(".sidepanel .resizer", 500);
     // Measured against the composer column, not a header row: the header is gone, and
     // the rule the CSS makes is that the column holding the thread and the column
     // holding the box are the same width, and neither is the pane.
@@ -1270,7 +1396,8 @@ const code = await withBrowser(
     // ── the models card ──────────────────────────────────────────
     // The catalogue is served rather than compiled in, so this asserts shape rather than
     // content: the entries the server named each arrive as a row, one that is missing its
-    // files offers a download named by size, and the card states what it pins. Sizes are not
+    // files offers a download named by size, and the card says the files are fixed downloads.
+    // Sizes are not
     // asserted beyond a unit, because they are upstream's numbers to change.
     const models = await ui.eval(`
       const sec = document.getElementById('models');
@@ -1287,7 +1414,10 @@ const code = await withBrowser(
         // textContent is the raw word; the uppercase shown on screen is text-transform.
         roles: li.map((x) => x.querySelector('.role')?.textContent.trim().toLowerCase()),
         summary: sec.querySelector('.summary')?.textContent.trim().replace(/\\s+/g, ' '),
-        footnote: /Pinned to one commit/.test(sec.querySelector('.footnote')?.textContent ?? ''),
+        footnote:
+          /fixed download/.test(sec.querySelector('.footnote')?.textContent ?? '') &&
+          /checked when it arrives/.test(sec.querySelector('.footnote')?.textContent ?? '') &&
+          /live in/.test(sec.querySelector('.footnote')?.textContent ?? ''),
         inset: style ? style.paddingLeft + ' ' + style.borderTopWidth : '',
       };
     `);
@@ -1318,7 +1448,7 @@ const code = await withBrowser(
       models.summary,
     );
     checks.check(
-      "the card states what it pins, and why",
+      "the card says the models are fixed downloads, checked on arrival, and says where they live",
       models.footnote === true,
       String(models.footnote),
     );

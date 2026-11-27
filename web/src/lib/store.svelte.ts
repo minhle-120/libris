@@ -13,7 +13,6 @@ import { errorMessage } from './format';
 import {
   NOTEBOOKS,
   SIDE,
-  clampW,
   narrowRule,
   readOpen,
   readW,
@@ -831,10 +830,12 @@ export async function ask(question: string) {
 
 // ── panels ────────────────────────────────────────────────────────
 
+/** Stores the width it is handed, because the bounds are `panel.ts`'s and it has already chosen:
+ *  `clampW` for a width a panel rests at, `dragW` for the one under the cursor — which is
+ *  deliberately allowed below `min`, since a panel pulled out of its rail passes through there. */
 export function setWidth(spec: PanelSpec, n: number) {
-  const w = clampW(spec, n);
-  if (spec === NOTEBOOKS) app.sidebarW = w;
-  else app.sideW = w;
+  if (spec === NOTEBOOKS) app.sidebarW = n;
+  else app.sideW = n;
 }
 
 /** Only a *user* action writes the open flag: a width the window imposed is not a preference. */

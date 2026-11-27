@@ -98,12 +98,14 @@ func (db *DB) DeleteNotebook(ctx context.Context, id string) ([]domain.Orphan, e
 	return orphans, tx.Commit()
 }
 
-// notebookSelect is the shared projection of the two notebook queries. The
-// count rides along because the sidebar lists it next to every notebook, and a
-// separate round trip per row would be the alternative.
+// notebookSelect is the shared projection of the two notebook queries. The counts
+// ride along rather than costing a round trip per row: one is what the sidebar lists
+// beside every notebook, the other is what the delete confirm is allowed to promise
+// about.
 const notebookSelect = `
 	SELECT n.id, n.name, n.created_at,
-	       (SELECT COUNT(*) FROM notebook_sources m WHERE m.notebook_id = n.id)
+	       (SELECT COUNT(*) FROM notebook_sources m WHERE m.notebook_id = n.id),
+	       (SELECT COUNT(*) FROM chats c WHERE c.notebook_id = n.id)
 	  FROM notebooks n`
 
 // GetNotebook fetches one by id.
@@ -135,7 +137,7 @@ type rowScanner interface{ Scan(...any) error }
 
 func scanNotebook(row rowScanner) (domain.Notebook, error) {
 	var n domain.Notebook
-	err := row.Scan(&n.ID, &n.Name, &n.CreatedAt, &n.SourceCount)
+	err := row.Scan(&n.ID, &n.Name, &n.CreatedAt, &n.SourceCount, &n.ChatCount)
 	if err == sql.ErrNoRows {
 		return domain.Notebook{}, ErrNotFound
 	}
