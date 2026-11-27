@@ -1,3 +1,4 @@
+import { hasTimeline } from "./types";
 import type {
   Asset,
   Chat,
@@ -205,13 +206,14 @@ export function playerURL(sourceId: string): string {
  * Where a citation sends the browser, as a URL the browser can open by itself.
  *
  * The document, not a rendering of it: a PDF tab is the browser's own viewer, Range
- * requests and all, and `#page=` is the one pointer it reliably honours. A recording
- * gets the player page rather than the file, with the clip's window in the media
- * fragment the page reads out of the hash. A source with no pages — markdown, plain
- * text — has nothing to point at, so its citation opens at the top.
+ * requests and all, and `#page=` is the one pointer it reliably honours. Something that
+ * runs in seconds — a recording, or a video and the soundtrack cut from it — gets the
+ * player page rather than the file, with the clip's window in the media fragment the page
+ * reads out of the hash. A source with no pages and no timeline — markdown, plain text —
+ * has nothing to point at, so its citation opens at the top.
  */
 export function citationURL(c: Citation): string {
-  if (c.kind === "audio") {
+  if (hasTimeline(c.kind)) {
     const { t0, t1 } = c.span;
     const at = t1 && t1 > (t0 ?? 0) ? `${t0},${t1}` : `${t0 ?? 0}`;
     return `${playerURL(c.source_id)}#t=${at}`;

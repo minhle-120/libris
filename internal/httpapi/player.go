@@ -46,10 +46,11 @@ func (s *Server) handlePlayer(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, "get source", err)
 		return
 	}
-	// Only a recording has anything to play here. Any other kind arriving at this URL is
-	// a link bug, and saying so is more use than a page of dead controls.
-	if source.Kind != domain.SourceAudio {
-		writeError(w, http.StatusBadRequest, "that source is not a recording")
+	// Only something with a timeline has anything to play here: a recording, or a video and
+	// the soundtrack cut from it. Any other kind arriving at this URL is a link bug, and
+	// saying so is more use than a page of dead controls.
+	if source.Kind != domain.SourceAudio && source.Kind != domain.SourceVideo {
+		writeError(w, http.StatusBadRequest, "that source has nothing to play")
 		return
 	}
 	// The row can outlive the file. Check it here rather than let the element's own
@@ -82,5 +83,8 @@ func playerView(source domain.Source) map[string]any {
 		"Name":   template.HTMLEscapeString(source.Name),
 		"Src":    "/api/sources/" + source.ID + "/original",
 		"Detail": fmt.Sprintf("%d %s · %d kB", source.SegmentCount, clips, source.Bytes/(1<<10)),
+		// Which element the page puts the file in. The script does not care: it holds
+		// one element by id, and a window of seconds means the same thing to both.
+		"Video": source.Kind == domain.SourceVideo,
 	}
 }

@@ -28,7 +28,7 @@ func oneChat() []Model {
 func TestRefreshPresetWritesWhatIsMissing(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "presets", "libris.ini")
 
-	got, err := refreshPreset(path, "Vulkan0", oneChat())
+	got, err := refreshPreset(path, "Vulkan0", "", oneChat())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestRefreshPresetWritesWhetherOrNotAnythingMoved(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			got, err := refreshPreset(path, tc.device, tc.models)
+			got, err := refreshPreset(path, tc.device, "", tc.models)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -130,7 +130,7 @@ func TestRefreshPresetRewritesNumbersTheOldFileStates(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := refreshPreset(path, "Vulkan0", []Model{{Alias: AliasEmbed, Kind: KindEmbed, Path: "/m/e.gguf"}})
+	got, err := refreshPreset(path, "Vulkan0", "", []Model{{Alias: AliasEmbed, Kind: KindEmbed, Path: "/m/e.gguf"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +158,7 @@ func TestRefreshPresetFailsWhenThePresetCannotBeWritten(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := refreshPreset(path, "Vulkan0", oneChat()); err == nil {
+	if _, err := refreshPreset(path, "Vulkan0", "", oneChat()); err == nil {
 		t.Fatal("a preset that cannot be written was accepted")
 	} else if errors.Is(err, os.ErrNotExist) {
 		t.Errorf("err = %v, want the write failure rather than an absence", err)
@@ -173,7 +173,7 @@ func TestRefreshPresetFailsWhenThePresetCannotBeWritten(t *testing.T) {
 func writePreset(t *testing.T, device string, models []Model) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "presets", "libris.ini")
-	if err := Preset(path, device, models); err != nil {
+	if err := Preset(path, device, "", models); err != nil {
 		t.Fatal(err)
 	}
 	return path
@@ -199,7 +199,7 @@ func readFile(t *testing.T, path string) []byte {
 // and the only place it says so is a log file nobody opens.
 func TestPresetWritesTheDraftOnlyWhereTheDraftLives(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "presets", "libris.ini")
-	if _, err := refreshPreset(path, "", []Model{
+	if _, err := refreshPreset(path, "", "", []Model{
 		{Alias: AliasChat, Kind: KindChat, Path: "/m/c.gguf", Draft: "/m/mtp.gguf"},
 		{Alias: AliasEmbed, Kind: KindEmbed, Path: "/m/e.gguf"},
 	}); err != nil {
@@ -250,7 +250,7 @@ func TestPresetPinsOneSectionToTheHost(t *testing.T) {
 		{Alias: AliasEmbed, Kind: KindEmbed, Path: "/m/e.gguf", MMProj: "/m/e-mmproj.gguf"},
 		{Alias: AliasEmbedCPU, Kind: KindEmbed, Path: "/m/e.gguf", Device: "none"},
 	}
-	if _, err := refreshPreset(path, "Vulkan0", specs); err != nil {
+	if _, err := refreshPreset(path, "Vulkan0", "", specs); err != nil {
 		t.Fatal(err)
 	}
 

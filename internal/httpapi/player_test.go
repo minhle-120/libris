@@ -37,7 +37,7 @@ func TestPlayerPagePlaysTheRecording(t *testing.T) {
 
 	body := readAll(t, resp)
 	for _, want := range []string{
-		`<audio id="play" controls`,
+		`<audio controls`,
 		`src="/api/sources/sha1/original"`,
 		"standup.m4a",
 		"83 clips",
@@ -100,9 +100,41 @@ func TestPlayerPageKeepsItsExplanations(t *testing.T) {
 	}
 }
 
-// Anything that is not a recording has nothing to play. The page's controls would sit
-// there doing nothing, so the URL says so instead.
-func TestPlayerRefusesANonRecording(t *testing.T) {
+// A video is the other thing with a timeline, and a citation of a clip of it opens here
+// with the same window protocol. What changes is the element: pictures need a <video>,
+// and a page of controls under a blank box is the failure mode being avoided.
+func TestPlayerPagePlaysTheVideo(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "trip.mp4")
+	if err := os.WriteFile(path, []byte("fakely video bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	api := &fakeAPI{sources: []domain.Source{{
+		ID: "sha1", Name: "trip.mp4", Kind: domain.SourceVideo,
+		OriginalPath: path, Bytes: 9 << 20, SegmentCount: 21,
+	}}}
+	srv := newAppServer(t, api)
+
+	body := readAll(t, request(t, srv, "GET", "/api/sources/sha1/player", nil))
+	for _, want := range []string{
+		`<video controls`,
+		`src="/api/sources/sha1/original"`,
+		"21 clips",
+		"#t=start,end",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("page is missing %q", want)
+		}
+	}
+	if strings.Contains(body, "<audio") {
+		t.Error("a video was handed an audio element")
+	}
+}
+
+// Anything with no timeline has nothing to play. The page's controls would sit there
+// doing nothing, so the URL says so instead.
+func TestPlayerRefusesASourceWithNothingToPlay(t *testing.T) {
 	api := &fakeAPI{sources: []domain.Source{{
 		ID: "sha1", Name: "paper.pdf", Kind: domain.SourcePDF, OriginalPath: "/tmp/paper.pdf",
 	}}}
@@ -112,7 +144,7 @@ func TestPlayerRefusesANonRecording(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
-	if got := readAll(t, resp); !strings.Contains(got, "not a recording") {
+	if got := readAll(t, resp); !strings.Contains(got, "nothing to play") {
 		t.Errorf("body = %s", got)
 	}
 }

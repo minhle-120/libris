@@ -33,14 +33,19 @@ type Message struct {
 
 // ── multimodal content ────────────────────────────────────────────
 
-// MediaKind is an input modality libris can show a model. Video stays undeclared:
-// a client carrying a wire shape it never builds is a menu rather than a description
-// of this program's traffic, which is why input_video was deleted and has not come
-// back.
+// MediaKind is an input modality libris can show a model.
 //
 // What the seam buys is that adding one is mechanical rather than a search: a constant
 // here, its Part constant, one case in MediaPart, one case in Caps.Allows, and one arm
-// of retrieve's mapping from a segment kind.
+// of retrieve's mapping from a segment kind. Video is the seam working as written:
+// input_video was deleted once, on the grounds that nothing built it, and arrived by
+// exactly this list.
+//
+// The bar for arriving here used to be "with citable words beside it", and ADR 0010
+// lowered it for audio: a clip carries no words of its own, and the words arrive inside
+// the answer, because the model that writes the answer is the one that heard the clip.
+// ADR 0012 lowers it again for video, and adds the caveat that comes with it: a video
+// clip is frames, and its soundtrack is a separate clip of the audio kind.
 //
 // The bar for arriving here used to be "with citable words beside it", and ADR 0010
 // lowered it for audio: a clip carries no words of its own, and the words arrive inside
@@ -50,6 +55,7 @@ type MediaKind string
 const (
 	MediaImage MediaKind = "image"
 	MediaAudio MediaKind = "audio"
+	MediaVideo MediaKind = "video"
 )
 
 // Modality names the thing a serving model must have loaded to take this kind, in
@@ -68,6 +74,7 @@ const (
 	PartText       = "text"
 	PartImage      = "image_url"
 	PartInputAudio = "input_audio"
+	PartInputVideo = "input_video"
 )
 
 type ContentPart struct {
@@ -75,6 +82,7 @@ type ContentPart struct {
 	Text       string      `json:"text,omitempty"`
 	ImageURL   *ImageURL   `json:"image_url,omitempty"`
 	InputAudio *InputAudio `json:"input_audio,omitempty"`
+	InputVideo *InputVideo `json:"input_video,omitempty"`
 }
 
 type ImageURL struct {
@@ -87,6 +95,16 @@ type ImageURL struct {
 // and sniffs the bytes it decoded, so sending one would be a claim about the container
 // that nothing reads.
 type InputAudio struct {
+	Data string `json:"data"`
+}
+
+// InputVideo is the video content part, shaped the same way and for the same reasons:
+// only Data, only a data URI. server-common.cpp reads input_video.data and falls back
+// to input_video.url, so the url form exists and asks for --media-path; libris never
+// starts a server with it, so it is not sent. There is no frame-rate or timestamp key
+// beside it either — sampling is the server's, set by --video-fps, and libris says
+// which window it sent in the label above the part instead.
+type InputVideo struct {
 	Data string `json:"data"`
 }
 
@@ -131,6 +149,8 @@ func MediaPart(kind MediaKind, mimeType, data string) (ContentPart, error) {
 		return ContentPart{Type: PartImage, ImageURL: &ImageURL{URL: uri}}, nil
 	case MediaAudio:
 		return ContentPart{Type: PartInputAudio, InputAudio: &InputAudio{Data: uri}}, nil
+	case MediaVideo:
+		return ContentPart{Type: PartInputVideo, InputVideo: &InputVideo{Data: uri}}, nil
 	}
 	return ContentPart{}, fmt.Errorf("llm: no wire shape for media kind %q", kind)
 }

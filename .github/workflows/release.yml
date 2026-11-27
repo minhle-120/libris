@@ -90,9 +90,12 @@ jobs:
           docker run --rm -v "$PWD":/w "$BASE" \
             bash /w/scripts/dist/tools-linux.sh /w/stage/tools
           test -f stage/tools/pdftotext
-          # The download carries ffmpeg too, so a recording opens on a machine that never
-          # installed anything. See scripts/dist/tools-linux.sh for where it comes from.
+          # ffmpeg cuts a video and ffprobe measures it, so the download carries
+          # both: a bundle with one of the pair has a modality that works in
+          # neither place it is needed. See scripts/dist/tools-linux.sh for
+          # where the two come from.
           test -f stage/tools/ffmpeg
+          test -f stage/tools/ffprobe
 
       # The runner ships no registered MSYS2 shell any more, so the action
       # installs it, along with the packages the bundle is built from.
@@ -117,6 +120,7 @@ jobs:
           bash scripts/dist/tools-windows.sh stage/tools
           test -f stage/tools/pdftotext.exe
           test -f stage/tools/ffmpeg.exe
+          test -f stage/tools/ffprobe.exe
 
       # The archive is the download. bsdtar is named outright on Windows
       # because the `tar` on a bash PATH there is GNU tar, which will write a

@@ -40,6 +40,11 @@ func hostAudio(t *testing.T) tools.Audio {
 	return tools.FromPath().Audio()
 }
 
+func hostVideo(t *testing.T) tools.Video {
+	t.Helper()
+	return tools.FromPath().Video()
+}
+
 // missingProgram is what a resolver hands back for a program found in neither place: named,
 // and not found. A PDF struct with no programs in it at all is not a thing that can happen,
 // and writing one hid that a finding's detail is taken from the program's own name.
@@ -549,13 +554,13 @@ func TestMimeByExt(t *testing.T) {
 // ── pipeline ─────────────────────────────────────────────────────
 
 func TestNewValidation(t *testing.T) {
-	if _, err := New(config.Config{}, DirSink{Root: t.TempDir()}, tools.PDF{}, tools.Audio{}); err == nil {
+	if _, err := New(config.Config{}, DirSink{Root: t.TempDir()}, tools.PDF{}, tools.Audio{}, tools.Video{}); err == nil {
 		t.Fatal("expected validation error")
 	}
-	if _, err := New(testConfig(), nil, tools.PDF{}, tools.Audio{}); err == nil {
+	if _, err := New(testConfig(), nil, tools.PDF{}, tools.Audio{}, tools.Video{}); err == nil {
 		t.Fatal("expected sink error")
 	}
-	if _, err := New(testConfig(), DirSink{Root: t.TempDir()}, hostPDF(t), hostAudio(t)); err != nil {
+	if _, err := New(testConfig(), DirSink{Root: t.TempDir()}, hostPDF(t), hostAudio(t), hostVideo(t)); err != nil {
 		t.Fatalf("New: %v", err)
 	}
 }
@@ -571,7 +576,7 @@ func writeTemp(t *testing.T, name, content string) string {
 
 func TestProcessText(t *testing.T) {
 	path := writeTemp(t, "notes.md", strings.Repeat("word ", 250))
-	p, err := New(testConfig(), DirSink{Root: t.TempDir()}, hostPDF(t), hostAudio(t))
+	p, err := New(testConfig(), DirSink{Root: t.TempDir()}, hostPDF(t), hostAudio(t), hostVideo(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -604,7 +609,7 @@ func TestProcessText(t *testing.T) {
 
 func TestProcessHTML(t *testing.T) {
 	path := writeTemp(t, "page.html", "<p>Hello <b>world</b></p><script>x</script>")
-	p, _ := New(testConfig(), DirSink{Root: t.TempDir()}, hostPDF(t), hostAudio(t))
+	p, _ := New(testConfig(), DirSink{Root: t.TempDir()}, hostPDF(t), hostAudio(t), hostVideo(t))
 
 	res, err := p.Process(context.Background(), path)
 	if err != nil {
@@ -617,7 +622,7 @@ func TestProcessHTML(t *testing.T) {
 
 func TestProcessEmptyText(t *testing.T) {
 	path := writeTemp(t, "blank.txt", "   \n\n  ")
-	p, _ := New(testConfig(), DirSink{Root: t.TempDir()}, hostPDF(t), hostAudio(t))
+	p, _ := New(testConfig(), DirSink{Root: t.TempDir()}, hostPDF(t), hostAudio(t), hostVideo(t))
 
 	res, err := p.Process(context.Background(), path)
 	if err != nil {
@@ -634,7 +639,7 @@ func TestProcessImage(t *testing.T) {
 	writePNG(t, path, 5, 6)
 
 	sinkRoot := t.TempDir()
-	p, _ := New(testConfig(), DirSink{Root: sinkRoot}, hostPDF(t), hostAudio(t))
+	p, _ := New(testConfig(), DirSink{Root: sinkRoot}, hostPDF(t), hostAudio(t), hostVideo(t))
 
 	res, err := p.Process(context.Background(), path)
 	if err != nil {
@@ -673,7 +678,7 @@ func TestProcessImageStoreFailure(t *testing.T) {
 }
 
 func TestProcessUnsupported(t *testing.T) {
-	p, _ := New(testConfig(), DirSink{Root: t.TempDir()}, hostPDF(t), hostAudio(t))
+	p, _ := New(testConfig(), DirSink{Root: t.TempDir()}, hostPDF(t), hostAudio(t), hostVideo(t))
 
 	// A .zip is sniffed by its magic bytes, not its extension.
 	for name, want := range map[string]string{
@@ -696,7 +701,7 @@ func TestProcessUnsupported(t *testing.T) {
 func TestProcessRejections(t *testing.T) {
 	cfg := testConfig()
 	cfg.MaxFileMB = 1
-	p, _ := New(cfg, DirSink{Root: t.TempDir()}, hostPDF(t), hostAudio(t))
+	p, _ := New(cfg, DirSink{Root: t.TempDir()}, hostPDF(t), hostAudio(t), hostVideo(t))
 
 	big := filepath.Join(t.TempDir(), "big.txt")
 	f, err := os.Create(big)

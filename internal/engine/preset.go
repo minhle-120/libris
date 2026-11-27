@@ -27,6 +27,20 @@ import (
 // is what the browser, the ingest queue and a page raster at full resolution are also asking
 // for. The two small models are told to hold none, because an embedding pass does not reuse a
 // cache and any of it would be memory the chat model cannot use.
+// videoFPS is the frame rate a clip of a video is decoded at, and it is written because
+// llama.cpp's default is not the rate the model was trained on. The default is 4.0 — four
+// frames a second, so a 15-second window is 60 frames, 6,482 tokens, and an input the server
+// refuses (measured). One a second is what the shipped chat model's own documentation says a
+// video is turned into: "processed as sampled frames through the vision encoder at 1 frame per
+// second". So this is not compensating for a limitation. It is declining a default that was
+// chosen for somebody scrubbing a timeline, not for a window of evidence.
+//
+// It is a constant rather than a setting for the reason the ingest side refuses to make one
+// either: the two ends have to agree, and a settings page that can ask for more frames than
+// ubatch-size holds produces rows the server cannot embed. The window length is the setting,
+// because that is the half a person can actually decide.
+const videoFPS = 1
+
 const (
 	chatCacheRAMMiB  = 512
 	smallCacheRAMMiB = 0
@@ -119,7 +133,11 @@ func PresetPath(dataDir, id string) string {
 // assembled at a call site because llama.cpp reads a file, and because this stays the one place
 // on a machine where nothing else about the model server is configurable at which to read what
 // was actually passed.
-func Preset(path string, device string, models []Model) error {
+// ffmpegDir names the folder holding ffmpeg and ffprobe when an install carries its own, and
+// is empty when the server should search PATH like anything else on the machine. It belongs
+// beside the frame rate because the two are one decision seen from two ends: libris cuts a
+// window of pictures, and something has to decode them.
+func Preset(path string, device string, ffmpegDir string, models []Model) error {
 	var b strings.Builder
 	b.WriteString("; The model server's own configuration, in the libris data directory.\n")
 	b.WriteString("; llama-server reads this file. libris rewrites it from its own defaults at every\n")
@@ -136,6 +154,19 @@ func Preset(path string, device string, models []Model) error {
 	b.WriteString("backend-sampling = true\n")
 	b.WriteString("fit = on\n")
 	fmt.Fprintf(&b, "ubatch-size = %d\n", ubatchSize)
+	// Both halves of what a video costs, in the one place that has to say them: the frame
+	// rate decides how many tokens a window is, and ubatch-size decides how many it can be.
+	fmt.Fprintf(&b, "video-fps = %d\n", videoFPS)
+	if ffmpegDir != "" {
+		// A release install carries ffmpeg and ffprobe in the bundle's tools folder, which the
+		// server cannot see: it searches PATH, and PATH is the machine's, not this install's.
+		// Pointing the server at the folder is what makes a downloaded libris able to decode a
+		// clip on a machine where nobody installed anything. It is written only when the folder
+		// is real, because a directory that does not exist is worse than PATH: the search that
+		// fails there finds nothing anywhere, rather than finding the program the person did
+		// install.
+		fmt.Fprintf(&b, "video-ffmpeg-dir = %s\n", ffmpegDir)
+	}
 	fmt.Fprintf(&b, "cache-ram = %d\n", chatCacheRAMMiB)
 	if device != "" {
 		fmt.Fprintf(&b, "device = %s\n", device)
@@ -332,8 +363,8 @@ func truthy(v string) bool {
 //
 // So the file is rewritten, and a hand edit lasts until the next start. Preset's comment holds
 // the other half: why this is a file at all, and what reading it is still good for.
-func refreshPreset(path, device string, models []Model) (*PresetFile, error) {
-	if err := Preset(path, device, models); err != nil {
+func refreshPreset(path, device, ffmpegDir string, models []Model) (*PresetFile, error) {
+	if err := Preset(path, device, ffmpegDir, models); err != nil {
 		return nil, err
 	}
 	// Read back rather than trusting what was just built in memory: what the router is about to

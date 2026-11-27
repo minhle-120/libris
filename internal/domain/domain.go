@@ -19,6 +19,10 @@ const (
 	KindText  Kind = "text"
 	KindImage Kind = "image"
 	KindAudio Kind = "audio" // one clip window of a recording; Text is empty
+	// KindVideo is one clip window of a video: the frames of it, and nothing of its
+	// soundtrack. ADR 0012 — the model that is shown a moving picture is not told what
+	// is being said over it, so a video produces this kind and KindAudio side by side.
+	KindVideo Kind = "video"
 )
 
 // Media reports whether a segment carries a file to show a model rather than text to
@@ -30,7 +34,7 @@ const (
 // retrieve's mapping from a kind to a wire kind, and in llm's MediaPart and Caps.Allows.
 func (k Kind) Media() bool {
 	switch k {
-	case KindImage, KindAudio:
+	case KindImage, KindAudio, KindVideo:
 		return true
 	}
 	return false
@@ -43,6 +47,7 @@ const (
 	SourcePDF         SourceKind = "pdf"         // text layer + page images
 	SourceImage       SourceKind = "image"       // one image
 	SourceAudio       SourceKind = "audio"       // sliced into clips, embedded whole
+	SourceVideo       SourceKind = "video"       // sliced into frame clips, plus its soundtrack as audio
 	SourceText        SourceKind = "text"        // plain text, markdown, html, csv, code
 	SourceUnsupported SourceKind = "unsupported" // stored, not searchable
 )

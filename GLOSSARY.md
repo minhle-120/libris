@@ -22,25 +22,43 @@ _Avoid_: Warning, note, diagnostic
 
 **Tool folder**:
 The `tools` folder that travels beside the libris executable, holding the programs libris runs but
- did not write — pdftotext and pdftoppm — with the libraries and fonts those programs need. It is
+ did not write — pdftotext, pdftoppm, ffmpeg and ffprobe — with the libraries and fonts those
+ programs need. It is
  what makes a download enough on its own. A program found there is **bundled**; one found through
  PATH was installed by the machine's owner. The two are run differently, because only one of them
  arrived carrying its own dependencies.
 _Avoid_: Dependencies, runtime, vendored binaries
 
 **Segment**:
-One embeddable piece of a source — a stretch of page text, one page's image, or one clip of a
-recording. The unit a vector is stored against and the unit a citation names.
+One embeddable piece of a source — a stretch of page text, one page's image, or one clip of
+something that runs. The unit a vector is stored against and the unit a citation names.
 _Avoid_: Chunk, slice, block
 
 **Recording**:
-A source whose content is sound rather than pages. It is stored as one segment per clip window and
-answered from by ear: nothing writes out what was said.
+A source whose content is sound rather than pages, or the sound a video carries — either is stored
+as one segment per clip window and answered from by ear. Nothing writes out what was said.
 _Avoid_: Audio file, voice memo, transcript
 
+**Video**:
+A source that runs: pictures over time, and usually a soundtrack beside them. It is stored as two
+documents of one source — its frames, and its sound — each with its own segments over the same
+moments, because a model shown the video is shown the pictures only.
+_Avoid_: Movie, footage, visual, screen recording
+
+**Frames**:
+What a video becomes for a model: pictures sampled from it at a fixed rate. The pictures carry what
+is visible and nothing that is said.
+_Avoid_: Keyframes, thumbnails, stills
+
+**Soundtrack**:
+The sound a video carries, kept and searched apart from the pictures it belongs to — the only place
+the words spoken in a video exist for a model.
+_Avoid_: Audio track, narration, voiceover
+
 **Clip**:
-The sound one audio segment covers — a window of a recording, written at ingest and playable. The
-segment is what retrieval finds; the clip is what a person hears.
+The seconds one media segment covers — a window of a recording, of a video's frames, or of a
+soundtrack — written at ingest and playable. The segment is what retrieval finds; the clip is what
+a person sees or hears.
 _Avoid_: Slice, snippet, excerpt
 
 **Citation**:

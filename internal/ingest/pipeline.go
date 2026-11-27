@@ -46,13 +46,14 @@ type Processor struct {
 	sink  Sink
 	pdf   *PDF
 	audio *Audio
+	video *Video
 }
 
 // New validates the config and takes the programs it will run, already resolved. They arrive
 // resolved because resolution is a question about folders and operating systems rather than
 // about this file, and because a Processor is built per job: the answer is asked for when an
 // upload happens rather than remembered from whenever the process started.
-func New(cfg config.Config, sink Sink, progs tools.PDF, audio tools.Audio) (*Processor, error) {
+func New(cfg config.Config, sink Sink, progs tools.PDF, audio tools.Audio, video tools.Video) (*Processor, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -71,6 +72,12 @@ func New(cfg config.Config, sink Sink, progs tools.PDF, audio tools.Audio) (*Pro
 			FFmpeg:  audio.FFmpeg,
 			Seconds: cfg.AudioClipSeconds,
 			Overlap: cfg.AudioClipOverlap,
+		},
+		video: &Video{
+			FFmpeg:  video.FFmpeg,
+			FFprobe: video.FFprobe,
+			Seconds: cfg.VideoClipSeconds,
+			Overlap: cfg.VideoClipOverlap,
 		},
 	}, nil
 }
@@ -119,6 +126,8 @@ func (p *Processor) Process(ctx context.Context, path string) (*Result, error) {
 		p.image(ctx, res, path)
 	case domain.SourceAudio:
 		p.audioDoc(ctx, res, path)
+	case domain.SourceVideo:
+		p.videoDoc(ctx, res, path)
 	default:
 		res.Unsupported = "unsupported file type"
 	}
@@ -328,6 +337,117 @@ func (p *Processor) audioDoc(ctx context.Context, res *Result, path string) {
 				Span:     domain.Provenance{T0: clip.T0, T1: clip.T1},
 			})
 		}
+	}
+}
+
+// videoDoc turns one video into two documents: the pictures of it, as clips of frames, and
+// its soundtrack, as clips of sound. ADR 0012 — the model that is shown the pictures is not
+// told what is being said over them, so a video that produced only frames would be answering
+// from half of what it was given.
+//
+// Two documents rather than one, and two ordinal spaces, because that is what a PDF already
+// is: page text and page rasters, each with its own clip four. A row of one document and a
+// row of the other can cover the same second, and the spans are what say so — nothing here
+// fuses them into a row, because nothing can put a second file in a segment that holds one
+// asset, and nothing has measured whether one fused vector beats two in the same space.
+//
+// Either half can be absent, and neither absence is the file's fault. A screen recording with
+// no microphone, and a meeting's audio carried in a container whose brand claims pictures,
+// are both files libris should read rather than complain about; what it says about them is
+// that the document is not there, which is not a finding — a finding names something the
+// person could go and fix.
+func (p *Processor) videoDoc(ctx context.Context, res *Result, path string) {
+	streams, err := p.video.Probe(ctx, path)
+	switch {
+	case errors.Is(err, ErrNoVideoTools):
+		// Not this file's fault, and the sentence has to name two programs where a
+		// recording names one.
+		res.Findings = append(res.Findings,
+			domain.ToolMissing(p.video.FFmpeg.Name), domain.ToolMissing(p.video.FFprobe.Name))
+		res.Unsupported = "no ffmpeg and ffprobe on this machine"
+		return
+	case err != nil:
+		res.Findings = append(res.Findings, domain.StageFailed("video", err))
+		res.Unsupported = "video could not be read"
+		return
+	}
+
+	var (
+		frames  []clipRow
+		sound   []clipRow
+		failure string // the sentence for the half that tried and could not
+	)
+
+	if streams.Video {
+		clips, err := p.video.Frames(ctx, path, streams, p.sink, res.Source.ID+"/clips")
+		switch {
+		case err != nil:
+			res.Findings = append(res.Findings, domain.StageFailed("frames", err))
+			failure = "the pictures could not be sliced"
+		default:
+			for _, c := range clips {
+				frames = append(frames, clipRow{asset: c.Asset, t0: c.T0, t1: c.T1})
+			}
+		}
+	}
+
+	if streams.Audio {
+		clips, err := p.audio.Clips(ctx, path, p.sink, res.Source.ID+"/sound")
+		switch {
+		case err != nil:
+			res.Findings = append(res.Findings, domain.StageFailed("soundtrack", err))
+			failure = "the soundtrack could not be sliced"
+		default:
+			for _, c := range clips {
+				sound = append(sound, clipRow{asset: c.Asset, t0: c.T0, t1: c.T1})
+			}
+		}
+	}
+
+	if len(frames) > 0 {
+		clipDoc(res, res.Source.ID, res.Source.Name, domain.KindVideo, frames)
+	}
+	if len(sound) > 0 {
+		// The suffix is how a PDF's rasters are named beside their text, and it earns its
+		// keep the same way: the person reading the document list knows which half of the
+		// file these rows are, before they open one.
+		clipDoc(res, res.Source.ID+"#sound", res.Source.Name+" [sound]", domain.KindAudio, sound)
+	}
+
+	if len(frames) == 0 && len(sound) == 0 {
+		// Whatever the container claimed, there was nothing in it to answer from — or the
+		// half that could have been said so itself, in the finding above.
+		res.Unsupported = failure
+		if res.Unsupported == "" {
+			res.Unsupported = "video holds nothing libris can read"
+		}
+	}
+}
+
+// clipRow is one clip of either kind: a file and the window it covers. Both slicers answer
+// with a type of this shape, and the document builder below does not care which one handed it
+// over.
+type clipRow struct {
+	asset  domain.Asset
+	t0, t1 float64
+}
+
+// clipDoc appends one document and its rows. A document per clip kind is what keeps
+// segmentID from putting two rows at the same id when a video's clip four and its
+// soundtrack's clip four are both real.
+func clipDoc(res *Result, id, title string, kind domain.Kind, clips []clipRow) {
+	res.Docs = append(res.Docs, Doc{ID: id, Title: title, Kind: kind})
+	for i, c := range clips {
+		asset := c.asset
+		res.Segments = append(res.Segments, domain.Segment{
+			ID:       segmentID(id, i),
+			SourceID: res.Source.ID,
+			DocID:    id,
+			Kind:     kind,
+			Ordinal:  i,
+			Asset:    &asset,
+			Span:     domain.Provenance{T0: c.t0, T1: c.t1},
+		})
 	}
 }
 

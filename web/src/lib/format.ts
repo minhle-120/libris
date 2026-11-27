@@ -1,4 +1,4 @@
-import type { Citation } from "./types";
+import { hasTimeline, type Citation } from "./types";
 
 /** Display formatting. Kept out of components so the same rules apply everywhere. */
 
@@ -29,8 +29,10 @@ export function formatAge(unixSeconds: number): string {
 
 /** Page provenance, including the case where a chunk straddles a page break. */
 /**
- * A clip of a recording is a range of seconds, shown as m:ss — the same shape the player
- * above it shows, so the label under a clip and the time inside it agree.
+ * A clip — of a recording, or of a video — is a range of seconds, shown as m:ss: the same
+ * shape the player above it shows, and the same one the model reads in a citation. A
+ * label under a clip, the time inside a player, and the sentence in an answer that cite
+ * it are three renderings of one number.
  */
 export function formatSpan(t0: number, t1?: number): string {
   const at = (s: number) => {
@@ -49,16 +51,16 @@ export function formatPages(page?: number, pageEnd?: number): string {
 }
 
 /**
- * Where inside a source a citation points. Both a page raster and a text chunk
- * cite a page, so there is one form — which is why the function exists at all:
- * audio used to cite a `m:ss–m:ss` range here, and that branch is what made the
- * kind a parameter. It is gone with the modality (ADR 0003).
+ * Where inside a source a citation points. A page raster and a text chunk cite a page, so
+ * there is one form for those; a clip cites a range of seconds instead — of a recording, or
+ * of a video — and that second form is what makes the kind a parameter and the function
+ * worth having.
  *
  * The character range a text chunk cites is left out on purpose — it is what the
  * viewer highlights when the citation is opened, not what a label says about it.
  */
 export function citationLocator(c: Pick<Citation, "kind" | "span">): string {
-  if (c.kind === "audio" && (c.span.t0 || c.span.t1))
+  if (hasTimeline(c.kind) && (c.span.t0 || c.span.t1))
     return formatSpan(c.span.t0!, c.span.t1);
   return formatPages(c.span.page, c.span.page_end);
 }
@@ -72,8 +74,13 @@ export function citationLocator(c: Pick<Citation, "kind" | "span">): string {
  * Which glyph a citation carries. A clip of a recording gets the waveform, so the row above an
  * answer says what kind of thing it points at before anyone opens it.
  */
-export function citationIcon(kind: Citation["kind"]): "image" | "audio" | "file" {
-  return kind === "image" ? "image" : kind === "audio" ? "audio" : "file";
+export function citationIcon(
+  kind: Citation["kind"],
+): "image" | "audio" | "video" | "file" {
+  if (kind === "image") return "image";
+  if (kind === "audio") return "audio";
+  if (kind === "video") return "video";
+  return "file";
 }
 
 export function chipLabel(c: Pick<Citation, "chunk" | "kind" | "span">): string {

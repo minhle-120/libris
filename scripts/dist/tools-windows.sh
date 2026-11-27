@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The Windows half of scripts/dist/tools-linux.sh: pdftotext, pdftoppm and ffmpeg with
+# The Windows half of scripts/dist/tools-linux.sh: pdftotext, pdftoppm, ffmpeg and ffprobe with
 # everything they need, into one folder that travels beside libris.exe. Run under an MSYS2 shell (the GitHub
 # runner ships one), where the toolchain's own package manager supplies the binaries.
 #
@@ -42,10 +42,10 @@ prefix=${MINGW_PREFIX:-/ucrt64}
 
 mkdir -p "$out"
 
-for prog in pdftotext pdftoppm ffmpeg; do
+for prog in pdftotext pdftoppm ffmpeg ffprobe; do
   src="$prefix/bin/$prog.exe"
   [ -f "$src" ] || {
-    echo "tools-windows: $prog is not installed ($src)" >&2
+    echo "tools-windows: $prog is not installed ($src) — a video needs both ffmpeg and ffprobe" >&2
     exit 1
   }
   cp "$src" "$out/"

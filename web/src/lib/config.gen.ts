@@ -39,6 +39,8 @@ export type Settings = {
 	chunkOverlap: number;
 	audioClipSeconds: number;
 	audioClipOverlap: number;
+	videoClipSeconds: number;
+	videoClipOverlap: number;
 	pdfPageImages: 'always' | 'fallback';
 	pdfDPI: number;
 	maxFileMB: number;
@@ -216,6 +218,24 @@ export const settingGroups: SettingGroup[] = [
 				"unit": "%",
 				"min": 0,
 				"max": 95
+			},
+			{
+				"key": "videoClipSeconds",
+				"label": "Video clip length",
+				"help": "Seconds of a video per clip. Same reason as a recording: a clip's vector is the average of everything in it. The maximum is not a preference — a longer window is more frames than the model server can hold at once, and the clip cannot be embedded.",
+				"kind": "number",
+				"unit": "seconds",
+				"min": 5,
+				"max": 30
+			},
+			{
+				"key": "videoClipOverlap",
+				"label": "Video clip overlap",
+				"help": "Percent of each clip repeated at the start of the next, so an event that straddles a boundary survives whole in at least one clip.",
+				"kind": "number",
+				"unit": "%",
+				"min": 0,
+				"max": 95
 			}
 		]
 	},
@@ -282,6 +302,8 @@ export function defaultSettings(): Settings {
 		chunkOverlap: 50,
 		audioClipSeconds: 15,
 		audioClipOverlap: 50,
+		videoClipSeconds: 15,
+		videoClipOverlap: 50,
 		pdfPageImages: "always",
 		pdfDPI: 110,
 		maxFileMB: 512,

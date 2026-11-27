@@ -41,16 +41,28 @@ func TestDetectClaimsAudioByBytes(t *testing.T) {
 	}
 }
 
-// Video is not an input. The box that opens an M4A opens an MP4 too, so a brand that names
-// nothing in particular is refused even beside an extension that asks for audio: what the
-// bytes say wins, and a file that says "video" gets no clips cut from it.
-func TestDetectRefusesVideoBrand(t *testing.T) {
-	head := append([]byte{0, 0, 0, 32, 'f', 't', 'y', 'p', 'i', 's', 'o', 'm'}, make([]byte, 64)...)
-	if got := Detect("clip.m4a", head); got != domain.SourceAudio {
-		t.Errorf("an .m4a whose container does not object: got %q, want audio", got)
+// The box that opens an M4A opens an MP4 too, so the brand after "ftyp" is the only thing
+// in the header that tells a recording from a moving picture — and it decides both ways,
+// whatever the name says. Believing it costs nothing when it contradicts an audio
+// extension: a video source carries its soundtrack, so the words in that file are still
+// cut into clips of the kind that carries sound.
+func TestDetectFollowsTheBrandNotTheName(t *testing.T) {
+	video := append([]byte{0, 0, 0, 32, 'f', 't', 'y', 'p', 'i', 's', 'o', 'm'}, make([]byte, 64)...)
+	audio := append([]byte{0, 0, 0, 32, 'f', 't', 'y', 'p', 'M', '4', 'A', ' '}, make([]byte, 64)...)
+
+	if got := Detect("clip.mp4", video); got != domain.SourceVideo {
+		t.Errorf("Detect(clip.mp4) = %q, want video", got)
 	}
-	if got := Detect("clip.mp4", head); got != domain.SourceUnsupported {
-		t.Errorf("Detect(clip.mp4) = %q, want unsupported", got)
+	if got := Detect("clip.m4a", video); got != domain.SourceVideo {
+		t.Errorf("an .m4a whose container says pictures: got %q, want video", got)
+	}
+	if got := Detect("clip.mp4", audio); got != domain.SourceAudio {
+		t.Errorf("an .mp4 whose container says audio-only: got %q, want audio", got)
+	}
+	// A name that lost its extension is decided by the brand alone, which is the reason
+	// the brand list exists beside an extension list that already covers .mp4.
+	if got := Detect("DSC_0148", video); got != domain.SourceVideo {
+		t.Errorf("Detect(DSC_0148) = %q, want video", got)
 	}
 }
 
@@ -135,7 +147,7 @@ func TestProcessUnreadableFile(t *testing.T) {
 		t.Skip("root can read anything")
 	}
 
-	p, _ := New(testConfig(), DirSink{Root: t.TempDir()}, hostPDF(t), hostAudio(t))
+	p, _ := New(testConfig(), DirSink{Root: t.TempDir()}, hostPDF(t), hostAudio(t), hostVideo(t))
 	if _, err := p.Process(context.Background(), path); err == nil {
 		t.Fatal("expected permission error")
 	}
@@ -143,7 +155,7 @@ func TestProcessUnreadableFile(t *testing.T) {
 
 func TestProcessCorruptImage(t *testing.T) {
 	path := writeTemp(t, "broken.png", "definitely not a png")
-	p, _ := New(testConfig(), DirSink{Root: t.TempDir()}, hostPDF(t), hostAudio(t))
+	p, _ := New(testConfig(), DirSink{Root: t.TempDir()}, hostPDF(t), hostAudio(t), hostVideo(t))
 
 	res, err := p.Process(context.Background(), path)
 	if err != nil {

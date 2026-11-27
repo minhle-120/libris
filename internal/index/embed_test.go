@@ -421,6 +421,71 @@ func TestBatchesSegments(t *testing.T) {
 	}
 }
 
+// Every kind this build knows about is listed, so a new one has to be listed here too
+// before it can pass: the list is the thing that goes stale when the domain grows.
+//
+// Every kind that says it carries a file has to have a wire shape, or the same bytes
+// embed one way and cannot be shown to the answering model at all — which is the bug
+// this catches, and it is invisible until a turn fails. MediaForm is the one answer both
+// halves ask, so one loop covers both.
+func TestEveryMediaKindHasAWireShape(t *testing.T) {
+	for _, kind := range []domain.Kind{domain.KindText, domain.KindImage, domain.KindAudio, domain.KindVideo} {
+		_, _, ok := MediaForm(kind)
+		if ok != kind.Media() {
+			t.Errorf("%s: MediaForm ok = %v, Kind.Media() = %v", kind, ok, kind.Media())
+		}
+	}
+}
+
+func TestEmbedsVideoAsInputVideo(t *testing.T) {
+	dir := t.TempDir()
+	clip := filepath.Join(dir, "clip-0001.mp4")
+	raw := append([]byte{0, 0, 0, 0x20, 'f', 't', 'y', 'p', 'i', 's', 'o', 'm'}, make([]byte, 64)...)
+	if err := os.WriteFile(clip, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := newCapture(t)
+
+	var segs []domain.Segment
+	for i := range 3 {
+		segs = append(segs, domain.Segment{
+			ID:   fmt.Sprintf("s:%04d", i),
+			Kind: domain.KindVideo,
+			// The asset's own MIME wins over the default, which is the only way a clip
+			// written in another container would be described correctly.
+			Asset: &domain.Asset{ID: "s/clips/clip.mp4", Path: clip, MIME: "video/mp4"},
+		})
+	}
+	if _, err := c.embedder(t, 0).Embed(context.Background(), docTitle, segs, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// A window of pictures is megabytes, and a request that carries several is a request
+	// the server has to hold whole. One row per request is what makes eight of them in
+	// flight cheap.
+	if c.calls != 3 {
+		t.Fatalf("%d requests for 3 clips, want one per clip", c.calls)
+	}
+	for i := range 3 {
+		if n := len(c.inputs(t, i)); n != 1 {
+			t.Errorf("request %d carried %d inputs, want 1", i, n)
+		}
+	}
+	part := firstPart(t, c.inputs(t, 0)[0])
+	if part["type"] != "input_video" {
+		t.Fatalf("part type = %v, want input_video", part["type"])
+	}
+	got := part["input_video"].(map[string]any)["data"].(string)
+	want := "data:video/mp4;base64," + base64.StdEncoding.EncodeToString(raw)
+	if got != want {
+		t.Errorf("data = %.60s…, want the clip inline as a data URI", got)
+	}
+	// A url there would ask the server for --media-path, which libris never passes.
+	if _, ok := part["input_video"].(map[string]any)["url"]; ok {
+		t.Error("input_video carries a url; only bytes are sent")
+	}
+}
+
 func TestEmbedsImageAsDataURL(t *testing.T) {
 	dir := t.TempDir()
 	png := filepath.Join(dir, "page-0001.png")

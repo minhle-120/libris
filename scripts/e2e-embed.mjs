@@ -17,6 +17,7 @@ import { DIM, EmbedServer } from './fake-embed.mjs';
 const BIN = process.env.LIBRIS ?? './libris';
 const PDF = 'scripts/testdata/two-page.pdf';
 const AUDIO = 'scripts/testdata/one-second.wav';
+const VIDEO = 'scripts/testdata/four-second.mp4';
 
 // ── checks ──────────────────────────────────────────────────────
 
@@ -246,6 +247,61 @@ try {
       bytes.subarray(0, 4).toString() === 'RIFF' &&
       bytes.subarray(8, 12).toString() === 'WAVE',
     `status=${served.status} type=${served.headers.get('content-type')} bytes=${bytes.length}`
+  );
+
+  // ── a video ───────────────────────────────────────────────────
+  // Two things at once: pictures that run, and a soundtrack nobody said out loud. One file
+  // goes in and comes back as two documents with the same windows, because a search that has
+  // to choose between a frame and a sentence from the same second has already lost the
+  // answer. Both halves are checked because either can go missing on its own — the frames
+  // stored and the sound dropped, or the sound stored and the pictures sent as a path.
+  const mov = await upload(base, nb.id, 'trip.mp4', readFileSync(VIDEO), 'video/mp4');
+  const cut = await poll(`${base}/api/sources/${mov.id}`, (x) => x.status !== 'processing');
+  checks.check(
+    'a video reaches ready, with its pictures and its soundtrack both stored',
+    cut.status === 'ready',
+    `status=${cut.status} detail=${cut.detail ?? ''}`
+  );
+
+  const halves = await storedChunks(mov.id);
+  const frames = halves.filter((s) => s.kind === 'video');
+  const sound = halves.filter((s) => s.kind === 'audio');
+  checks.check(
+    'it was cut into clips of the pictures and clips of the soundtrack',
+    frames.length > 0 && sound.length > 0,
+    `${frames.length} video + ${sound.length} audio of ${halves.length} chunks`
+  );
+  checks.check(
+    'the two halves are separate documents, and the same moment has one window',
+    new Set(halves.map((s) => s.doc_id)).size === 2 &&
+      frames[0]?.span?.t0 === sound[0]?.span?.t0 &&
+      frames[0]?.span?.t1 === sound[0]?.span?.t1,
+    halves.map((s) => `${s.kind}:${s.doc_id}@${s.span?.t0}-${s.span?.t1}`).join(' ')
+  );
+
+  // Each half reached the model as the file it is. A frame sent as a path, or a soundtrack
+  // sent as a guess at what was said, still gets a vector of the right length — every count
+  // in the pipeline stays green while the thing being searched for stops being the video.
+  const moved = await (await fetch(`${embedURL}/stats`)).json();
+  checks.check(
+    'the clips reached the embedding model as video and as audio',
+    (moved.inputsByType?.input_video ?? 0) >= frames.length &&
+      (moved.inputsByType?.input_audio ?? 0) >= sound.length,
+    `input_video=${moved.inputsByType?.input_video ?? 0}/${frames.length} input_audio=${moved.inputsByType?.input_audio ?? 0}/${sound.length}`
+  );
+
+  // And the file behind a citation of a moment is the moment: a clip of the pictures, which
+  // is a container a player opens rather than a stream a browser downloads.
+  const frameURL = `${base}/api/assets/${frames[0].asset.id.split('/').map(encodeURIComponent).join('/')}`;
+  const servedClip = await fetch(frameURL);
+  const clipBytes = Buffer.from(await servedClip.arrayBuffer());
+  checks.check(
+    'a clip of the pictures is an mp4, and the player page is a video element',
+    servedClip.status === 200 &&
+      (servedClip.headers.get('content-type') ?? '').startsWith('video/mp4') &&
+      clipBytes.subarray(4, 8).toString() === 'ftyp' &&
+      /<video /.test(await (await fetch(`${base}/api/sources/${mov.id}/player`)).text()),
+    `status=${servedClip.status} type=${servedClip.headers.get('content-type')} bytes=${clipBytes.length}`
   );
 
   // ── the server is not running ─────────────────────────────────

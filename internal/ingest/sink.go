@@ -111,6 +111,10 @@ func mimeByExt(path string) string {
 		return "application/pdf"
 	case ".wav":
 		return "audio/wav"
+	case ".mp4":
+		// The shape a clip of a video is written in, and the MIME is what tells the
+		// browser to put a player on it rather than a download (see api.ts).
+		return "video/mp4"
 	}
 	return "application/octet-stream"
 }

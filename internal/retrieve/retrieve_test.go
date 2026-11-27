@@ -119,6 +119,26 @@ func clipHit(docID string, ordinal int, t0, t1 float64) domain.Hit {
 	}
 }
 
+// videoHit is a window of a video: no text, an mp4, and the same span a clip of its
+// soundtrack would carry for the same moment.
+func videoHit(docID string, ordinal int, t0, t1 float64) domain.Hit {
+	return domain.Hit{
+		Segment: domain.Segment{
+			ID:      docID + ":" + pad(ordinal),
+			DocID:   docID,
+			Kind:    domain.KindVideo,
+			Ordinal: ordinal,
+			Asset: &domain.Asset{
+				ID:   docID + "/clip-" + pad(ordinal+1) + ".mp4",
+				Path: "/assets/" + docID + "/clip-" + pad(ordinal+1) + ".mp4",
+				MIME: "video/mp4",
+			},
+			Span: domain.Provenance{T0: t0, T1: t1},
+		},
+		SourceName: docID,
+	}
+}
+
 func pad(n int) string {
 	s := ""
 	for i := 0; i < 4; i++ {
@@ -431,7 +451,7 @@ func TestRenderNamesTheWindowForAClip(t *testing.T) {
 // for out loud rather than left out quietly: a prompt that shows three of five clips and
 // mentions nothing of the other two invites an answer that has heard the whole thing.
 func TestRenderPlaysSoManyClipsAndSaysSoForTheRest(t *testing.T) {
-	const n = clipsPerPrompt + 2
+	var n = clipBudget[llm.MediaAudio] + 2
 	assets := &fakeAssets{files: map[string][]byte{}}
 	reg := NewRegistry()
 	for i := range n {
@@ -451,8 +471,8 @@ func TestRenderPlaysSoManyClipsAndSaysSoForTheRest(t *testing.T) {
 			sounds++
 		}
 	}
-	if sounds != clipsPerPrompt {
-		t.Errorf("%d clips played, want the budget of %d", sounds, clipsPerPrompt)
+	if sounds != clipBudget[llm.MediaAudio] {
+		t.Errorf("%d clips played, want the budget of %d", sounds, clipBudget[llm.MediaAudio])
 	}
 	body := partsText(parts)
 	for _, e := range reg.All() {
@@ -461,8 +481,134 @@ func TestRenderPlaysSoManyClipsAndSaysSoForTheRest(t *testing.T) {
 			t.Errorf("%s vanished from the prompt entirely", label)
 		}
 	}
-	if got := strings.Count(body, "is not played to you this turn"); got != n-clipsPerPrompt {
-		t.Errorf("%d clips marked as not played, want %d", got, n-clipsPerPrompt)
+	if got := strings.Count(body, "is not played to you this turn"); got != n-clipBudget[llm.MediaAudio] {
+		t.Errorf("%d clips marked as not played, want %d", got, n-clipBudget[llm.MediaAudio])
+	}
+}
+
+// A window of a video is labelled the same way a window of a recording is, because it is
+// the same kind of fact: no words, so the span is what the model has to weigh, and the only
+// pairing between a name and a payload the server keeps.
+func TestRenderNamesTheWindowForAClipOfAVideo(t *testing.T) {
+	clip := videoHit("trip.mp4", 3, 45, 60)
+	assets := &fakeAssets{files: map[string][]byte{clip.Segment.Asset.Path: []byte("ftypisom")}}
+	reg := NewRegistry()
+	reg.Register(clip)
+
+	parts, err := newRetriever(&fakeCorpus{}, &fakeEmbed{}, assets).Render(reg.All())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parts) != 2 {
+		t.Fatalf("%d parts, want a label then the pictures: %+v", len(parts), parts)
+	}
+	if want := "[[Chunk 1]] trip.mp4 — video 0:45–1:00\n"; parts[0].Text != want {
+		t.Errorf("label = %q, want %q", parts[0].Text, want)
+	}
+	if parts[1].Type != llm.PartInputVideo || !strings.Contains(parts[1].InputVideo.Data, "video/mp4;base64,") {
+		t.Errorf("second part is %+v, want the clip as video", parts[1])
+	}
+}
+
+// The budget for a clip of a video is smaller than the one for a clip of sound, and the
+// sentence said for the rest uses a different verb — a model told a picture was not played
+// learns nothing it can act on.
+func TestRenderShowsOneClipOfAVideoAndSaysSoForTheRest(t *testing.T) {
+	var n = clipBudget[llm.MediaVideo] + 2
+	assets := &fakeAssets{files: map[string][]byte{}}
+	reg := NewRegistry()
+	for i := range n {
+		hit := videoHit("trip.mp4", i, float64(i)*7.5, float64(i)*7.5+15)
+		assets.files[hit.Segment.Asset.Path] = []byte("ftyp")
+		reg.Register(hit)
+	}
+
+	parts, err := newRetriever(&fakeCorpus{}, &fakeEmbed{}, assets).Render(reg.All())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var videos int
+	for _, p := range parts {
+		if p.Type == llm.PartInputVideo {
+			videos++
+		}
+	}
+	if videos != clipBudget[llm.MediaVideo] {
+		t.Errorf("%d clips shown, want the budget of %d", videos, clipBudget[llm.MediaVideo])
+	}
+	body := partsText(parts)
+	if got := strings.Count(body, "is not shown to you this turn"); got != n-clipBudget[llm.MediaVideo] {
+		t.Errorf("%d clips marked as not shown, want %d", got, n-clipBudget[llm.MediaVideo])
+	}
+	if strings.Contains(body, "is not played to you this turn") {
+		t.Error("a picture was described as not played")
+	}
+}
+
+// Three recordings and three videos is a prompt holding three recordings and one video, not
+// four things and two things: the budget is per kind, so a page of pictures cannot spend the
+// sound the question also needs — and the frame budget cannot spend the audio's.
+func TestRenderBudgetsArePerKind(t *testing.T) {
+	assets := &fakeAssets{files: map[string][]byte{}}
+	reg := NewRegistry()
+	for i := range 5 {
+		audio := clipHit("rec1", i, float64(i)*15, float64(i)*15+15)
+		video := videoHit("trip.mp4", i, float64(i)*15, float64(i)*15+15)
+		assets.files[audio.Segment.Asset.Path] = []byte("RIFF")
+		assets.files[video.Segment.Asset.Path] = []byte("ftyp")
+		reg.Register(audio)
+		reg.Register(video)
+	}
+
+	parts, err := newRetriever(&fakeCorpus{}, &fakeEmbed{}, assets).Render(reg.All())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var sounds, videos int
+	for _, p := range parts {
+		switch p.Type {
+		case llm.PartInputAudio:
+			sounds++
+		case llm.PartInputVideo:
+			videos++
+		}
+	}
+	if sounds != clipBudget[llm.MediaAudio] {
+		t.Errorf("%d clips of sound, want the audio budget of %d", sounds, clipBudget[llm.MediaAudio])
+	}
+	if videos != clipBudget[llm.MediaVideo] {
+		t.Errorf("%d clips of pictures, want the video budget of %d", videos, clipBudget[llm.MediaVideo])
+	}
+}
+
+// A model that was started without the video half of its projector is refused by name. The
+// two capabilities are compiled from one flag in llama.cpp, so "it sees pages" is exactly the
+// wrong reassurance to give here — which is why this says video rather than vision.
+func TestRenderRefusesVideoTheServingModelCannotDecode(t *testing.T) {
+	clip := videoHit("trip.mp4", 0, 0, 15)
+	assets := &fakeAssets{files: map[string][]byte{clip.Segment.Asset.Path: []byte("ftyp")}}
+	reg := NewRegistry()
+	reg.Register(clip)
+
+	_, err := New(&fakeCorpus{}, &fakeEmbed{}, assets,
+		&llm.Caps{Model: "libris-chat", Vision: true, Audio: true}).Render(reg.All())
+
+	var want *llm.MediaUnsupported
+	if !errors.As(err, &want) {
+		t.Fatalf("err = %v, want *llm.MediaUnsupported", err)
+	}
+	if want.Kind != llm.MediaVideo || want.Count != 1 {
+		t.Errorf("refusal = %+v", want)
+	}
+	if !strings.Contains(err.Error(), "video") {
+		t.Errorf("the refusal does not name the modality that is missing: %v", err)
+	}
+
+	if _, err := New(&fakeCorpus{}, &fakeEmbed{}, assets,
+		&llm.Caps{Model: "libris-chat", Video: true}).Render(reg.All()); err != nil {
+		t.Errorf("a model that decodes video was refused: %v", err)
 	}
 }
 

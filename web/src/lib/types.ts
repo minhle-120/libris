@@ -18,7 +18,15 @@ export type Notebook = {
   source_count: number; // read from the database, so it is 0 on a brand-new notebook
 };
 
-export type SourceKind = "pdf" | "image" | "audio" | "text" | "unsupported";
+export type SourceKind = "pdf" | "image" | "audio" | "video" | "text" | "unsupported";
+
+/**
+ * Whether a kind runs in seconds. A clip of a recording and a clip of a video are the
+ * same kind of evidence in that respect — no words, a window, and a player that can be
+ * told where to start — so everything keyed on "seconds" asks this rather than naming one
+ * of the two.
+ */
+export const hasTimeline = (kind: string): boolean => kind === "audio" || kind === "video";
 
 /**
  * Async ingest state. `processing` covers everything from queue to chunking; while a
@@ -120,7 +128,8 @@ export type Segment = {
   id: string;
   source_id: string;
   doc_id: string; // a PDF yields two documents: the text and the page rasters
-  kind: "text" | "image" | "audio";
+  // A video yields two as well: the frames of it, and its soundtrack.
+  kind: "text" | "image" | "audio" | "video";
   ordinal: number;
   text: string;
   asset?: Asset;
@@ -169,7 +178,7 @@ export type Citation = {
   doc_id: string;
   source_id: string;
   source_name: string;
-  kind: "text" | "image" | "audio";
+  kind: "text" | "image" | "audio" | "video";
   ordinal: number;
   quote?: string;
   /** The page raster a citation opens. */

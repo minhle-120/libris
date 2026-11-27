@@ -357,6 +357,11 @@ func MediaForm(kind domain.Kind) (media llm.MediaKind, mime string, ok bool) {
 	case domain.KindAudio:
 		// The one shape ingest ever writes: 16 kHz mono PCM. See ingest.Audio.
 		return llm.MediaAudio, "audio/wav", true
+	case domain.KindVideo:
+		// And the one shape ingest ever writes for a window of pictures: re-encoded to
+		// one frame a second and small enough for the server to hold a window of them.
+		// See ingest.Video.
+		return llm.MediaVideo, "video/mp4", true
 	}
 	return "", "", false
 }
@@ -370,7 +375,7 @@ func (e *Embedder) inputFor(title string, seg domain.Segment) (llm.EmbedInput, e
 		}
 		return llm.TextInput(DocumentPrompt(title, seg.Text)), nil
 
-	case domain.KindImage, domain.KindAudio:
+	case domain.KindImage, domain.KindAudio, domain.KindVideo:
 		if seg.Asset == nil {
 			return llm.EmbedInput{}, fmt.Errorf("%s segment has no asset", seg.Kind)
 		}

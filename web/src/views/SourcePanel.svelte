@@ -14,7 +14,7 @@
   } from '../lib/store.svelte';
   import { dragHandle } from '../lib/panel';
   import { formatBytes } from '../lib/format';
-  import type { Source } from '../lib/types';
+  import { hasTimeline, type Source } from '../lib/types';
   import Badge from '../lib/ui/Badge.svelte';
   import Button from '../lib/ui/Button.svelte';
   import Icon from '../lib/ui/Icon.svelte';
@@ -319,11 +319,11 @@
                     {#if s.status === 'ready' || s.status === 'unsupported' || s.status === 'failed'}
                       <a
                         class="iconlink"
-                        href={s.kind === "audio" ? playerURL(s.id) : originalURL(s.id)}
+                        href={hasTimeline(s.kind) ? playerURL(s.id) : originalURL(s.id)}
                         target="_blank"
                         rel="noopener"
-                        title={s.kind === "audio"
-                          ? "Play the recording in a new tab"
+                        title={hasTimeline(s.kind)
+                          ? "Play it in a new tab"
                           : "Open the original file in a new tab"}
                         aria-label="Open {s.name}"
                       >

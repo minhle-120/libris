@@ -149,6 +149,25 @@ func FromPath() Resolver {
 	return Resolver{first: OriginPath}
 }
 
+// VideoFFmpegDir is the folder to point the model server at so it can decode a clip of a
+// video, and empty means "search PATH, like any other program on the machine".
+//
+// It answers empty unless this install's own folder holds both programs, because the two
+// halves have to agree about which ffmpeg is being used: a server pointed at a bundle libris
+// itself is not running would decode a clip with different bytes than the ones that cut it,
+// and a server pointed at a folder that has one of the two programs finds nothing anywhere.
+func (r Resolver) VideoFFmpegDir() string {
+	if r.dir == "" {
+		return ""
+	}
+	for _, name := range []string{"ffmpeg", "ffprobe"} {
+		if p := r.Look(name); p.Origin != OriginBundled || !p.Found() {
+			return ""
+		}
+	}
+	return r.dir
+}
+
 // BesideExecutable is the resolver for a libris run from wherever it was downloaded: the
 // folder of programs is named by the executable's own location, <exe>/tools, so one download
 // works unpacked anywhere and two copies on one disk each carry their own.
@@ -267,10 +286,15 @@ type PDF struct {
 
 // Audio names the one program a recording needs.
 //
-// ffprobe is deliberately not here. A build that cut a recording into fixed windows had to
-// ask how long it was before reading a sample of it; this one learns the length from the
-// samples as they arrive, so the question has nothing to be asked for. A second program
-// would be a second process per upload and a second answer that can disagree with the first.
+// ffprobe is not here, and was not when a recording was the only thing that needed
+// listening to. A build that cut a recording into fixed windows had to ask how long it was
+// before reading a sample of it; this one learns the length from the samples as they
+// arrive, so the question has nothing to be asked for. A second program would be a second
+// process per upload and a second answer that can disagree with the first.
+//
+// What changed is not that reasoning but the number of things being sliced. A video cannot
+// be read once and counted, because its windows are sought rather than streamed, so the
+// length has to be asked before the first one: see Video.
 func (r Resolver) Audio() Audio {
 	return Audio{FFmpeg: r.Look("ffmpeg")}
 }
@@ -280,12 +304,30 @@ type Audio struct {
 	FFmpeg Program
 }
 
+// Video names the two programs a video needs, and both are ffmpeg's: one to cut the clips,
+// one to say how long the file is before cutting any. The pairing is also what a release
+// bundle has to satisfy — the model server decodes a clip with the same two programs, and
+// looks for them in one directory (see the engine's video-ffmpeg-dir), which is why a
+// bundle that carries ffmpeg and not ffprobe is a bundle with a half-working modality.
+func (r Resolver) Video() Video {
+	return Video{FFmpeg: r.Look("ffmpeg"), FFprobe: r.Look("ffprobe")}
+}
+
+// Video is the pair.
+type Video struct {
+	FFmpeg  Program
+	FFprobe Program
+}
+
 // All names every program libris runs that a person might have to care about: the two that
-// read a PDF and the two that read a recording. The programs run for libris's own
+// read a PDF, and ffmpeg and ffprobe for everything with a window in it. The programs run for libris's own
 // convenience — opening a browser, asking ps which processes are llama-server — are
 // deliberately not here. They degrade on their own and their absence is not something
 // anyone could go and fix.
 func (r Resolver) All() []Program {
-	pdf, audio := r.PDF(), r.Audio()
-	return []Program{pdf.Text, pdf.Raster, audio.FFmpeg}
+	pdf, audio, video := r.PDF(), r.Audio(), r.Video()
+	// ffmpeg once, whichever leg is thought of first: the same program answers for a
+	// recording and for a video, and a person reading a list of programs does not want to
+	// find one name twice. ffprobe is here because it is the one a bundle can forget.
+	return []Program{pdf.Text, pdf.Raster, audio.FFmpeg, video.FFprobe}
 }

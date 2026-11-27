@@ -1,6 +1,7 @@
-// What a recording looks like once it is stored. The other harnesses prove a file reaches
-// "ready"; this one opens the viewer and checks the thing a reader actually does with a clip —
-// press play — and the number a reader uses to find the right one.
+// What something with a timeline looks like once it is stored: a recording, and a video with
+// its two halves. The other harnesses prove a file reaches "ready"; this one opens the viewer
+// and checks the thing a reader actually does with a clip — press play — and the number a
+// reader uses to find the right one.
 //
 // Both are worth a browser rather than a unit test: the player is an element with a src the
 // server has to answer, and a preload attribute that fetches a whole recording when it is
@@ -9,7 +10,7 @@
 // Requires a running server: `make ui` starts one against a throwaway data directory, with
 // the fake embeddings server that accepts the clip.
 import { mkdtempSync } from 'node:fs';
-import { Checks, withBrowser, AUDIO_FIXTURE } from './cdp.mjs';
+import { Checks, withBrowser, AUDIO_FIXTURE, VIDEO_FIXTURE } from './cdp.mjs';
 
 const app = process.env.APP ?? 'http://127.0.0.1:8080/';
 const cdpPort = Number(process.env.CDP_PORT ?? 9341);
@@ -35,7 +36,7 @@ const code = await withBrowser(
     await ui.click('Create');
     await ui.settle(600);
 
-    await ui.setFiles('input[type=file]', [AUDIO_FIXTURE]);
+    await ui.setFiles('input[type=file]', [AUDIO_FIXTURE, VIDEO_FIXTURE]);
 
     const row = await ui.until(
       `
@@ -148,13 +149,142 @@ const code = await withBrowser(
       () => String(link)
     );
 
+    // ── the same list, for something with pictures ────────────────────────────
+    // A video is two documents of one file — its frames, and the soundtrack cut from it —
+    // so this is where the two players meet. Same window arithmetic, same single player,
+    // and one thing that no unit test can see: a clip of pictures needs an element that
+    // shows pictures, and a page of controls under a black box is how that mistake looks.
+    const movie = await ui.until(
+      `
+      const row = [...document.querySelectorAll('.source')].find((r) =>
+        r.querySelector('.name')?.textContent.trim() === 'four-second.mp4');
+      if (!row) return null;
+      const badge = row.querySelector('.badge')?.textContent.trim();
+      if (badge === 'processing' || !badge) return null;
+      return { status: badge, facts: row.querySelector('.facts')?.textContent.replace(/\s+/g, ' ').trim() };
+    `,
+      200,
+      100,
+    );
+    checks.check('a video takes its row to ready', movie?.status === 'ready', JSON.stringify(movie));
+
+    await ui.eval(`
+      const row = [...document.querySelectorAll('.source')].find((r) =>
+        r.querySelector('.name')?.textContent.trim() === 'four-second.mp4');
+      row?.querySelector('button[title="See how this source was chunked"]')?.click();
+      return !!row;
+    `);
+
+    // Read by document rather than by row, because the whole point is that the two halves
+    // are listed apart and numbered apart while naming the same moments.
+    const halves = await ui.until(
+      `
+      const heads = [...document.querySelectorAll('.doc-head')];
+      const sections = heads.map((h) => {
+        const list = h.nextElementSibling;
+        return {
+          title: h.querySelector('h3')?.textContent.trim(),
+          count: list?.querySelectorAll('.clip').length ?? 0,
+          when: [...(list?.querySelectorAll('.prov span') ?? [])]
+            .map((n) => n.textContent.trim()).filter(Boolean),
+        };
+      });
+      const pictures = sections.find((s) => /pictures/.test(s.title ?? ''));
+      const sound = sections.find((s) => /soundtrack/.test(s.title ?? ''));
+      if (!pictures?.count || !sound?.count) return null;
+      return { sections, pictures, sound };
+    `,
+      200,
+      100,
+    );
+    checks.check(
+      'a video is listed as its pictures and its soundtrack, in two documents',
+      (halves?.sections ?? []).filter((s) => s.count > 0).length === 2,
+      (halves?.sections ?? []).map((s) => `${s.title}(${s.count})`).join(', ')
+    );
+    checks.check(
+      'the same moment is one window in both halves, labelled the way the player reads it',
+      (halves?.pictures?.when ?? []).some((t) => WINDOW.test(t)) &&
+        halves?.sound?.when?.[0] === halves?.pictures?.when?.[0],
+      `pictures ${(halves?.pictures?.when ?? []).join(' ')} · soundtrack ${(halves?.sound?.when ?? []).join(' ')}`
+    );
+
+    // Press a clip of the pictures: the file arrives in a video element, and the audio
+    // element the recording used is not still on the page underneath it.
+    await ui.eval(`document.querySelector('.clips .clip .play')?.click(); return true;`);
+    const watched = await ui.until(
+      `
+      const el = document.querySelector('.viewer video');
+      if (!el) return null;
+      return {
+        src: el.src || el.currentSrc || '',
+        paused: el.paused,
+        audio: document.querySelectorAll('.viewer audio').length,
+        label: document.querySelector('.player .small')?.textContent.replace(/\s+/g, ' ').trim(),
+      };
+    `,
+      60,
+      100,
+    );
+    checks.check(
+      'a clip of the pictures plays in a video element, from its own file',
+      (watched?.src ?? '').includes('/api/assets/') && watched?.paused === false && watched?.audio === 0,
+      JSON.stringify(watched)
+    );
+    checks.check(
+      'and the player says which clip of the video it is playing',
+      /clip\s+\d/.test(watched?.label ?? ''),
+      JSON.stringify(watched)
+    );
+
+    await ui.eval(`document.querySelector('.viewer [aria-label="Back to sources"]').click(); return true;`);
+    await ui.settle(300);
+    const movieLink = await ui.eval(`
+      const row = [...document.querySelectorAll('.source')].find((r) =>
+        r.querySelector('.name')?.textContent.trim() === 'four-second.mp4');
+      return row?.querySelector('a.iconlink')?.getAttribute('href') ?? null;
+    `);
+    checks.check(
+      'a video row opens a player too, rather than a download',
+      /\/api\/sources\/[0-9a-f]{6,}\/player$/.test(movieLink ?? ''),
+      () => String(movieLink)
+    );
+
+    // The clip form of a citation, on the video's own page: the element is a video, and the
+    // window in the hash is what it opens on.
+    await ui.reload(`${app.replace(/\/$/, '')}${movieLink}#t=1,3`);
+    const stage = await ui.until(
+      `
+      const el = document.querySelector('video');
+      if (!el || el.readyState === 0) return null;
+      return {
+        src: el.getAttribute('src'),
+        at: Number(el.currentTime.toFixed(2)),
+        audio: !!document.querySelector('audio'),
+        where: document.getElementById('where')?.textContent.trim(),
+      };
+    `,
+      60,
+      100,
+    );
+    checks.check(
+      'the page plays a video rather than offering to save it',
+      /\/original$/.test(stage?.src ?? '') && stage?.audio === false && (stage?.at ?? 0) >= 0.9,
+      () => JSON.stringify(stage)
+    );
+    checks.check(
+      'and it names the cited window of it',
+      /0:01–0:03/.test(stage?.where ?? ''),
+      () => String(stage?.where)
+    );
+
     // The page is a document of its own, so it gets a navigation of its own — which is
     // also exactly what an audio citation does. The clip window arrives in the hash and
     // is read before a byte of sound has been asked for.
     await ui.reload(`${app.replace(/\/$/, '')}${link}#t=0.4`);
     const player = await ui.until(
       `
-      const el = document.getElementById('play');
+      const el = document.querySelector('audio');
       if (!el || el.readyState === 0) return null;
       return {
         src: el.getAttribute('src'),

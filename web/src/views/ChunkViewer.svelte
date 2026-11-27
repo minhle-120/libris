@@ -1,9 +1,10 @@
 <script lang="ts">
+  import { tick } from 'svelte';
   import { app, chunkLoaded, closeViewer, loadMoreViewerChunks } from '../lib/store.svelte';
   import { chunksOf, repeatOf } from '../lib/chunks';
   import { formatBytes, formatSpan } from '../lib/format';
   import { assetURL } from '../lib/api';
-  import type { Segment } from '../lib/types';
+  import { hasTimeline, type Segment } from '../lib/types';
   import Button from '../lib/ui/Button.svelte';
   import Icon from '../lib/ui/Icon.svelte';
 
@@ -23,14 +24,22 @@
   const source = $derived(app.sources.find((s) => s.id === sourceId));
   const all = $derived(chunksOf(app.viewerSegments, sourceId));
   const images = $derived(all.filter((s) => s.kind === 'image'));
-  const clips = $derived(all.filter((s) => s.kind === 'audio'));
+  const clips = $derived(all.filter((s) => hasTimeline(s.kind)));
   const texts = $derived(all.filter((s) => s.kind === 'text'));
+
+  /** Two kinds of clip, or one: a video is frames and a soundtrack, and a recording is only
+   *  ever the second. They are listed apart because they are different documents of the same
+   *  file and are numbered apart, and put together the list reads as if one window were two
+   *  moments. */
+  const sounds = $derived(clips.filter((s) => s.kind === 'audio'));
+  const pictures = $derived(clips.filter((s) => s.kind === 'video'));
 
   /** A text chunk and a page raster both come from a PDF; a text file has one document, and
    *  naming it "page text" would be a lie about something nobody split into pages. */
   const textTitle = $derived(images.length ? 'page text' : 'text');
 
-  /** Where a clip sits in the recording, in the shape the player under it shows. */
+  /** Where a clip sits — in a recording, or in a video — in the shape the player under it
+   *  shows, and the shape the model reads in a citation. */
   const when = (s: Segment) =>
     s.span?.t0 === undefined ? '\u2014' : formatSpan(s.span.t0, s.span.t1);
 
@@ -122,21 +131,25 @@
    *  element costs far more to create than the row around it, and the reader hears one of
    *  them at a time. The row keeps its number and its window in the recording, and asks the
    *  player below for the sound. */
-  let playerEl = $state<HTMLAudioElement>();
+  let playerEl = $state<HTMLAudioElement | HTMLVideoElement>();
   let clip = $state<Segment | null>(null);
   let playingId = $state('');
 
   async function playClip(s: Segment) {
-    const el = playerEl;
-    if (!el || !s.asset) return;
-    if (playingId === s.id && !el.paused) {
-      el.pause();
+    if (!s.asset) return;
+    if (playingId === s.id && playerEl && !playerEl.paused) {
+      playerEl.pause();
       return;
     }
-    if (clip?.id !== s.id) {
-      clip = s;
-      el.src = assetURL(s.asset);
-    }
+    // The element a clip of a video plays in is not the element a clip of sound plays in, and
+    // it only exists once `clip` has been read by the template — so the element is looked up
+    // after the state changes rather than captured before it.
+    const fresh = clip?.id !== s.id;
+    if (fresh) clip = s;
+    await tick();
+    const el = playerEl;
+    if (!el) return;
+    if (fresh) el.src = assetURL(s.asset);
     try {
       await el.play();
     } catch {
@@ -236,13 +249,43 @@
       </ol>
     {/if}
 
-    {#if clips.length}
+    {#if pictures.length}
       <div class="doc-head">
-        <h3>clips</h3>
+        <h3>clips of the pictures</h3>
+        <span class="small">{fileCount('video')}</span>
+      </div>
+      <ul class="clips">
+        {#each pictures as s (s.id)}
+          <li class="clip">
+            <div class="cmeta">
+              <span class="ord">{ord(s)}</span>
+              <span class="prov">
+                <span>{when(s)}</span>
+                <span>{s.asset ? formatBytes(s.asset.bytes) : ''}</span>
+              </span>
+            </div>
+            {#if s.asset}
+              <!-- Same one player for the whole list, and the same reason: a media element
+                   costs far more to make than the row around it, and a reader watches one of
+                   them at a time. -->
+              <button class="play" type="button" onclick={() => playClip(s)}>
+                {playingId === s.id ? 'Pause' : 'Play'}
+              </button>
+            {:else}
+              <p class="center">No clip stored for this chunk.</p>
+            {/if}
+          </li>
+        {/each}
+      </ul>
+    {/if}
+
+    {#if sounds.length}
+      <div class="doc-head">
+        <h3>{pictures.length ? 'clips of the soundtrack' : 'clips'}</h3>
         <span class="small">{fileCount('audio')}</span>
       </div>
       <ul class="clips">
-        {#each clips as s (s.id)}
+        {#each sounds as s (s.id)}
           <li class="clip">
             <div class="cmeta">
               <span class="ord">{ord(s)}</span>
@@ -324,13 +367,23 @@
         clip {ord(clip)} · {when(clip)}
       </span>
     {/if}
-    <audio
-      bind:this={playerEl}
-      controls
-      preload="none"
-      onplay={() => (playingId = clip?.id ?? '')}
-      onpause={() => (playingId = '')}
-    ></audio>
+    {#if clip?.kind === 'video'}
+      <video
+        bind:this={playerEl}
+        controls
+        preload="none"
+        onplay={() => (playingId = clip?.id ?? '')}
+        onpause={() => (playingId = '')}
+      ></video>
+    {:else}
+      <audio
+        bind:this={playerEl}
+        controls
+        preload="none"
+        onplay={() => (playingId = clip?.id ?? '')}
+        onpause={() => (playingId = '')}
+      ></audio>
+    {/if}
   </div>
 </section>
 
@@ -511,6 +564,15 @@
     flex: 1;
     min-width: 0;
     height: 32px;
+  }
+
+  /* A clip of a video is watched rather than heard, so it is given the width of the column
+     and a height worth seeing, instead of the height of a control bar. */
+  .player video {
+    flex: 1;
+    min-width: 0;
+    max-height: 45vh;
+    background: #000;
   }
 
   .tiles {

@@ -229,16 +229,40 @@ func Order(evidence []Evidence) []Evidence {
 // same gap the chunks have from each other.
 const ChunkSeparator = "\n\n"
 
-// clipsPerPrompt bounds how much of a recording one model call is given, counted in clips.
+// clipBudget bounds how much media of each kind one model call is given, counted in clips.
 //
-// A clip costs 25.4 prompt tokens a second, and the server spends about 0.14 s decoding each
-// 15-second one, so ten clips — which is exactly what a top-k of 10 will hand back for a
-// notebook of recordings — is four thousand tokens of audio and a second and a half spent
-// before the model has read a word. What gets dropped is the tail of retrieval's own ranking,
-// so it is the least likely to have been quoted anyway. Its label stays in the prompt: the
-// model learns the recording goes on, rather than concluding the clip it was shown is all
+// A clip of a recording costs 25.4 prompt tokens a second, and the server spends about 0.14 s
+// decoding each 15-second one, so ten clips — which is exactly what a top-k of 10 will hand
+// back for a notebook of recordings — is four thousand tokens of audio and a second and a half
+// spent before the model has read a word. What gets dropped is the tail of retrieval's own
+// ranking, so it is the least likely to have been quoted anyway. Its label stays in the prompt:
+// the model learns the recording goes on, rather than concluding the clip it was shown is all
 // there is.
-const clipsPerPrompt = 3
+//
+// A clip of a video is a different size of thing, and the number for it is smaller rather than
+// larger: 107 tokens a frame at one frame a second, so three windows of 15 seconds is about
+// 4,900 tokens and 45 frames in one call. Measured on the shipped chat model, that is already
+// where content starts getting lost — two clips of a sentence in the pictures returned only
+// what the first clip quoted, and three is past where the model enumerates what it was given at
+// all. So video gets one, which is the smallest number the measurements support rather than one
+// anybody would choose: a question about a video is a question about one moment of it.
+//
+// A kind missing from this map is uncapped, which is what an image is: the answer to a question
+// about a page is not the second page.
+var clipBudget = map[llm.MediaKind]int{
+	llm.MediaAudio: 3,
+	llm.MediaVideo: 1,
+}
+
+// shownVerb is the verb a clipped kind is refused with, in the sentence the model reads. A
+// recording is played and a moving picture is shown, and the sentence is the only thing telling
+// the model what it did not get.
+func shownVerb(kind llm.MediaKind) string {
+	if kind == llm.MediaAudio {
+		return "played"
+	}
+	return "shown"
+}
 
 // Render turns evidence into the content a model is shown. Both consumers are built
 // here — the research turn's tool result and the answer's knowledge block — and that
@@ -271,7 +295,9 @@ func (r *Retriever) Render(evidence []Evidence) ([]llm.ContentPart, error) {
 	}
 
 	parts := make([]llm.ContentPart, 0, 2*len(evidence))
-	played := 0
+	// Counted per kind, because the budgets are per kind and a prompt holding three
+	// recordings has not shown the model a single picture.
+	shown := map[llm.MediaKind]int{}
 	for i, e := range evidence {
 		if i > 0 {
 			parts = append(parts, llm.TextPart(ChunkSeparator))
@@ -280,12 +306,14 @@ func (r *Retriever) Render(evidence []Evidence) ([]llm.ContentPart, error) {
 		case e.Segment.Kind == domain.KindText || e.Segment.Asset == nil:
 			parts = append(parts, llm.TextPart(label(e)+"\n"+e.Segment.Text))
 		default:
-			made, given, err := r.mediaPart(e, played)
+			made, given, err := r.mediaPart(e, shown)
 			if err != nil {
 				return nil, err
 			}
-			if given && e.Segment.Kind == domain.KindAudio {
-				played++
+			if given {
+				if kind, _, ok := index.MediaForm(e.Segment.Kind); ok {
+					shown[kind]++
+				}
 			}
 			parts = append(parts, made...)
 		}
@@ -327,10 +355,10 @@ func (r *Retriever) canShow(evidence []Evidence) error {
 // mediaPart is one evidence row's media, or the sentence explaining why the model is not
 // getting it.
 //
-// It takes how many clips have already gone out, and answers whether this one did, because
-// the clip budget is a property of the rendered set and this is the only place that knows
-// which set a row is being rendered into.
-func (r *Retriever) mediaPart(e Evidence, played int) (parts []llm.ContentPart, given bool, err error) {
+// It takes how many clips of each kind have already gone out, and answers whether this one did,
+// because the clip budget is a property of the rendered set and this is the only place that
+// knows which set a row is being rendered into.
+func (r *Retriever) mediaPart(e Evidence, shown map[llm.MediaKind]int) (parts []llm.ContentPart, given bool, err error) {
 	if r.assets == nil {
 		return []llm.ContentPart{llm.TextPart(label(e) +
 			"\n(" + string(e.Segment.Kind) + " itself is not available to this model)")}, false, nil
@@ -339,10 +367,10 @@ func (r *Retriever) mediaPart(e Evidence, played int) (parts []llm.ContentPart, 
 	if !ok {
 		return nil, false, fmt.Errorf("retrieve: no wire shape for segment kind %q", e.Segment.Kind)
 	}
-	if kind == llm.MediaAudio && played >= clipsPerPrompt {
+	if limit, capped := clipBudget[kind]; capped && shown[kind] >= limit {
 		return []llm.ContentPart{llm.TextPart(label(e) + fmt.Sprintf(
-			"\n(%s is not played to you this turn; this prompt already holds %d of them)",
-			string(e.Segment.Kind), clipsPerPrompt))}, false, nil
+			"\n(%s is not %s to you this turn; this prompt already holds %d of them)",
+			string(e.Segment.Kind), shownVerb(kind), limit))}, false, nil
 	}
 
 	raw, err := r.assets.Read(*e.Segment.Asset)
@@ -365,11 +393,15 @@ func (r *Retriever) mediaPart(e Evidence, played int) (parts []llm.ContentPart, 
 // answers the question — the pixels are the content, and the only thing a label can
 // point at is where they came from.
 //
-// A clip's label carries its window in the recording for the same reason, and a second
-// one: a clip has no words, so the span is the only thing about it that can match the
-// question. It also has to sit in the text directly above its own media part, because
-// position is the only pairing the server keeps between a name and a payload — measured
-// with four clips and four names in one text blob, which mis-assigned one of them.
+// A clip's label carries its window — in a recording, or in a video, which is the same kind of
+// moment — for the same reason, and a second one: a clip has no words, so the span is the only
+// thing about it that can match the question. It also has to sit in the text directly above its
+// own media part, because position is the only pairing the server keeps between a name and a
+// payload — measured with four clips and four names in one text blob, which mis-assigned one of
+// them. Video makes that pairing weaker rather than stronger: a clip of sound is one continuous
+// thing, while a clip of pictures is a dozen images with the server's own timestamps woven
+// between them, and those timestamps were read back as clip boundaries. The label still goes
+// directly above the part it names, which is the only place it can.
 func label(e Evidence) string {
 	if e.Segment.Kind == domain.KindText {
 		return fmt.Sprintf("[[Chunk %d]]", e.Index)
@@ -379,7 +411,7 @@ func label(e Evidence) string {
 		page = fmt.Sprintf(" page %d", e.Segment.Span.Page)
 	}
 	span := ""
-	if e.Segment.Kind == domain.KindAudio {
+	if e.Segment.Kind == domain.KindAudio || e.Segment.Kind == domain.KindVideo {
 		span = " " + clock(e.Segment.Span.T0) + "–" + clock(e.Segment.Span.T1)
 	}
 	return fmt.Sprintf("[[Chunk %d]] %s%s — %s%s", e.Index, e.SourceName, page, e.Segment.Kind, span)

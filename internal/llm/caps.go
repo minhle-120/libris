@@ -29,9 +29,11 @@ import (
 // lets a server that cannot take it answer with its own error — the honest outcome
 // for a server libris does not manage, where /props may not exist at all.
 //
-// Audio is a modality libris sends and asks about: a clip reaches the answering model
-// only when the server says its own projector decodes sound. Video is the engine's
-// account of itself and nothing else — there is still no wire shape for it.
+// Audio and video are modalities libris sends and asks about: a clip reaches the
+// answering model only when the server says its own projector decodes it. The two
+// together are worth reading, because llama.cpp reports them together — the capability
+// is compiled from one build flag — so "vision yes, video no" is a sentence about the
+// binary somebody downloaded, not about the model sitting behind it.
 type Caps struct {
 	// Model is the alias the server reports itself under, so an error about a
 	// missing modality can name the thing to go and change.
@@ -54,6 +56,8 @@ func (c *Caps) Allows(kind MediaKind) bool {
 		return c.Vision
 	case MediaAudio:
 		return c.Audio
+	case MediaVideo:
+		return c.Video
 	}
 	return false
 }

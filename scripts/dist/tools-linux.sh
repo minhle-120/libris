@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Gathers the programs libris runs — pdftotext and pdftoppm to read a PDF, ffmpeg to read a
-# recording — together with everything those programs need, into one folder that travels beside
-# the libris executable.
+# Gathers the programs libris runs — pdftotext and pdftoppm to read a PDF, ffmpeg and ffprobe
+# to read anything with a window in it — together with everything those programs need, into one
+# folder that travels beside the libris executable.
 #
 # It runs inside the base image named by the caller, not on the machine that calls it, and
 # that image is the whole portability promise: the C library of the image the tools were
@@ -47,7 +47,11 @@ mkdir -p "$out/lib" "$out/fonts" "$out/fonts-conf"
 # tens of megabytes of codecs libris never asks for: it decodes what a person recorded, and
 # today that means PCM, Vorbis, Opus, FLAC and AAC. A build cut to those decoders is the way to
 # shrink it, and it is a build step this pipeline does not take yet.
-for prog in pdftotext pdftoppm ffmpeg; do
+# ffprobe travels with ffmpeg rather than behind it. A video is cut by one program and measured
+# by the other, and the model server that decodes those clips for the model looks for both in
+# this one folder (the engine's video-ffmpeg-dir), so a bundle holding half the pair is a bundle
+# whose video modality fails in two places at once.
+for prog in pdftotext pdftoppm ffmpeg ffprobe; do
   cp -L "$(command -v "$prog")" "$out/$prog"
 done
 
@@ -71,7 +75,7 @@ copy_deps() {
     done
 }
 
-for prog in pdftotext pdftoppm ffmpeg; do copy_deps "$out/$prog"; done
+for prog in pdftotext pdftoppm ffmpeg ffprobe; do copy_deps "$out/$prog"; done
 
 # Fonts, and a fontconfig file that looks only at the bundle — so a machine with no fonts
 # and a machine with four hundred of them render the same page. The paths are relative,

@@ -134,6 +134,17 @@ type Model struct {
 // ingest will ever cut, since the setting tops out at 60 s — and a page raster costs about
 // 1120 of them. -b, the batch size the second message names first, is the wrong knob: it is how
 // much the server runs at once, and a single input has to fit inside one ubatch.
+//
+// A clip of a video is the third input this has to hold, and the one the number is tightest
+// for: 107 tokens a frame at 640 across, so forty frames is the most one input can be, which is
+// why ingest refuses a window over 30 seconds rather than letting the server find out. The
+// refusal this produces when the arithmetic is wrong is the worst-worded of the three, because
+// it names a number that is not in force — measured with the flag off:
+// `input (6482 tokens) is too large to process. increase the physical batch size (current batch
+// size: 2048)`, from a server started with ubatch 4096. --video-fps is the flag a reader reaches
+// for after that sentence, and it does not cap anything: measured at a target of 100 frames a
+// second, a 15-second clip of 1-frame-a-second footage became 1,500 frames and 169,642 tokens.
+// -ub remains the only knob that fits a bigger input.
 const ubatchSize = 4096
 
 const (
@@ -188,6 +199,13 @@ type ServeOptions struct {
 	Port   int
 	Preset string
 	Log    string
+
+	// VideoFFmpegDir is the folder the router should look in for ffmpeg and ffprobe, which it
+	// needs to decode a clip of a video. Empty tells the router to search PATH, which is what
+	// it does for a libris built from source on a machine whose programs came from a package
+	// manager. tools.Resolver answers it, because that is the package that knows whether this
+	// install brought its own programs.
+	VideoFFmpegDir string
 
 	// ModelsMax caps how many model instances the router keeps resident. Two, which is one fewer
 	// than the preset declares: the chat model and one embedder fit together, and the third
@@ -342,7 +360,7 @@ func (s *Supervisor) Start(ctx context.Context, o ServeOptions, models []Model) 
 	// The file the router reads is rewritten now, from what libris derives about the models and
 	// the device, and what this reports afterwards is the file's own answer read back — not the
 	// derivation. Why every start writes is refreshPreset's comment.
-	have, err := refreshPreset(o.Preset, o.Device, models)
+	have, err := refreshPreset(o.Preset, o.Device, o.VideoFFmpegDir, models)
 	if err != nil {
 		return Serving{}, err
 	}

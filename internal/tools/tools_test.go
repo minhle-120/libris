@@ -187,6 +187,29 @@ func TestEnvLeavesAMachineOwnProgramAlone(t *testing.T) {
 	}
 }
 
+// What a person is shown, and what a release bundle is checked against, come out of the same
+// list. A program missing from it is invisible twice over: no row on the settings page says it
+// is absent, and a bundle that forgot it passes the release check that reads this list.
+// ffprobe is the one that can go missing quietly — a recording needs only ffmpeg, so every
+// audio test stays green while video fails in two places at once.
+func TestEveryProgramSomeoneMightHaveToInstallIsNamed(t *testing.T) {
+	names := map[string]bool{}
+	for _, p := range inOrder(t.TempDir(), OriginPath).All() {
+		if p.Name == "" {
+			t.Fatal("a program with no name cannot be named in a finding")
+		}
+		if names[p.Name] {
+			t.Errorf("%s is listed twice", p.Name)
+		}
+		names[p.Name] = true
+	}
+	for _, want := range []string{"pdftotext", "pdftoppm", "ffmpeg", "ffprobe"} {
+		if !names[want] {
+			t.Errorf("All() does not name %s", want)
+		}
+	}
+}
+
 func countPrefix(env []string, prefix string) int {
 	n := 0
 	for _, kv := range env {

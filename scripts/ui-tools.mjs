@@ -5,13 +5,20 @@
 // folder. Those two facts together are the whole difference between "install it" and "the
 // folder came with libris", and no other harness can make them both true.
 //
-// Two kinds of file, because the sentence is per program and the two come off different
-// stages: a PDF names pdftotext and pdftoppm, a recording names ffmpeg. A machine whose tools
-// folder got left behind when libris was moved is told about both, in the same shape.
+// Three kinds of file, because the sentence is per program and they come off different
+// stages: a PDF names pdftotext and pdftoppm, a recording names ffmpeg, a video names ffmpeg
+// and ffprobe. A machine whose tools folder got left behind when libris was moved is told
+// about all of them, in the same shape.
 //
 // EXPECT=bundle asserts the second sentence; EXPECT=install the first.
 import { mkdtempSync } from "node:fs";
-import { Checks, withBrowser, UPLOAD_FIXTURE, AUDIO_FIXTURE } from "./cdp.mjs";
+import {
+  Checks,
+  withBrowser,
+  UPLOAD_FIXTURE,
+  AUDIO_FIXTURE,
+  VIDEO_FIXTURE,
+} from "./cdp.mjs";
 
 const app = process.env.APP ?? "http://127.0.0.1:8080/";
 const expect = process.env.EXPECT ?? "bundle";
@@ -38,7 +45,7 @@ const code = await withBrowser(
 
     // Two files in one drop. Not a shortcut: a queue that drains only its first entry looks
     // fine on a single upload, and this is the check that would notice.
-    await ui.setFiles("input[type=file]", [UPLOAD_FIXTURE, AUDIO_FIXTURE]);
+    await ui.setFiles("input[type=file]", [UPLOAD_FIXTURE, AUDIO_FIXTURE, VIDEO_FIXTURE]);
 
     const rowFor = (name) =>
       ui.until(
@@ -92,6 +99,27 @@ const code = await withBrowser(
     const saidFFmpeg = clip?.findings.join(" | ") ?? "";
     checks.check("the recording names ffmpeg", /ffmpeg/.test(saidFFmpeg), saidFFmpeg);
 
+    // A video names the pair, because it needs the pair: one program cuts its clips, the
+    // other says how long the file is first. A row that names only ffmpeg is a bundle that
+    // ships half a modality, which is the failure this harness exists to catch.
+    const movie = await rowFor("four-second.mp4");
+    checks.check(
+      "a video with no way to cut it is unsupported, not empty",
+      movie?.status === "unsupported",
+      `status=${movie?.status}`,
+    );
+    checks.check(
+      "and that row blames the machine too, naming both programs",
+      /no ffmpeg and ffprobe/i.test(movie?.detail ?? ""),
+      movie?.detail,
+    );
+    const saidPair = movie?.findings.join(" | ") ?? "";
+    checks.check(
+      "the video names ffmpeg and ffprobe",
+      /ffmpeg/.test(saidPair) && /ffprobe/.test(saidPair),
+      saidPair,
+    );
+
     // Which sentence is right is a fact about the machine, not about the file, so a
     // recording's row that contradicts the PDF's row is a bug whichever of them is wrong.
     const saysOrigin = (text) =>
@@ -119,6 +147,11 @@ const code = await withBrowser(
       `the recording's row says the same thing about this machine (${expect})`,
       saysOrigin(saidFFmpeg),
       saidFFmpeg,
+    );
+    checks.check(
+      `the video's row says the same thing about this machine (${expect})`,
+      saysOrigin(saidPair),
+      saidPair,
     );
   },
 );

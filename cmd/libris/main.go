@@ -192,7 +192,7 @@ func main() {
 		// The programs are resolved here rather than captured, so the next upload sees this
 		// folder as it is now.
 		Processor: func(cfg config.Config, sink ingest.Sink) (app.Ingestor, error) {
-			return ingest.New(cfg, sink, programs.PDF(), programs.Audio())
+			return ingest.New(cfg, sink, programs.PDF(), programs.Audio(), programs.Video())
 		},
 		// Likewise the embedder: a job embeds against the server configured when
 		// that job ran, not the one that was set when libris booted.

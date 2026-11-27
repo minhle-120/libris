@@ -22,7 +22,7 @@ import (
 // change — it is a switch back to the thing leaving it out exists to avoid.
 func TestPresetWritesNoSlotCount(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "libris.ini")
-	if err := engine.Preset(path, "", []engine.Model{
+	if err := engine.Preset(path, "", "", []engine.Model{
 		{Alias: engine.AliasEmbed, Kind: engine.KindEmbed, Path: "/m/emb.gguf"},
 	}); err != nil {
 		t.Fatal(err)
@@ -48,7 +48,7 @@ func TestPresetWritesNoSlotCount(t *testing.T) {
 // next time it starts, with nothing for anybody to change.
 func TestPresetWritesTheUBatchThatHoldsMedia(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "libris.ini")
-	if err := engine.Preset(path, "", []engine.Model{
+	if err := engine.Preset(path, "", "", []engine.Model{
 		{Alias: engine.AliasChat, Kind: engine.KindChat, Path: "/m/chat.gguf"},
 		{Alias: engine.AliasEmbed, Kind: engine.KindEmbed, Path: "/m/emb.gguf"},
 	}); err != nil {
@@ -72,9 +72,61 @@ func TestPresetWritesTheUBatchThatHoldsMedia(t *testing.T) {
 	}
 }
 
+// A clip of a video is decoded by the server, not by libris, and both ends have to be told the
+// same thing: how many frames a second of footage is, and where the programs that decode it
+// live. Neither is left to a default. llama.cpp samples video at 4 frames a second, which turns
+// a 15-second window into 60 frames and an input the server refuses; and it finds ffmpeg through
+// PATH, which is where a downloaded libris's ffmpeg is not.
+func TestPresetWritesTheVideoRule(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "libris.ini")
+	if err := engine.Preset(path, "", "/opt/libris/tools", []engine.Model{
+		{Alias: engine.AliasChat, Kind: engine.KindChat, Path: "/m/chat.gguf"},
+		{Alias: engine.AliasEmbed, Kind: engine.KindEmbed, Path: "/m/emb.gguf"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(raw)
+
+	globals, _, _ := strings.Cut(got, "\n[chat]")
+	if !strings.Contains(globals, "video-fps = 1") {
+		t.Errorf("the globals do not say what a clip of a video is sampled at:\n%s", globals)
+	}
+	if !strings.Contains(globals, "video-ffmpeg-dir = /opt/libris/tools") {
+		t.Errorf("the globals do not say where the decoders are:\n%s", globals)
+	}
+	for _, key := range []string{"video-fps", "video-ffmpeg-dir"} {
+		if n := strings.Count(got, key); n != 1 {
+			t.Errorf("%s appears %d times, want once in the globals", key, n)
+		}
+	}
+}
+
+// A build that carried no folder of programs must not name one. The router would then look for
+// ffmpeg in a directory that does not exist instead of in PATH, where the machine's ffmpeg
+// actually is — so the absent key is the working answer.
+func TestPresetNamesNoFFmpegFolderWhenThereIsNone(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "libris.ini")
+	if err := engine.Preset(path, "", "", []engine.Model{
+		{Alias: engine.AliasChat, Kind: engine.KindChat, Path: "/m/chat.gguf"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "video-ffmpeg-dir") {
+		t.Errorf("the preset names a folder this install does not have:\n%s", raw)
+	}
+}
+
 func TestPresetWritesOneSectionPerModel(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "libris.ini")
-	err := engine.Preset(path, "", []engine.Model{
+	err := engine.Preset(path, "", "", []engine.Model{
 		{Alias: engine.AliasChat, Kind: engine.KindChat, Path: "/m/chat.gguf", MMProj: "/m/mmproj.gguf"},
 		{Alias: engine.AliasEmbed, Kind: engine.KindEmbed, Path: "/m/emb.gguf"},
 	})
@@ -189,7 +241,7 @@ func TestPresetNamesOnlyTheDeviceItWasGiven(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "libris.ini")
 	models := []engine.Model{{Alias: engine.AliasChat, Kind: engine.KindChat, Path: "/m/c.gguf"}}
 
-	if err := engine.Preset(path, "Vulkan1", models); err != nil {
+	if err := engine.Preset(path, "Vulkan1", "", models); err != nil {
 		t.Fatal(err)
 	}
 	raw, _ := os.ReadFile(path)
@@ -197,7 +249,7 @@ func TestPresetNamesOnlyTheDeviceItWasGiven(t *testing.T) {
 		t.Errorf("the chosen device is not in the preset:\n%s", raw)
 	}
 	// CPU-only is llama.cpp's own word, not "CPU": a reported CPU row is not a device name.
-	if err := engine.Preset(path, "none", models); err != nil {
+	if err := engine.Preset(path, "none", "", models); err != nil {
 		t.Fatal(err)
 	}
 	raw, _ = os.ReadFile(path)
@@ -215,7 +267,7 @@ func TestReadPresetRoundTripsTheFileItWrote(t *testing.T) {
 		{Alias: engine.AliasChat, Kind: engine.KindChat, Path: "/m/chat.gguf", MMProj: "/m/mmproj.gguf"},
 		{Alias: engine.AliasEmbed, Kind: engine.KindEmbed, Path: "/m/emb.gguf", MMProj: "/m/emb-mmproj.gguf"},
 	}
-	if err := engine.Preset(path, "Vulkan0", want); err != nil {
+	if err := engine.Preset(path, "Vulkan0", "", want); err != nil {
 		t.Fatal(err)
 	}
 

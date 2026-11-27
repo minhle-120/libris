@@ -15,6 +15,7 @@ export type IconName =
   | 'file'
   | 'image'
   | 'audio'
+  | 'video'
   | 'trash'
   | 'x'
   | 'alert'
@@ -48,6 +49,9 @@ export const ICON_PATHS: Record<IconName, string> = {
   // A recording is a waveform, not a musical note: what a reader is looking for in the list is
   // the thing they spoke, and a note says "song".
   audio: 'M2 6.5v3M5 4.5v7M8 2.5v11M11 5.5v5M14 7.2v1.6',
+  // A frame with something playing inside it: the shape says moving picture, and the
+  // triangle says it is a thing that runs rather than a thing that is looked at.
+  video: 'M2.5 4h11v8h-11ZM6.8 6.1l3.6 1.9-3.6 1.9Z',
   image: 'M2.5 3.5h11v9h-11ZM2.5 10l3-3 2.5 2.5L11 6l2.5 3M5.8 6.2a.8.8 0 1 0 0-1.6.8.8 0 0 0 0 1.6Z',
   trash: 'M3.5 4.5h9M6.5 4.5V3h3v1.5M5 4.5l.5 9h5l.5-9M7 7v4M9 7v4',
   x: 'M4 4l8 8M12 4l-8 8',

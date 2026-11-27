@@ -869,6 +869,9 @@ func (h *Host) EngineServeStart(ctx context.Context) (engine.Serving, error) {
 		Preset: h.presetPath,
 		Log:    filepath.Join(h.engine.Dir(), "logs", "server.log"),
 		Device: device,
+		// The router decodes a clip of a video with the same two programs libris cut it with —
+		// which, in a downloaded install, are not on PATH.
+		VideoFFmpegDir: h.programs.VideoFFmpegDir(),
 	}, specs)
 	if err != nil {
 		h.log.Warn("engine serve", "err", err)

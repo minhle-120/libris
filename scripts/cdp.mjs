@@ -270,3 +270,8 @@ export const UPLOAD_FIXTURE =
 // second of samples. Harnesses that only need a file ingest will call a recording use this.
 export const AUDIO_FIXTURE =
   process.env.AUDIO_FIXTURE ?? join(dirname(fileURLToPath(import.meta.url)), 'testdata', 'one-second.wav');
+
+/** Four seconds of a test pattern with a tone under it: pictures and a soundtrack, so a
+ * video's two halves are both there to be missed. Generated, never filmed. */
+export const VIDEO_FIXTURE =
+  process.env.VIDEO_FIXTURE ?? join(dirname(fileURLToPath(import.meta.url)), 'testdata', 'four-second.mp4');
