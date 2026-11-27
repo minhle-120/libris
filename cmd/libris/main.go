@@ -201,6 +201,9 @@ func main() {
 		// cache as the embedder itself, so the release cannot be aimed at a router a settings
 		// change has already moved away from.
 		ReleaseEmbedder: embedderReleaser(&clients, settings),
+		// And the same exchange in the other direction, before a file is read: the answering model
+		// leaves the card so the ingest of this one has room on it.
+		RoomForIngest: ingestRoomFor(&clients, settings),
 		// The answer path. Chats and Search are the same database the sources live
 		// in — one process owns the directory — and the models are resolved per
 		// question for the same reason the embedder is.

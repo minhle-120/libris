@@ -94,7 +94,8 @@ func TestAnUploadThatEndsHandsTheDeviceBack(t *testing.T) {
 			releaseCtx = ctx
 			fires.Add(1)
 			return nil
-		})
+		},
+		nil)
 
 	nb, err := svc.CreateNotebook(context.Background(), "Quantum")
 	if err != nil {

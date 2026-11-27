@@ -1,10 +1,16 @@
 package main
 
 import (
+	"context"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 
 	"libris/internal/config"
+	"libris/internal/engine"
 )
 
 func settings(chat, embed string, timeout int) config.Config {
@@ -116,4 +122,103 @@ func TestClientCacheIsSafeForConcurrentJobs(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// fixedConfig is the settings page as this file sees it: the values in force, on demand.
+type fixedConfig config.Config
+
+func (f fixedConfig) Get() config.Config { return config.Config(f) }
+
+// Both halves of the memory arrangement ask the same question first, because the wire refuses
+// "stop the thing that is already stopped" with an error: a job that opens by making room would
+// otherwise log a refusal about a model that was never loaded.
+func TestRoomForIngestUnloadsTheChatModelAndOnlyIt(t *testing.T) {
+	var mu sync.Mutex
+	var seen []string
+	router := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		seen = append(seen, r.Method+" "+r.URL.Path+" "+string(body))
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/models":
+			io.WriteString(w, `{"data":[`+
+				`{"id":"libris-chat","status":{"value":"loaded"}},`+
+				`{"id":"libris-embed","status":{"value":"loading"}}]}`)
+		case "/models/unload":
+			io.WriteString(w, `{"success":true}`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer router.Close()
+
+	port := router.Listener.Addr().(*net.TCPAddr).Port
+	clients := &clientCache{server: fakeRouter{engine.Serving{Running: true, Port: port}}}
+
+	if err := ingestRoomFor(clients, fixedConfig(config.Default()))(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	want := `POST /models/unload {"model":"libris-chat"}`
+	if len(seen) != 2 || seen[0] != "GET /models " || seen[1] != want {
+		t.Errorf("the router saw %v, want a list and then %q", seen, want)
+	}
+}
+
+// A chat model that is not resident is the normal state, not a problem: the router loads it on the
+// request that names it, so most uploads ask a question and are told nothing to do.
+func TestRoomForIngestSaysNothingAboutAModelThatIsNotUp(t *testing.T) {
+	var mu sync.Mutex
+	var seen []string
+	router := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, r.Method+" "+r.URL.Path)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"data":[{"id":"libris-chat","status":{"value":"unloaded"}}]}`)
+	}))
+	defer router.Close()
+
+	port := router.Listener.Addr().(*net.TCPAddr).Port
+	clients := &clientCache{server: fakeRouter{engine.Serving{Running: true, Port: port}}}
+
+	if err := ingestRoomFor(clients, fixedConfig(config.Default()))(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) != 1 || seen[0] != "GET /models" {
+		t.Errorf("the router saw %v, want the list alone", seen)
+	}
+}
+
+// An address a person typed is somebody else's process. Making their answering model get out of
+// the way is not a thing this app does to a server it does not run.
+func TestRoomForIngestDoesNotTouchAServerLibrisDoesNotRun(t *testing.T) {
+	var mu sync.Mutex
+	var hits int
+	router := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		hits++
+		mu.Unlock()
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer router.Close()
+
+	cfg := settings(router.URL, router.URL, 5)
+	clients := &clientCache{}
+
+	if err := ingestRoomFor(clients, fixedConfig(cfg))(context.Background()); err != nil {
+		t.Fatalf("external mode should answer that there is nobody to ask, got %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if hits != 0 {
+		t.Errorf("%d requests to a server libris does not run", hits)
+	}
 }

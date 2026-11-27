@@ -240,14 +240,14 @@ func testServiceWith(t *testing.T, proc Ingestor, emb Embedder) (*Service, *sqli
 // their own EmbedderFor.
 func testServiceWired(t *testing.T, proc Ingestor, factory EmbedderFor) (*Service, *sqlite.DB, string) {
 	t.Helper()
-	return wiredService(t, proc, factory, nil)
+	return wiredService(t, proc, factory, nil, nil)
 }
 
-// wiredService is testServiceWired with one more knob: what the app is told to do when the
-// uploads stop. Only the idle-release tests want it, and every other test should keep getting nil
-// — a test service with a release hook would be a test service doing something its author did not
-// ask for.
-func wiredService(t *testing.T, proc Ingestor, factory EmbedderFor, release func(context.Context) error) (*Service, *sqlite.DB, string) {
+// wiredService is testServiceWired with the two memory knobs: what the app is told to do when the
+// uploads stop, and what it asks before a job starts. Only those tests want them, and every other
+// test should keep getting nil — a test service with a hook in it would be a test service doing
+// something its author did not ask for.
+func wiredService(t *testing.T, proc Ingestor, factory EmbedderFor, release, room func(context.Context) error) (*Service, *sqlite.DB, string) {
 	t.Helper()
 
 	dir := t.TempDir()
@@ -268,6 +268,7 @@ func wiredService(t *testing.T, proc Ingestor, factory EmbedderFor, release func
 		// The app hands a context in, so the hook is checked at compile time against the
 		// signature the worker calls. A test's hook that ignored it would pass.
 		ReleaseEmbedder: release,
+		RoomForIngest:   room,
 		Originals:       filepath.Join(dir, "originals"),
 		Assets:          filepath.Join(dir, "assets"),
 	})

@@ -78,16 +78,35 @@ type settingsSource interface {
 // embedderReleaser is what the app calls when the uploads stop: a chance for the model server to
 // give back what the embedding model was holding on the card, which is the memory a question's
 // own model would rather have.
+func embedderReleaser(clients *clientCache, settings settingsSource) func(context.Context) error {
+	return modelReleaser(clients, settings, string(engine.AliasEmbed))
+}
+
+// ingestRoomFor is what the app asks before it starts reading a file: the model that answers
+// questions is off the card, so the ffmpeg, poppler and embedding passes that are about to run
+// have somewhere to go.
+//
+// It is the same exchange as the release after the uploads stop, aimed at the other model, and
+// the two together are what keep one machine's memory moving to where the work is: the answering
+// model out of the way while a file is being read, and the embedding model out of the way once
+// nothing is being read. Nothing reloads either one — the router loads a model on the request
+// that names it — so what this buys is memory and what it costs is the first answer after an
+// upload, which pays for the load it would not otherwise have paid for.
+func ingestRoomFor(clients *clientCache, settings settingsSource) func(context.Context) error {
+	return modelReleaser(clients, settings, string(engine.AliasChat))
+}
+
+// modelReleaser is that exchange for one named model: look, then stop it if it is up.
 //
 // It asks before it tells. The router is asked what is resident, and the unload is sent only for
 // an instance that is actually up — because "stop the thing that is already stopped" is an error
-// at the wire, and an idle machine that empties its queue every hour would fill its log with a
-// message about a model that was never loaded.
+// at the wire, and a job that starts by making room would otherwise log a message about a model
+// that was never loaded.
 //
 // External mode does nothing at all. An address a person typed is somebody else's process, and
 // putting one of their models to sleep is not a thing this app should do to a server it does not
 // run.
-func embedderReleaser(clients *clientCache, settings settingsSource) func(context.Context) error {
+func modelReleaser(clients *clientCache, settings settingsSource, name string) func(context.Context) error {
 	return func(ctx context.Context) error {
 		cfg := settings.Get()
 		if cfg.EngineMode != config.EngineManaged {
@@ -106,7 +125,6 @@ func embedderReleaser(clients *clientCache, settings settingsSource) func(contex
 			return err
 		}
 
-		name := string(engine.AliasEmbed)
 		residents, err := client.RouterModels(ctx)
 		if err != nil {
 			return err

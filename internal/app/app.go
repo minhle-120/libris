@@ -166,6 +166,18 @@ type Options struct {
 	// started is not ours to put to sleep.
 	ReleaseEmbedder func(ctx context.Context) error
 
+	// RoomForIngest is optional, and it is ReleaseEmbedder's mirror: it tells the program that
+	// runs the model server that an upload is about to want the card, and it may give back what
+	// the model that answers questions is holding. The two want the same memory, and a file that
+	// is being read cannot use what an idle answer is keeping warm.
+	//
+	// The worker calls it before a job touches the file, and the request that queued the job
+	// never does — an upload's answer in the browser should not wait on a request to another
+	// process. It is asked and not demanded: a refusal is a Warn and the job runs anyway, because
+	// the alternative is refusing somebody's file over a memory arrangement that is only a
+	// convenience. Nil means there is nobody to ask, which is what external mode is.
+	RoomForIngest func(ctx context.Context) error
+
 	// Chats, Models and Search are the answer path. All three are optional: a
 	// Service wired for ingest alone is a legitimate build, and Ask says plainly
 	// that this build cannot answer rather than failing somewhere underneath.
@@ -207,6 +219,7 @@ type Service struct {
 	work   work
 
 	release func(ctx context.Context) error
+	room    func(ctx context.Context) error
 	// idle is guarded by idleMu because it is written by the worker and cleared by the goroutine
 	// the timer fires its callback in — the one place in this file where two goroutines own a
 	// field, and the reason for the lock rather than a comment saying "only the worker touches
@@ -245,6 +258,7 @@ func New(opts Options) (*Service, error) {
 		processor: opts.Processor,
 		embedder:  opts.Embedder,
 		release:   opts.ReleaseEmbedder,
+		room:      opts.RoomForIngest,
 		chats:     opts.Chats,
 		models:    opts.Models,
 		search:    opts.Search,
@@ -767,6 +781,7 @@ func (s *Service) worker() {
 			runCtx, stopRun := context.WithCancel(s.jobCtx)
 			r.cancel = stopRun
 			s.begin(j.sourceID, r)
+			s.makeRoom(runCtx)
 
 			ctx, cancel := context.WithTimeout(runCtx, jobTimeout)
 			s.ingest(ctx, j.sourceID, r, j.resume)
@@ -776,6 +791,34 @@ func (s *Service) worker() {
 
 			s.armIdleRelease()
 		}
+	}
+}
+
+// roomTimeout bounds the ask below, and it is short because what it asks for is a courtesy: a
+// router that has stopped answering is a reason to start the job without the memory, not a
+// reason to hold every upload behind it. It is far longer than a loopback round trip and far
+// shorter than loading a model — which is the work the ask is trying to make room for.
+const roomTimeout = 10 * time.Second
+
+// makeRoom asks whoever runs the model server to put the answering model down, before this job's
+// ffmpeg, poppler and embedding passes want the device it is sitting on.
+//
+// Unlike the idle release, this waits. The answer to the ask is the memory the job is about to
+// use, so a worker that fired it off and moved on would start decoding before the device had been
+// handed back — and the drain the router performs is the point of doing it here rather than after.
+//
+// Once per job, not once per upload batch: the first job frees the model, and every job after it
+// finds it already down and asks only the cheap question of whether that is still true.
+func (s *Service) makeRoom(ctx context.Context) {
+	if s.room == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, roomTimeout)
+	defer cancel()
+	if err := s.room(ctx); err != nil {
+		// A Warn because the symptom of this failing is a machine that runs out of memory halfway
+		// through a big PDF, with nothing in the interface to explain why.
+		s.log.Warn("could not make room for ingest; running anyway", "err", err)
 	}
 }
 
